@@ -1,0 +1,53 @@
+[project]
+name = "p010400-mid"
+version = "0.1.0"
+description = "EuXFEL MID (proposal 10400) raw-data reader plugin for pyBeamtime — ferritin crystallization in acoustically levitated droplets."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pybeamtime",
+    "xarray",
+]
+
+[project.optional-dependencies]
+# EuXFEL I/O stack. Needed only by EuXFELMIDRawReader.load_run (Tier 1 assembly)
+# and, later, the Tier-2 adapters — all of which run on Maxwell against real
+# data. Kept as an optional extra so the pure path helpers, can_read, and
+# list_runs stay importable and unit-testable without EXtra-data installed.
+euxfel = [
+    "extra_data",
+    "extra_geom",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+]
+
+[tool.uv.sources]
+# pyBeamtime is developed locally; consume it as an editable path dependency so
+# reader changes here can be upstreamed into its io/readers/ package later.
+# NOTE: this absolute path is machine-specific (cf. pyBeamtime decision 011).
+pybeamtime = { path = "/Users/iasonandronis/PycharmProjects/pybeamtime", editable = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/p010400_mid"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = [
+    "integration: requires extra_data + real EuXFEL data (skipped when unavailable)",
+]

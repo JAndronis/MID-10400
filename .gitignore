@@ -1,0 +1,31 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Tooling caches
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+
+# Runtime artifacts (not committed content) — see README
+beamtime.json
+elog.csv
+user_processed/
+*.zarr
+
+# Reduction / correlation outputs
+*.nc
+
+# Data (never commit facility data)
+*.h5
+*.cxi
+
+# OS cruft
+.DS_Store
