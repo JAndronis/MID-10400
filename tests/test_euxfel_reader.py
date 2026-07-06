@@ -11,12 +11,16 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
 import pytest
+import xarray as xr
 from pyBeamtime.core.run import RunMetadata
 from pyBeamtime.io.readers import ReaderRegistry
 
 from p010400_mid.io.readers.euxfel import (
     EuXFELMIDRawReader,
+    _isolate_source,
     list_run_dirs,
     parse_run_dir,
     proposal_number_from_root,
@@ -148,6 +152,53 @@ def test_reader_class_attrs() -> None:
     assert EuXFELMIDRawReader.facility == "European XFEL"
     assert EuXFELMIDRawReader.priority == 0
     assert EuXFELMIDRawReader.paired_facility_reader is None
+
+
+# ── _isolate_source (regression for the multi-source alignment crash) ──────────
+def _agipd_like() -> xr.DataArray:
+    """Mimic AGIPD1M.get_dask_array output: a stacked (trainId, pulseId) index."""
+    trains = np.arange(1000, 1005, dtype="uint64")
+    pulses = np.arange(0, 6, 2)
+    frames = pd.MultiIndex.from_product([trains, pulses], names=["trainId", "pulseId"])
+    return xr.DataArray(
+        np.zeros((16, len(frames), 2, 4, 3)),
+        dims=["module", "train_pulse", "dim_0", "dim_1", "dim_2"],
+        coords={"train_pulse": frames, "module": np.arange(16)},
+    )
+
+
+def _train_indexed_like(n_trains: int = 3) -> xr.DataArray:
+    """Mimic get_dask_array(labelled=True): a plain trainId index + dim_0/1/2."""
+    trains = np.arange(1000, 1000 + n_trains, dtype="uint64")
+    return xr.DataArray(
+        np.zeros((n_trains, 8, 4, 3)),
+        dims=["trainId", "dim_0", "dim_1", "dim_2"],
+        coords={"trainId": trains},
+    )
+
+
+def test_raw_sources_collide_without_isolation() -> None:
+    # Reproduces the load_run crash: a trainId MultiIndex level cannot align with
+    # a plain trainId index of a different length.
+    with pytest.raises(xr.AlignmentError):
+        xr.Dataset({"agipd": _agipd_like(), "jf": _train_indexed_like()})
+
+
+def test_isolate_source_prevents_collision_and_prefixes() -> None:
+    ds = xr.Dataset(
+        {
+            "agipd": _isolate_source(_agipd_like(), "agipd"),
+            "jf": _isolate_source(_train_indexed_like(), "jf"),
+        }
+    )
+    assert set(ds.data_vars) == {"agipd", "jf"}
+    # every dim/coord is per-source prefixed, so nothing aligns or collides
+    assert "agipd_train_pulse" in ds.dims
+    assert {"agipd_trainId", "agipd_pulseId", "jf_trainId"} <= set(ds.coords)
+    assert not any(str(dim).startswith("dim_") for dim in ds.dims)
+    # id values survive the reset_index
+    assert int(ds["agipd_trainId"].values[0]) == 1000
+    assert int(ds["jf_trainId"].values[-1]) == 1002
 
 
 # ── integration: load_run (needs EXtra-data + real data) ───────────────────────
