@@ -121,6 +121,31 @@ def wavelength_angstrom_from_energy_ev(energy_ev: float) -> float:
     return _HC_EV_ANGSTROM / energy_ev
 
 
+def _isolate_source(array: xr.DataArray, prefix: str) -> xr.DataArray:
+    """Prefix every dim/coord of *array* and drop its pandas indexes.
+
+    EXtra-data hands back arrays with generic, colliding names:
+    ``AGIPD1M.get_dask_array`` yields a ``train_pulse`` MultiIndex (levels
+    ``trainId``/``pulseId``) plus ``dim_0``/``dim_1``/…, while
+    ``get_dask_array(labelled=True)`` yields a plain ``trainId`` index plus its
+    own ``dim_0``/…. Dropping these into one Dataset makes xarray try to *align*
+    the shared names — and a ``trainId`` MultiIndex level cannot align with a
+    plain ``trainId`` index, so construction raises ``AlignmentError`` (the
+    repeated unindexed ``dim_0`` of differing sizes would clash next).
+
+    Resetting the indexes (their values survive as plain coords) and giving
+    every dim/coord a per-source prefix removes all shared names, so sources sit
+    side by side with no cross-alignment and nothing is materialized. Collapsing
+    to the canonical unified ``(train, pulse, module, ss, fs)`` schema (5.3) is
+    the deferred next step (CLAUDE.md §8).
+    """
+    indexed = [dim for dim in array.dims if dim in array.indexes]
+    if indexed:
+        array = array.reset_index(indexed)
+    renames = {name: f"{prefix}_{name}" for name in (*array.dims, *array.coords)}
+    return array.rename(renames)
+
+
 class EuXFELMIDRawReader(BaseRawReader):
     """Raw reader for the MID instrument at the European XFEL (proposal 10400).
 
@@ -224,7 +249,9 @@ class EuXFELMIDRawReader(BaseRawReader):
             )
         return run_dir
 
-    def load_run(self, run_id: int | str, root_path: Path) -> xr.Dataset:
+    def load_run(
+        self, run_id: int | str, root_path: Path, *, trains: slice | None = None
+    ) -> xr.Dataset:
         """Build the Tier-1 lazy Dataset for one MID run (CLAUDE.md 5.3).
 
         Opens the run directory with EXtra-data and returns a dask-backed
@@ -232,24 +259,29 @@ class EuXFELMIDRawReader(BaseRawReader):
         never materialized here. EXtra-data is imported lazily so the rest of this
         module imports without it.
 
-        Verification status
-        --------------------
-        Source/key names (r0500) and the EXtra-data API used here are verified
-        against the installed package. Each data variable is stored with
-        EXtra-data's *native* labelled dims — NOT yet the canonical 5.3 dims
-        ``(train, pulse, module, ss, fs)``. Reconciling them requires real data
-        and is deliberately deferred, because:
+        Parameters
+        ----------
+        trains:
+            Optional positional slice selecting a subset of trains (e.g.
+            ``slice(0, 20)``), forwarded to ``DataCollection.select_trains``.
+            Opening and building the dask graph over a full MHz run (thousands of
+            trains × 352 pulses) is expensive; slice for quick inspection.
 
-        - ``AGIPD1M.get_dask_array`` returns dims ``('module', 'train_pulse',
-          <per-frame dims>)`` where ``train_pulse`` is a stacked
-          ``(trainId, pulseId)`` index, and RAW frames carry a leading size-2
-          data/gain axis (see EXtra-data's ``AGIPD1M.get_array`` docstring).
-        - Per-source arrays from ``get_dask_array(labelled=True)`` are indexed by
-          ``trainId``; aligning XGM / lit-frame pulses to AGIPD frames needs the
-          LITFRM ``xgmPulseId`` map (an open decision, CLAUDE.md §8.4).
+        Schema status
+        -------------
+        Source/key names (r0500) and the EXtra-data API here are verified against
+        the installed package. Each source is stored as a *separate, isolated*
+        data variable via :func:`_isolate_source`: dims/coords are
+        per-source–prefixed (``agipd_*``, ``jf500k1_*``, ``xgm_flux_*``,
+        ``litframe_*``) and pandas indexes are reset. This is required because
+        EXtra-data hands back colliding generic names (an ``AGIPD1M``
+        ``train_pulse`` MultiIndex vs. plain ``trainId`` indexes, plus repeated
+        ``dim_0``/…) that xarray would otherwise try — and fail — to align.
 
-        Provenance attributes are populated fully. This method has not been
-        executed in this environment (no EuXFEL data present).
+        Consequence: this is NOT yet the canonical unified schema
+        ``(train, pulse, module, ss, fs)`` of 5.3. Splitting the raw AGIPD
+        data/gain axis, aligning sources on a common train axis, and the
+        XGM↔AGIPD pulse mapping remain deferred (CLAUDE.md §8).
         """
         import extra_data
         import numpy as np
@@ -263,6 +295,8 @@ class EuXFELMIDRawReader(BaseRawReader):
         root_path = Path(root_path)
         run_dir = self.get_run_path(run_id, root_path)
         run = extra_data.RunDirectory(run_dir)
+        if trains is not None:
+            run = run.select_trains(trains)  # by position; keeps everything lazy
 
         absent = (SourceNameError, PropertyNameError, NoDataError)
 
@@ -281,24 +315,27 @@ class EuXFELMIDRawReader(BaseRawReader):
 
         data_vars: dict[str, xr.DataArray] = {}
 
-        # AGIPD-1M (SAXS/XPCS/XCCA): lazy; native dims (module, train_pulse, …).
+        # AGIPD-1M (SAXS/XPCS/XCCA), lazy. Isolated so its train_pulse MultiIndex
+        # neither collides nor aligns with the train-indexed sources below.
         agipd = AGIPD1M(run)
-        data_vars["agipd"] = agipd.get_dask_array(AGIPD_IMAGE_KEY)
+        data_vars["agipd"] = _isolate_source(
+            agipd.get_dask_array(AGIPD_IMAGE_KEY), "agipd"
+        )
 
         # Jungfrau-500K WAXS units (raw ADU), lazy; skip a unit if not recorded.
         for name, source in (("jf500k1", JF500K1_SOURCE), ("jf500k2", JF500K2_SOURCE)):
             array = optional_dask(source, JF_ADC_KEY)
             if array is not None:
-                data_vars[name] = array
+                data_vars[name] = _isolate_source(array, name)
 
-        # Per-pulse incident flux and lit-frame pattern (both indexed by trainId).
+        # Per-pulse incident flux and lit-frame pattern.
         for name, source, key in (
             ("xgm_flux", XGM_SOURCE, XGM_FLUX_KEY),
             ("litframe", LITFRM_SOURCE, LITFRM_PATTERN_KEY),
         ):
             array = optional_dask(source, key)
             if array is not None:
-                data_vars[name] = array
+                data_vars[name] = _isolate_source(array, name)
 
         # Per-train coords on a dedicated 'train_index' dim (kept separate from the
         # detectors' native train axes until canonical alignment is implemented).
