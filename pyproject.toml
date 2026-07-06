@@ -17,6 +17,7 @@ dependencies = [
 euxfel = [
     "extra_data",
     "extra_geom",
+    "dask[array]",  # extra_data.get_dask_array / AGIPD1M lazy arrays need dask.array
 ]
 
 [dependency-groups]
