@@ -7,7 +7,7 @@ with pyBeamtime's ``ReaderRegistry``, so ``Beamtime.from_config`` /
 
 from __future__ import annotations
 
-from p010400_mid.io.readers.euxfel import EuXFELMIDRawReader
+from readers.io.readers.euxfel import EuXFELMIDRawReader
 
 __version__ = "0.1.0"
 __all__ = ["EuXFELMIDRawReader", "__version__"]
