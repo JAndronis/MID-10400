@@ -23,6 +23,8 @@ euxfel = [
     "ipympl",
     "extra-speckle",
     "pixel-masker",
+    "scikit-image",
+    "damnit"
 ]
 
 [dependency-groups]
@@ -36,6 +38,7 @@ dev = [
 pybeamtime = { path = "./extern/pybeamtime", editable = true }
 extra-speckle = { git = "https://git.xfel.eu/dataAnalysis/extra-speckle.git" }
 pixel-masker = { git = "https://git.xfel.eu/leonaual/pixel-masker.git" }
+damnit = { git = "https://github.com/European-XFEL/DAMNIT.git" }
 
 [build-system]
 requires = ["hatchling"]
@@ -48,9 +51,18 @@ packages = ["src/readers", "src/analysis_tests"]
 line-length = 88
 target-version = "py312"
 src = ["src", "tests"]
+extend-exclude = ["notebooks", "*.ipynb"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# DAMNIT context-file variable dependencies are declared as quoted
+# "meta#..."/"var#..."/"mymdc#..." annotations, DAMNIT's own dependency-
+# injection syntax rather than real (or forward-referenced) type hints. Ruff
+# parses the quoted annotation as an expression and reports the part before
+# "#" (which starts a Python comment) as an undefined name.
+"src/damnit/context.py" = ["F821"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
