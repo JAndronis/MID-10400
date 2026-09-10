@@ -1,5 +1,5 @@
 [project]
-name = "p010400-mid"
+name = "MID-10400-analysis"
 version = "0.1.0"
 description = "EuXFEL MID (proposal 10400) raw-data reader plugin for pyBeamtime — ferritin crystallization in acoustically levitated droplets."
 readme = "README.md"
@@ -15,9 +15,14 @@ dependencies = [
 # data. Kept as an optional extra so the pure path helpers, can_read, and
 # list_runs stay importable and unit-testable without EXtra-data installed.
 euxfel = [
+    "euxfel-extra",
     "extra_data",
     "extra_geom",
-    "dask[array]",  # extra_data.get_dask_array / AGIPD1M lazy arrays need dask.array
+    "dask[complete]",
+    "dask_jobqueue",
+    "ipympl",
+    "extra-speckle",
+    "pixel-masker",
 ]
 
 [dependency-groups]
@@ -29,14 +34,16 @@ dev = [
 # pyBeamtime is developed locally; consume it as an editable path dependency so
 # reader changes here can be upstreamed into its io/readers/ package later.
 # NOTE: this absolute path is machine-specific (cf. pyBeamtime decision 011).
-pybeamtime = { path = "/Users/iasonandronis/PycharmProjects/pybeamtime", editable = true }
+pybeamtime = { path = "/home/andronis/MID-10400/extern/pybeamtime", editable = true }
+extra-speckle = { git = "https://git.xfel.eu/dataAnalysis/extra-speckle.git" }
+pixel-masker = { git = "https://git.xfel.eu/leonaual/pixel-masker.git" }
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/p010400_mid"]
+packages = ["src/readers", "src/analysis_tests"]
 
 [tool.ruff]
 line-length = 88

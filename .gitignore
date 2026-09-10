@@ -6,6 +6,9 @@ dist/
 wheels/
 *.egg-info
 
+# Jupyter
+.ipynb_checkpoints/
+
 # Virtual environments
 .venv
 
@@ -20,12 +23,16 @@ elog.csv
 user_processed/
 *.zarr
 
-# Reduction / correlation outputs
-*.nc
-
 # Data (never commit facility data)
 *.h5
 *.cxi
+*.npy
+*.npz
+*.dat
+*.nc
 
 # OS cruft
 .DS_Store
+
+# pybeamtime dependency build
+extern/
