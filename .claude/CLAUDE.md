@@ -19,7 +19,7 @@ framework as its EuXFEL reader plugin (see "Target architecture").
 ## 1. Scientific context
 
 ### System
-Apoferritin (Sigma) at 50 mg/ml in 150 mM NaCl, plus polyethylene glycol (PEG)
+Ferritin (not apo) (Sigma) at 50 mg/ml in 150 mM NaCl, plus polyethylene glycol (PEG)
 as crystallizing agent, in acoustically levitated droplets of initial diameter
 ~1 mm. As the droplet dries, protein concentration rises, the solution
 supersaturates, and crystals form and later dissolve.
@@ -100,10 +100,9 @@ proposal draft, which differs):
 ## 3. Data location and access
 
 - Root: `/gpfs/exfel/exp/MID/202601/p010400`
-- Work from `raw` (this is a reprocessing effort). Do not depend on facility
-  `proc`. Calibration and file/path resolution are handled by the `extra-*`
-  packages; the wrapper must go through the `extra-*` API and must not
-  hand-roll HDF5 paths or calibration.
+- Work from with facility processed (dark and flatfield corrected) `proc` data.
+  This directory just has calibrated and compressed data with reduced metadata per run,
+  but it has to still be further reduced through analyses like SAXS or XPCS.
 - Run table: a user-provided CSV maps runs to samples. Column names are
   `Run Number` (run id, integer) and `Sample Name`. This is imported into
   pyBeamtime's canonical `elog.csv` via `beamtime import-elog <csv>
