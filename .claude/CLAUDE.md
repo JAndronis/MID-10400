@@ -439,6 +439,23 @@ Wrap extra-speckle, do not reimplement. Return xarray. Suggested homes
   (input/output shapes, dims, coords, attrs) with mock or small real chunks.
 - Comments: only for non-obvious algorithmic choices (e.g. why a sparsify
   threshold, why a particular $q$ scaling test). Do not narrate obvious code.
+- Prose style for ALL code prose -- inline comments, module/file-top comments,
+  and function/class docstrings alike. Write every one for a reader who has
+  NEVER seen this `.claude` directory: the `.claude` files are working notes for
+  the assistant, not user documentation. Two consequences:
+  1. No conversational tone or meta-references to how the code came to be. Never
+     mention that a choice was discussed, requested, agreed, ratified, that
+     someone held an opinion, or that a point was raised -- state what the code
+     does and why, impersonally. (E.g. write "Returns the run directory; a run
+     is a directory of per-module files, so this is not a single HDF5 file."
+     NOT "As we decided, this deliberately deviates from the ABC because you
+     pointed out a run is a directory.")
+  2. Be self-contained. Do not lean on shorthand defined only in these
+     directives ("Tier 1/Tier 2", "decision 018", "the two-tier model", "as-run
+     config", bare landmark numbers). Either spell the concept out in prose or
+     omit it. A term is fine only if it is standard in the field (SAXS, XPCS,
+     XCCA, AGIPD, train, pulse) or defined elsewhere in the same module's public
+     API.
 - Output types: xarray throughout (extra-data already exposes `.xarray()` /
   `.dask_array()`), so downstream averaging/processing stays in xarray.
 - Do not hand-roll HDF5 paths, calibration, or geometry math that the `extra-*`

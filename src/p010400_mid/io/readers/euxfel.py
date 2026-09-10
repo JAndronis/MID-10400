@@ -1,9 +1,9 @@
 """EuXFEL MID raw-data reader plugin (proposal 10400).
 
-Tier-1 reader for the ferritin-crystallization beamtime at the MID instrument of
-the European XFEL. :class:`EuXFELMIDRawReader` turns a run *directory* into a
-lazy, dask-backed :class:`xarray.Dataset` via EXtra-data (per-module assembly of
-the AGIPD-1M is left on demand to EXtra-geom, outside the reader).
+Reader for the ferritin-crystallization beamtime at the MID instrument of the
+European XFEL. :class:`EuXFELMIDRawReader` turns a run *directory* into a lazy,
+dask-backed :class:`xarray.Dataset` via EXtra-data (per-module assembly of the
+AGIPD-1M is left on demand to EXtra-geom, outside the reader).
 
 This module is written to drop into pyBeamtime as ``io/readers/euxfel.py``: it
 imports pyBeamtime by absolute path and self-registers with ``ReaderRegistry``
@@ -11,9 +11,9 @@ at import time. Upstreaming is a file move plus a ``from . import euxfel`` line
 in ``pyBeamtime/io/readers/__init__.py`` — no code change to this file.
 
 Source and key names are verified against run r0500 of p010400 (see the
-module-level constants; CLAUDE.md 5.3). EXtra-data / EXtra-geom are imported
-lazily inside :meth:`EuXFELMIDRawReader.load_run` so the pure path helpers,
-``can_read``, and ``list_runs`` import and unit-test without them installed.
+module-level constants). EXtra-data / EXtra-geom are imported lazily inside
+:meth:`EuXFELMIDRawReader.load_run` so the pure path helpers, ``can_read``, and
+``list_runs`` import and unit-test without them installed.
 """
 
 from __future__ import annotations
@@ -29,8 +29,8 @@ from pyBeamtime.io.readers import ReaderRegistry
 from pyBeamtime.io.readers.base import BaseRawReader
 
 # ── Verified sources / keys (run r0500, proposal p010400) ──────────────────────
-# Confirmed via `lsxfel` + `run[source].keys()` on r0500 (CLAUDE.md 5.3). Recorded
-# as named constants so a future run that renames a source is a one-line change.
+# Confirmed via `lsxfel` + `run[source].keys()` on r0500. Recorded as named
+# constants so a future run that renames a source is a one-line change.
 AGIPD_DETECTOR_NAME = "MID_DET_AGIPD1M-1"  # 16 modules "{det}/DET/{0..15}CH0:xtdf"
 JF500K1_SOURCE = "MID_EXP_JF500K1/DET/JNGFR01:daqOutput"
 JF500K2_SOURCE = "MID_EXP_JF500K2/DET/JNGFR02:daqOutput"
@@ -48,13 +48,13 @@ LITFRM_PATTERN_KEY = "data.dataFramePattern"
 LITFRM_XGM_PULSE_KEY = "data.xgmPulseId"  # XGM↔AGIPD pulse map (deferred use)
 ATTENUATOR_TRANSMISSION_KEY = "actual.transmission"
 
-# ── As-run experimental constants (CLAUDE.md §2) ───────────────────────────────
+# ── Experimental constants for this beamtime ───────────────────────────────────
 PHOTON_ENERGY_EV = 9040.0
 DETECTOR_DISTANCE_M = 7.531
 
 # ── Filesystem conventions ─────────────────────────────────────────────────────
 # EuXFEL run directories are `r####` (zero-padded); each holds many per-module
-# `RAW-*.h5` files. Verify `RAW-*.h5` against the real p010400 tree (CLAUDE.md 5.2).
+# `RAW-*.h5` files.
 _RUN_DIR_RE = re.compile(r"^r(\d+)$")
 _RAW_SENTINEL_GLOB = "raw/r*/RAW-*.h5"
 
@@ -136,8 +136,8 @@ def _isolate_source(array: xr.DataArray, prefix: str) -> xr.DataArray:
     Resetting the indexes (their values survive as plain coords) and giving
     every dim/coord a per-source prefix removes all shared names, so sources sit
     side by side with no cross-alignment and nothing is materialized. Collapsing
-    to the canonical unified ``(train, pulse, module, ss, fs)`` schema (5.3) is
-    the deferred next step (CLAUDE.md §8).
+    to a single unified ``(train, pulse, module, ss, fs)`` schema is a deferred
+    next step.
     """
     indexed = [dim for dim in array.dims if dim in array.indexes]
     if indexed:
@@ -179,8 +179,8 @@ class EuXFELMIDRawReader(BaseRawReader):
 
         Two-layer sentinel: the ``raw`` directory must exist and at least one
         per-module ``RAW-*.h5`` file must live under an ``r*`` run directory.
-        Used by ``beamtime init`` / ``validate`` and tests only (decision 008),
-        never on the data-loading path.
+        Used by ``beamtime init`` / ``validate`` and tests only, never on the
+        data-loading path.
         """
         root_path = Path(root_path)
         if not all(
@@ -197,15 +197,16 @@ class EuXFELMIDRawReader(BaseRawReader):
         instead as :meth:`load_run` Dataset attributes:
 
         - ``exposure_time`` (per-pulse width): ``0.0`` placeholder — the field is
-          non-optional (``float``); ``0.0`` matches the CoSAXS "unknown" convention.
+          non-optional (``float``), and ``0.0`` denotes "unknown" as in the other
+          raw readers.
         - ``n_frames`` (pulses per train): ``None``.
         - ``start_time`` / ``end_time``: ``None``.
         - ``extra["n_trains"]``: not set here.
 
         Lifting these into ``RunMetadata`` needs a per-run EXtra-data open with
-        as-yet-unverified accessors (CLAUDE.md 5.2.1) and is deferred. Runs absent
-        from ``elog.csv`` get ``sample_name=None`` (a first-class state, decision
-        015); non-``sample`` elog columns pass through into ``extra``.
+        as-yet-unverified accessors and is deferred. Runs absent from
+        ``elog.csv`` get ``sample_name=None`` (a first-class state, distinct from
+        an empty string); non-``sample`` elog columns pass through into ``extra``.
         """
         root_path = Path(root_path)
         elog = load_elog_csv(root_path)
@@ -237,8 +238,8 @@ class EuXFELMIDRawReader(BaseRawReader):
         CONSEQUENCE: the generic ``Beamtime.enrich_metadata`` — which does
         ``h5py.File(get_run_path(...))`` — does NOT work for EuXFEL; it would try
         to open a directory. EuXFEL metadata enrichment must go through EXtra-data.
-        This is a ratified deviation (CLAUDE.md 5.2), not an oversight; do not
-        "fix" it by returning an arbitrary aggregator file.
+        Returning the directory is intentional: the run has no single primary
+        HDF5 file, so any individual per-module file would misrepresent it.
 
         Raises :exc:`FileNotFoundError` if the run directory does not exist.
         """
@@ -252,7 +253,7 @@ class EuXFELMIDRawReader(BaseRawReader):
     def load_run(
         self, run_id: int | str, root_path: Path, *, trains: slice | None = None
     ) -> xr.Dataset:
-        """Build the Tier-1 lazy Dataset for one MID run (CLAUDE.md 5.3).
+        """Build the lazy, dask-backed Dataset for one MID run.
 
         Opens the run directory with EXtra-data and returns a dask-backed
         :class:`xarray.Dataset`. Detector arrays (AGIPD, Jungfrau) stay lazy —
@@ -278,10 +279,10 @@ class EuXFELMIDRawReader(BaseRawReader):
         ``train_pulse`` MultiIndex vs. plain ``trainId`` indexes, plus repeated
         ``dim_0``/…) that xarray would otherwise try — and fail — to align.
 
-        Consequence: this is NOT yet the canonical unified schema
-        ``(train, pulse, module, ss, fs)`` of 5.3. Splitting the raw AGIPD
-        data/gain axis, aligning sources on a common train axis, and the
-        XGM↔AGIPD pulse mapping remain deferred (CLAUDE.md §8).
+        Consequence: this is NOT yet a single unified schema
+        ``(train, pulse, module, ss, fs)``. Splitting the raw AGIPD data/gain
+        axis, aligning sources on a common train axis, and the XGM↔AGIPD pulse
+        mapping remain deferred.
         """
         import extra_data
         import numpy as np
