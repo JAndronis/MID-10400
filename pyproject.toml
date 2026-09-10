@@ -33,7 +33,6 @@ dev = [
 [tool.uv.sources]
 # pyBeamtime is developed locally; consume it as an editable path dependency so
 # reader changes here can be upstreamed into its io/readers/ package later.
-# NOTE: this absolute path is machine-specific (cf. pyBeamtime decision 011).
 pybeamtime = { path = "./extern/pybeamtime", editable = true }
 extra-speckle = { git = "https://git.xfel.eu/dataAnalysis/extra-speckle.git" }
 pixel-masker = { git = "https://git.xfel.eu/leonaual/pixel-masker.git" }
