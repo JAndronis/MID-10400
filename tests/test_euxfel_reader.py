@@ -18,7 +18,7 @@ import xarray as xr
 from pyBeamtime.core.run import RunMetadata
 from pyBeamtime.io.readers import ReaderRegistry
 
-from p010400_mid.io.readers.euxfel import (
+from readers.io.readers.euxfel import (
     EuXFELMIDRawReader,
     _isolate_source,
     list_run_dirs,
