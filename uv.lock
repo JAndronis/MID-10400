@@ -1757,7 +1757,7 @@ requires-dist = [
     { name = "extra-speckle", marker = "extra == 'euxfel'", git = "https://git.xfel.eu/dataAnalysis/extra-speckle.git" },
     { name = "ipympl", marker = "extra == 'euxfel'" },
     { name = "pixel-masker", marker = "extra == 'euxfel'", git = "https://git.xfel.eu/leonaual/pixel-masker.git" },
-    { name = "pybeamtime", editable = "/home/andronis/MID-10400/extern/pybeamtime" },
+    { name = "pybeamtime", editable = "extern/pybeamtime" },
     { name = "xarray" },
 ]
 provides-extras = ["euxfel"]
@@ -2542,7 +2542,7 @@ wheels = [
 
 [[package]]
 name = "pybeamtime"
-source = { editable = "/home/andronis/MID-10400/extern/pybeamtime" }
+source = { editable = "extern/pybeamtime" }
 dependencies = [
     { name = "attrs" },
     { name = "click" },
