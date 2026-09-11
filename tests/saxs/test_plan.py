@@ -127,3 +127,28 @@ def test_run_directory_is_readable_twice(run_cfg, mock_run_factory, tmp_path):
     first = build_plan(run_cfg, dc=dc)
     second = build_plan(run_cfg, dc=RunDirectory(str(run.path)))
     assert first.trains == second.trains
+
+
+def test_run_checks_without_control_data_records_every_check(run_cfg, mock_pipeline):
+    """Proc holds no control sources, so the checks need their own collection."""
+    from analysis.saxs.plan import run_checks
+
+    checks = run_checks(None, mock_pipeline.detector, mock_pipeline.plan.trains)
+    assert set(checks) == {"xray_pulses", "quadrant_motors", "xgm_photon_energy"}
+    assert all(
+        str(v).startswith("unavailable: no control data") for v in checks.values()
+    )
+
+
+def test_build_plan_uses_the_given_collection_for_checks(run_cfg, mock_run_factory):
+    """A caller-supplied collection is both the data and the control source."""
+    from analysis.saxs.plan import build_plan
+
+    _, dc = mock_run_factory()
+    plan = build_plan(run_cfg, dc=dc)
+    # The mock run has no control sources, but the checks were attempted
+    # against dc rather than short-circuited as "no control data".
+    assert set(plan.checks) == {"xray_pulses", "quadrant_motors", "xgm_photon_energy"}
+    assert not any(
+        str(v).startswith("unavailable: no control data") for v in plan.checks.values()
+    )

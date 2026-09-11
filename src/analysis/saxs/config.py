@@ -21,6 +21,7 @@ __all__ = [
     "EXPECTED_BITS",
     "FirstPassConfig",
     "file_sha256",
+    "physical_cores",
 ]
 
 #: Flattened AGIPD-1M pixel grid, module × slow-scan × fast-scan (context §6).
@@ -54,6 +55,31 @@ DEFAULT_OUTPUT_ROOT = f"{_PROPOSAL_ROOT}/scratch/saxs_first_pass"
 #: failure: every bit in these files marks an unusable pixel, so the blanket
 #: ``mask_bits`` stays correct, but an unrecorded bit must be looked at.
 EXPECTED_BITS: frozenset[int] = frozenset({0, 1, 7, 8, 9, 12, 13})
+
+
+#: Linux CPU topology, where a core's hyperthread siblings are listed.
+CPU_TOPOLOGY_ROOT = Path("/sys/devices/system/cpu")
+
+
+def physical_cores(root: Path = CPU_TOPOLOGY_ROOT) -> int | None:
+    """Physical cores available to this process, or ``None`` off Linux.
+
+    Counts distinct hyperthread-sibling groups over the CPUs in this process's
+    affinity mask, so a core contributes once however many threads it exposes
+    and a cgroup-restricted job is not told about cores it cannot use.
+
+    :param root: sysfs CPU topology root; the tests point it at a fixture.
+    """
+    if not hasattr(os, "sched_getaffinity"):
+        return None
+    groups: set[str] = set()
+    for cpu in os.sched_getaffinity(0):
+        try:
+            siblings = (root / f"cpu{cpu}/topology/thread_siblings_list").read_text()
+        except OSError:
+            return None
+        groups.add(siblings.strip())
+    return len(groups) or None
 
 
 def file_sha256(path: str | Path) -> str:
@@ -140,18 +166,21 @@ class FirstPassConfig:
 
     @property
     def workers(self) -> int:
-        """Worker count: ``n_workers``, else one per core.
+        """Worker count: ``n_workers``, else one per *physical* core.
 
-        SMT is only considered after P6, so this is the physical-core count
-        where the platform reports it and ``os.cpu_count()`` otherwise.
+        SMT is P6's question, so the default must not answer it. On the DAMNIT
+        node ``sched_getaffinity`` reports 72 logical CPUs for 36 physical
+        cores, and using it would silently run the hyperthreaded configuration
+        while claiming one worker per core.
         """
         if self.n_workers is not None:
             return self.n_workers
-        return (
-            len(os.sched_getaffinity(0))
-            if hasattr(os, "sched_getaffinity")
-            else (os.cpu_count() or 1)
-        )
+        physical = physical_cores()
+        if physical:
+            return physical
+        if hasattr(os, "sched_getaffinity"):
+            return len(os.sched_getaffinity(0))
+        return os.cpu_count() or 1
 
     @property
     def input_files(self) -> dict[str, str | None]:

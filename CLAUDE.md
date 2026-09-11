@@ -192,6 +192,7 @@ nucleation?
 
 | What | Path |
 |---|---|
+| Control sources (XGM, timeserver, motors) | raw only. `open_run(..., data="proc")` opens **one** location and proc holds corrected detector files alone, so `XrayPulses`, `XGM` and `AGIPD1MQuadrantMotors` all raise against it. Use `data="raw"` (or `"all"`) for those |
 | Proc (corrected) data | `/gpfs/exfel/exp/MID/202601/p010400/proc/r{run:04d}/CORR-R{run:04d}-AGIPD{module:02d}-S{seq:05d}.h5` (one file per module per sequence) |
 | Scratch | `/gpfs/exfel/exp/MID/202601/p010400/scratch/` |
 | AGIPD geometry in use | `/gpfs/exfel/exp/MID/202601/p010400/usr/geometry/geom_latest.geom` |
@@ -300,7 +301,14 @@ statistics (open task 6). Integer data cannot carry NaN, so bad pixels must come
 9. **XCCA toolbox.** `_CumulativeVarianceBase.from_dataset` updates twice per sample; use the
    `Averaged*` classes or `.update()`. The toolbox is not in any EXtra release and Maxwell tracks
    master nightly, so pin it.
-10. **Silent failures in the old pipeline.** pasha forks from a non-main thread; `ThreadPoolExecutor`
+10. **`os.sched_getaffinity` counts logical CPUs.** It reports 72 on the DAMNIT node, not 36.
+    Defaulting a worker count to it silently opts into hyperthreading, which is the decision the
+    SAXS integrator's P6 exists to make. `analysis.saxs.config.physical_cores` counts sysfs
+    sibling groups instead.
+11. **h5py attrs outlive their file.** An `AttributeManager` kept past its `with` block does not
+    raise on `.get`; it returns the default, so a provenance value reads as absent. Read every
+    attribute inside the block.
+12. **Silent failures in the old pipeline.** pasha forks from a non-main thread; `ThreadPoolExecutor`
     futures are never checked; `mp.Queue.empty()` is racy. Failures end as NaN rows.
 
 ---

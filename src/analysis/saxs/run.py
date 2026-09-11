@@ -154,6 +154,9 @@ def run_first_pass(
                 "host": socket.gethostname(),
                 "platform": platform.platform(),
                 "n_workers": cfg.workers,
+                # A run with fewer blocks than workers cannot use them all, so
+                # the block count is what any efficiency figure divides by.
+                "n_blocks": len(plan.blocks),
                 "started_at": started_at,
                 "wall_s": time.perf_counter() - started,
                 "package_versions": _package_versions(),

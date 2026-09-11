@@ -100,18 +100,39 @@ def _open_detector(cfg: FirstPassConfig, dc: Any):
     return AGIPD1M(dc, detector_name=cfg.detector_name, min_modules=cfg.min_modules)
 
 
-def build_plan(cfg: FirstPassConfig, dc: Any = None) -> RunPlan:
+def _open_control(cfg: FirstPassConfig) -> Any:
+    """Open the raw location, which is where the control sources live.
+
+    ``open_run(..., data="proc")`` opens one location, and proc holds only the
+    corrected detector files: no timeserver, no XGM, no motors. Every check in
+    :func:`run_checks` is therefore unavailable against the collection the
+    frames are read from, so the checks get their own collection. The plan
+    itself deliberately stays on proc: opening ``data="all"`` would put trains
+    that exist only in raw into the ledger and make a complete proc run look
+    incomplete.
+    """
+    from extra_data import open_run
+
+    return open_run(cfg.proposal, cfg.run, data="raw")
+
+
+def build_plan(cfg: FirstPassConfig, dc: Any = None, control_dc: Any = None) -> RunPlan:
     """Build the run plan (context file §6.8).
 
     :param dc: an open ``DataCollection``. When ``None``, the proc run named by
         ``cfg`` is opened.
+    :param control_dc: where :func:`run_checks` looks for the timeserver, the
+        XGM and the quadrant motors. Defaults to the raw location when this
+        function opened the run itself, and to ``dc`` otherwise, which is what
+        lets a mock run carry both in one collection.
 
     Trains present in the run but missing from the detector selection get
     ``MISSING_MODULES``; trains with no frames get ``NO_FRAMES``. Neither owns
     any row of the frame table, so the table spans only the detector's trains
     while the ledger spans every train of the run.
     """
-    if dc is None:
+    opened_here = dc is None
+    if opened_here:
         from extra_data import open_run
 
         dc = open_run(cfg.proposal, cfg.run, data="proc")
@@ -158,6 +179,9 @@ def build_plan(cfg: FirstPassConfig, dc: Any = None) -> RunPlan:
         )
         row += n_frames
 
+    if control_dc is None:
+        control_dc = _control_or_none(cfg) if opened_here else dc
+
     blocks = _build_blocks(records, cfg.trains_per_block)
     n_frames = int(counts.sum())
     log.info(
@@ -172,8 +196,17 @@ def build_plan(cfg: FirstPassConfig, dc: Any = None) -> RunPlan:
         blocks=tuple(blocks),
         n_frames=n_frames,
         detector_name=det.detector_name,
-        checks=run_checks(dc, det, counts),
+        checks=run_checks(control_dc, det, counts),
     )
+
+
+def _control_or_none(cfg: FirstPassConfig) -> Any:
+    """:func:`_open_control`, or ``None`` when raw is not readable."""
+    try:
+        return _open_control(cfg)
+    except Exception as error:  # noqa: BLE001 - recorded by run_checks
+        log.warning("no raw location for the run checks: %r", error)
+        return None
 
 
 def _modules_present(dc: Any, det: Any) -> dict[int, int]:
@@ -234,8 +267,16 @@ def run_checks(dc: Any, det: Any, counts: Any) -> dict[str, Any]:
     disagreement is flagged. Every check is best-effort: a missing source makes
     the check unavailable, which is itself recorded, rather than failing the
     run before any data is read.
+
+    :param dc: a collection carrying the *control* sources — see
+        :func:`_open_control`. ``None`` records every check as unavailable.
     """
     checks: dict[str, Any] = {}
+    if dc is None:
+        return dict.fromkeys(
+            ("xray_pulses", "quadrant_motors", "xgm_photon_energy"),
+            "unavailable: no control data (the raw location could not be opened)",
+        )
 
     def attempt(name: str, fn) -> None:
         try:

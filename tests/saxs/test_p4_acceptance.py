@@ -138,6 +138,33 @@ def test_timing_fails_when_the_wall_target_is_missed(p4, finished_run, monkeypat
     assert p4.stage_timing(output, None)["passed"] is False
 
 
+def test_timing_is_undecided_without_a_wall_time(p4, finished_run):
+    """A file written before wall_s existed must not read as a slow run."""
+    _, output = finished_run
+    with h5py.File(output, "r+") as handle:
+        del handle["provenance"].attrs["wall_s"]
+
+    result = p4.stage_timing(output, measured_wall_s=None)
+    assert result["passed"] is None
+    assert "rerun" in result["reason"]
+    assert result["parallel_efficiency"] is None
+    # The per-stage costs are still worth reading without a wall time.
+    assert result["stages"]["integrate"]["ms_per_frame_per_core"] > 0
+
+
+def test_timing_divides_by_the_workers_that_could_be_busy(p4, finished_run):
+    """Fewer blocks than workers cannot reach the whole pool's throughput."""
+    _, output = finished_run
+    with h5py.File(output, "r+") as handle:
+        handle["provenance"].attrs["n_workers"] = 1000
+
+    result = p4.stage_timing(output, None)
+    assert result["busy_workers"] == result["n_blocks"] < 1000
+    assert result["ideal_wall_s"] == pytest.approx(
+        result["worker_cpu_s"] / result["n_blocks"]
+    )
+
+
 # ── gate D ────────────────────────────────────────────────────────────────────
 def test_ledger_passes_on_an_all_ok_run(p4, finished_run):
     pipeline, output = finished_run
@@ -174,6 +201,59 @@ def test_ledger_reports_a_frame_count_that_does_not_add_up(p4, finished_run):
 
     result = p4.stage_ledger(output)
     assert result["reconciles"] is False
+    assert result["passed"] is False
+
+
+# ── gate 0 ────────────────────────────────────────────────────────────────────
+def test_configuration_accepts_a_full_run_on_the_expected_workers(
+    p4, finished_run, monkeypatch
+):
+    pipeline, output = finished_run
+    monkeypatch.setattr(p4, "P4_WORKERS", pipeline.cfg.workers)
+    result = p4.stage_configuration(pipeline.cfg, output, run_dir=pipeline.run.path)
+
+    assert result["passed"] is True
+    assert result["full_run"] is True
+    assert result["coverage"] == pytest.approx(1.0)
+    assert result["config_hash_matches"] is True
+
+
+def test_configuration_rejects_a_subset_of_the_run(p4, finished_run, monkeypatch):
+    """A ten-train trial must not be graded as an acceptance run."""
+    pipeline, output = finished_run
+    monkeypatch.setattr(p4, "P4_WORKERS", pipeline.cfg.workers)
+    with h5py.File(output, "r+") as handle:
+        n_trains = int(handle["trains/trainId"].size)
+
+    whole = p4.stage_configuration(pipeline.cfg, output, run_dir=pipeline.run.path)
+    assert whole["trains_in_file"] == whole["trains_in_run"] == n_trains
+
+    # Cover fewer trains than the run holds, as a trial pass on a subset does.
+    with h5py.File(output, "r+") as handle:
+        kept = handle["trains/trainId"][:-1]
+        del handle["trains/trainId"]
+        handle["trains/trainId"] = kept
+    shrunk = p4.stage_configuration(pipeline.cfg, output, run_dir=pipeline.run.path)
+    assert shrunk["full_run"] is False
+    assert shrunk["passed"] is False
+    assert shrunk["coverage"] < 1.0
+
+
+def test_configuration_rejects_a_mismatched_worker_count(p4, finished_run, monkeypatch):
+    pipeline, output = finished_run
+    monkeypatch.setattr(p4, "P4_WORKERS", pipeline.cfg.workers + 1)
+    result = p4.stage_configuration(pipeline.cfg, output, run_dir=pipeline.run.path)
+    assert result["passed"] is False
+    assert result["n_workers"] != result["workers_expected"]
+
+
+def test_configuration_notices_a_different_config_hash(p4, finished_run, monkeypatch):
+    """--skip-run would otherwise grade a file written under another config."""
+    pipeline, output = finished_run
+    monkeypatch.setattr(p4, "P4_WORKERS", pipeline.cfg.workers)
+    other = replace(pipeline.cfg, trains_per_block=pipeline.cfg.trains_per_block + 1)
+    result = p4.stage_configuration(other, output, run_dir=pipeline.run.path)
+    assert result["config_hash_matches"] is False
     assert result["passed"] is False
 
 

@@ -425,6 +425,28 @@ is reported and only the wall time fails the gate. The gates are unit-tested aga
 *Running it is the remaining work.* Nothing in P4 can be verified off the cluster: it needs a
 DAMNIT-partition node, the real geometry and mask files, and r0423.
 
+*Trial pass, 2026-09-11, max-exfl170, 10 trains of r0423 on 72 workers* — not an acceptance run
+(P4 asks for the full run on 36), but it settled the correctness question and exposed two defects:
+- Gate B **passed on real data**: pooled I(q) over 3 trains × 155 frames agrees with the dense
+  reference to 5.1e-8, all 500 bins populated, empty-bin sets equal. The `f4` storage costs about
+  5e-8, a factor 20 inside the tolerance.
+- Gate D passed: 1550/1550 OK, bits present exactly the expected set, no unexpected bits.
+- Every run check was unavailable, because `open_run(data="proc")` opens one location and proc
+  holds only corrected detector files — no timeserver, no XGM, no motors. `plan.build_plan` now
+  opens the raw location for the checks alone; the plan itself stays on proc, since `data="all"`
+  would put raw-only trains into the ledger and make a complete proc run look incomplete.
+- The run used 72 workers because `cfg.workers` defaulted to the affinity mask, which counts
+  logical CPUs. That silently ran the hyperthreaded configuration P6 exists to decide. The default
+  is now one worker per *physical* core, counted from sysfs sibling groups.
+- Per-stage cost: read_data 4.56 ms (budget 4.6), read_mask 8.65 (8.2), integrate 8.06 (6.2),
+  total 21.3 vs 19. Only 3 blocks ran, on a 36-core node, so no contention inflated these. The
+  integrate overrun is structural: the worker's timer spans `frame_bad` and the full-detector
+  passes inside `integrate_frame` (`flatnonzero(x)`, `bad != base_bad`, `bad.sum()`), which cost
+  several times the sparse gathers themselves. At 21.3 ms/frame/core the full run extrapolates to
+  ~4.6 min on 36 workers, or ~5.2 min at the 88 % read-scaling efficiency of §2 — inside the 6 min
+  target, but with less margin than the budget implies. Extrapolation only: a 3-block job measures
+  no contention, so the full run may be worse.
+
 **P5 — DAMNIT integration**
 - Cluster variable on r0423 and r0426 via `context_python`.
 - Returns (trainId, q) pooled I(q); fails loudly if incomplete.

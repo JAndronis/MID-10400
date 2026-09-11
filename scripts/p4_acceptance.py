@@ -293,6 +293,60 @@ def stage_reference(
     }
 
 
+# ── gate 0: is this the configuration P4 asks for? ────────────────────────────
+#: P4 asks for one worker per physical core on the DAMNIT-partition node.
+P4_WORKERS = 36
+
+
+def stage_configuration(
+    cfg: FirstPassConfig, output: Path, run_dir: str | None = None
+) -> dict[str, Any]:
+    """Check that the file describes a full run integrated on 36 workers.
+
+    Every other gate is happy to grade a ten-train trial, and would report
+    numbers that look like an acceptance without being one. This one asks the
+    question the others cannot: is the file in front of us the thing P4 is
+    about? It also compares the file's own config hash against the config the
+    reference gate is built from, which ``--skip-run`` otherwise leaves
+    unchecked.
+    """
+    from extra_data import RunDirectory, open_run
+
+    with h5py.File(output, "r") as handle:
+        provenance = handle["provenance"].attrs
+        n_workers = int(provenance["n_workers"])
+        stored_hash = str(provenance["config_hash"])
+        trains_in_file = int(handle["trains/trainId"].size)
+        frames_in_file = int(handle["frames/status"].size)
+
+    try:
+        dc = (
+            RunDirectory(run_dir)
+            if run_dir
+            else open_run(cfg.proposal, cfg.run, "proc")
+        )
+        trains_in_run = int(len(dc.train_ids))
+    except Exception as error:  # noqa: BLE001 - recorded, not fatal
+        trains_in_run = 0
+        log.warning("could not count the run's trains: %r", error)
+
+    full_run = bool(trains_in_run and trains_in_file == trains_in_run)
+    hash_matches = stored_hash == cfg.config_hash()
+    return {
+        "passed": bool(full_run and n_workers == P4_WORKERS and hash_matches),
+        "n_workers": n_workers,
+        "workers_expected": P4_WORKERS,
+        "trains_in_file": trains_in_file,
+        "trains_in_run": trains_in_run,
+        "frames_in_file": frames_in_file,
+        "coverage": (trains_in_file / trains_in_run) if trains_in_run else None,
+        "full_run": full_run,
+        "config_hash_matches": hash_matches,
+        "file_config_hash": stored_hash,
+        "script_config_hash": cfg.config_hash(),
+    }
+
+
 # ── gate C: timings ───────────────────────────────────────────────────────────
 def stage_timing(output: Path, measured_wall_s: float | None) -> dict[str, Any]:
     """Per-stage cost per frame per core, and wall time, against §2."""
@@ -301,6 +355,10 @@ def stage_timing(output: Path, measured_wall_s: float | None) -> dict[str, Any]:
         timings = json.loads(provenance["timings"])
         summary = json.loads(provenance["status_summary"])
         n_workers = int(provenance["n_workers"])
+        n_blocks = int(provenance.get("n_blocks", 0))
+        # Every attrs read stays inside the `with`: h5py's AttributeManager
+        # outlives the file it came from, and `.get` on a closed file returns
+        # the default instead of raising.
         wall_s = float(provenance.get("wall_s", 0.0)) or (measured_wall_s or 0.0)
 
     ok_frames = int(summary.get(FrameStatus.OK.name, 0))
@@ -321,17 +379,34 @@ def stage_timing(output: Path, measured_wall_s: float | None) -> dict[str, Any]:
     total_ms = total_cpu_s * 1e3 / ok_frames
     total_budget = sum(BUDGET_MS.values())
 
-    # Everything the workers did not time: block setup, pickling results back,
-    # the parent's writes. It is the gap worth looking at if the wall time
-    # misses while every stage is inside its budget.
-    ideal_wall_s = total_cpu_s / n_workers if n_workers else float("nan")
+    # A run with fewer blocks than workers cannot occupy them all, so dividing
+    # the CPU seconds by the worker count would invent an efficiency the job
+    # never had a chance to reach.
+    busy = min(n_workers, n_blocks) if n_blocks else n_workers
+    ideal_wall_s = total_cpu_s / busy if busy else float("nan")
+
+    # A missing wall time is not a slow run. The gate is undecided (None), not
+    # failed, so a file written before wall_s was recorded does not read as a
+    # performance miss.
+    if wall_s <= 0:
+        verdict: bool | None = None
+        reason = (
+            "no wall time recorded: this file predates provenance/wall_s, "
+            "so rerun the pass to decide this gate"
+        )
+    else:
+        verdict = bool(wall_s <= WALL_TARGET_S)
+        reason = ""
 
     return {
         # The budget is a measurement, not a contract: a stage over budget is
         # reported, and only the wall time decides the gate.
-        "passed": bool(wall_s > 0 and wall_s <= WALL_TARGET_S),
+        "passed": verdict,
+        "reason": reason,
         "ok_frames": ok_frames,
         "n_workers": n_workers,
+        "n_blocks": n_blocks,
+        "busy_workers": busy,
         "wall_s": wall_s,
         "wall_target_s": WALL_TARGET_S,
         "stages": stages,
@@ -340,8 +415,8 @@ def stage_timing(output: Path, measured_wall_s: float | None) -> dict[str, Any]:
         "total_ratio": total_ms / total_budget,
         "worker_cpu_s": total_cpu_s,
         "ideal_wall_s": ideal_wall_s,
-        "parallel_efficiency": (ideal_wall_s / wall_s) if wall_s else None,
-        "untimed_wall_s": wall_s - ideal_wall_s if wall_s else None,
+        "parallel_efficiency": (ideal_wall_s / wall_s) if wall_s > 0 else None,
+        "untimed_wall_s": (wall_s - ideal_wall_s) if wall_s > 0 else None,
     }
 
 
@@ -499,6 +574,7 @@ def main(argv: list[str] | None = None) -> int:
             _write(report, args)
             return 1
 
+    report["gates"]["0_configuration"] = stage_configuration(cfg, output, args.run_dir)
     report["gates"]["B_dense_reference"] = stage_reference(
         cfg, output, args.ref_trains, args.tolerance, args.run_dir
     )
@@ -528,6 +604,13 @@ def main(argv: list[str] | None = None) -> int:
             f"{reference['max_rel_intensity']:.2e} "
             f"(tolerance {reference['tolerance']:.0e})"
         )
+    configuration = report["gates"]["0_configuration"]
+    print(
+        f"  configuration: {configuration['trains_in_file']} of "
+        f"{configuration['trains_in_run'] or '?'} trains on "
+        f"{configuration['n_workers']} workers "
+        f"(P4 asks for the full run on {P4_WORKERS})"
+    )
     print(f"  ledger: {report['gates']['D_ledger']['frame_status']}")
     return 0 if report["passed"] else 1
 
