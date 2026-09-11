@@ -42,7 +42,7 @@ Per-train pooled I(q) is returned to DAMNIT.
 | One single-threaded worker per physical core, spawned processes | Read scaling 88 % at 32 processes; CSR with 16 threads is 7.6× less efficient per core than 1 thread; crossing sockets is slower still |
 | No GPU, no dask | Workload is CPU-bound decode + light integration; DAMNIT cannot request GPUs; a static partition of trains needs no task graph |
 | Store Σc·x, Σc·Ω, Σc²·x per frame | At high q a frame has ~1 photon per bin. Sums give exact pooling and errors for any later grouping. pyFAI's Poisson model inflates variance ~87× on this data |
-| Seam mask + custom mask on top of `image.mask` | `NON_STANDARD_SIZE` is never set, so double-width ASIC-edge pixels are unflagged. The old pipeline applied both masks |
+| Seam mask + one pixel mask on top of `image.mask` | `NON_STANDARD_SIZE` is never set, so double-width ASIC-edge pixels are unflagged. A single hand-maintained pixel mask carries both the bad pixels and the low-q lobe: two overlapping mask files would have to be kept in step |
 
 **Budget:** data read 4.6 + mask read 8.2 + sparse integration 6.2 ≈ 19 ms/frame/core.
 Target for r0423 (~465 k frames): ≈ 4.7 min on 36 workers.
@@ -81,7 +81,7 @@ DAMNIT cluster job (one node, one run)
   └─ <pkg>.saxs.run.run_first_pass(cfg)                          [parent]
        ├─ plan.build_plan          trains, frame counts, rows, blocks, run checks
        ├─ operator.build_operator  sparse full-split operator + Ω, hashed, saved
-       ├─ masks.build_static_bad   ASIC seams ∪ custom mask ∪ lobe mask (I4a), hashed
+       ├─ masks.build_static_bad   ASIC seams ∪ pixel mask (incl. lobe, I4a), hashed
        ├─ masks.build_base_masks   per-cell base mask + base denominators, saved
        ├─ selftest.run_selftest    sparse vs pyFAI on real frames → abort on failure
        ├─ ProcessPoolExecutor(spawn, n_workers, initializer=worker.init)
@@ -127,8 +127,7 @@ input file.
 | `mask_bits` | `0xFFFFFFFF` | every bit present in these files marks unusable pixels |
 | `expected_bits` | {0, 1, 7, 8, 9, 12, 13} | other bits present → provenance flag + warning |
 | `use_asic_seams` | `True` | `extra_geom.agipd_asic_seams()` repeated over 16 modules |
-| `custom_mask_file` | `.../usr/Shared/IA/custom_agipd_mask.npy` | non-zero = excluded; assert shape (16, 512, 128) or (512, 128) |
-| `lobe_mask_file` | `/gpfs/exfel/u/usr/MID/202601/p010400/masks/mask_2026-09-08_AGIPD_SAXS.npy` | I4 decided (a): anisotropic low-q lobe. Non-zero = excluded; assert shape (16, 512, 128) or (512, 128); sha256 recorded; OR'd into `static_bad` |
+| `pixel_mask_file` | `/gpfs/exfel/exp/MID/202601/p010400/usr/masks/mask_2026-09-08_AGIPD_SAXS.npy` | The **only** mask file. Carries the bad pixels *and* the low-q lobe (I4 decided (a)). Non-zero = excluded; assert shape (16, 512, 128), (512, 128) or (8192, 128); sha256 recorded; OR'd into `static_bad`. Supersedes `usr/Shared/IA/custom_agipd_mask.npy`, which must not also be applied |
 | `base_mask_trains` | 8 | spread evenly over the run |
 | `selftest_frames` | 8 | from 2 trains |
 | `trains_per_block` | 4 | unit of scheduling, ledger and resume (not memory) |
@@ -175,8 +174,7 @@ def gather(cols, weights, squared=False):
 ```
 static_bad = zeros(NPIX, bool)
 if cfg.use_asic_seams:   static_bad |= repeat(agipd_asic_seams()[None], 16, 0).ravel()
-if cfg.custom_mask_file: static_bad |= broadcast_to(load(file), (16, 512, 128)).ravel() != 0
-if cfg.lobe_mask_file:   static_bad |= broadcast_to(load(file), (16, 512, 128)).ravel() != 0  # I4a
+if cfg.pixel_mask_file:  static_bad |= broadcast_to(load(file), (16, 512, 128)).ravel() != 0  # incl. lobe, I4a
 static_hash = sha256(packbits(static_bad))
 
 trains = evenly spaced cfg.base_mask_trains over OK trains
@@ -393,8 +391,8 @@ The default `slurm_time` (2 h) covers ~5 min per run.
 - Majority vote; unseen-cell fallback; exactness for frame flags differing from the cell in either
   direction; unexpected-bit flagging.
 
-**P3 — plan, worker, writer on a mock run.** I4 is decided: option (a), a static lobe mask OR'd
-into `static_bad`; the frame schema stays `(n, npt)`.
+**P3 — plan, worker, writer on a mock run.** I4 is decided: option (a), the lobe is excluded by
+the one static pixel mask OR'd into `static_bad`; the frame schema stays `(n, npt)`.
 - Mock run: EXtra-data `write_file` with `AGIPDModule(raw=False)`, then rewrite `image/data` as
   int16 photon counts and `image/mask` as uint32 static + dynamic bits. Both chunked
   (1, 512, 128), shuffle + gzip.
@@ -439,12 +437,17 @@ into `static_bad`; the frame schema stays `(n, npt)`.
   - In-memory decode floor: 0.9 ms (data) and 1.6 ms (mask) per frame.
   - Build only with its own bit-exact benchmark measuring CPU and wall time.
 - **I4 — Anisotropic low-q lobe** (r0423; CLAUDE.md task 8). **Decided: option (a), a static
-  pixel mask.** `cfg.lobe_mask_file` points at `/gpfs/exfel/u/usr/MID/202601/p010400/masks/mask_2026-09-08_AGIPD_SAXS.npy`;
-  `masks.build_static_bad` OR's it into `static_bad` exactly as it does the ASIC seams and the
-  custom mask, and its sha256 goes into provenance.
+  pixel mask.** `cfg.pixel_mask_file` points at
+  `/gpfs/exfel/exp/MID/202601/p010400/usr/masks/mask_2026-09-08_AGIPD_SAXS.npy` — the single mask file,
+  which covers the generally bad pixels *and* the lobe. `masks.build_static_bad` OR's it into
+  `static_bad` alongside the ASIC seams, and its sha256 goes into provenance.
   - *Why (a).* The mask is defined in pixel space, so it needs no φ range and no re-derivation of
     the old integrator's φ ≈ 278–330°, and it is unaffected by the unresolved geometry question
     (CLAUDE.md task 4). Storage and the `(n, npt)` frame schema are unchanged, so P3 is unblocked.
+  - *Why one file.* An earlier draft kept the lobe mask separate from
+    `usr/Shared/IA/custom_agipd_mask.npy`. Two overlapping masks have to be kept in step with each
+    other, and neither is meaningful alone; the newer file already contains both, so it is the only
+    one applied and the older one is retired.
   - *What it costs.* The lobe pixels are absent from the first-pass sums. Changing the exclusion
     later means reprocessing, and the lobe's per-frame amplitude is **not** recoverable from this
     pass — the lobe-amplitude vs droplet-volume correlation (CLAUDE.md task 8) needs its own pass.

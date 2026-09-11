@@ -194,8 +194,8 @@ nucleation?
 | Proc (corrected) data | `/gpfs/exfel/exp/MID/202601/p010400/proc/r{run:04d}/CORR-R{run:04d}-AGIPD{module:02d}-S{seq:05d}.h5` (one file per module per sequence) |
 | Scratch | `/gpfs/exfel/exp/MID/202601/p010400/scratch/` |
 | AGIPD geometry in use | `/gpfs/exfel/exp/MID/202601/p010400/usr/geometry/geom_latest.geom` |
-| Custom AGIPD mask | `/gpfs/exfel/exp/MID/202601/p010400/usr/Shared/IA/custom_agipd_mask.npy` (non-zero = excluded, as combined with the seam mask in `analysis_helpers.py`) |
-| Low-q lobe mask | `/gpfs/exfel/u/usr/MID/202601/p010400/masks/` (non-zero = excluded; OR'd into `static_bad` with the seam and custom masks — integrator I4, option (a)) |
+| AGIPD pixel mask | `/gpfs/exfel/exp/MID/202601/p010400/usr/masks/mask_2026-09-08_AGIPD_SAXS.npy` — the **only** mask file. Non-zero = excluded; carries the bad pixels *and* the low-q lobe (integrator I4, option (a)); OR'd into `static_bad` with the ASIC seams. `usr/masks` is the same directory as `/gpfs/exfel/u/usr/MID/202601/p010400/masks` |
+| Superseded | `usr/Shared/IA/custom_agipd_mask.npy` and `usr/masks/mask_2026-05-11_AGIPD_updated.npy`. Do **not** apply either alongside the mask above |
 
 ### File structure (EuXFEL format, per module file)
 
@@ -243,8 +243,9 @@ statistics (open task 6). Integer data cannot carry NaN, so bad pixels must come
 - **Beam centre `(607.46, 672.08)`** was derived with the beamline scientist for the old stacked
   detector + `setFit2D` construction. Do not reuse it with `to_pyfai_detector()`. Agreed
   alternative: `geom.offset()`.
-- **Seams and custom mask.** ASIC seams (`agipd_asic_seams()`) and the custom mask are both needed
-  in addition to `image.mask`.
+- **Seams and pixel mask.** ASIC seams (`agipd_asic_seams()`) and the one pixel mask are both
+  needed in addition to `image.mask`. There is deliberately a single mask file: two overlapping
+  ones would have to be kept in step with each other.
 
 ### Other sources
 
@@ -314,7 +315,7 @@ statistics (open task 6). Integer data cannot carry NaN, so bad pixels must come
 | 5 | Polarisation correction | Confirm detector-frame ↔ lab-horizontal orientation and factor with MID; ≤ 5.4e-4 effect at q_max |
 | 6 | Correction settings | Photon threshold / recast settings for r0423, r0426 from the correction reports |
 | 7 | XGM normalisation recipe | Pulse-index alignment (LITFRM `data.xgmPulseId`), applied post hoc to stored sums |
-| 8 | Anisotropic low-q lobe (r0423) | **First pass: resolved.** Excluded by a static pixel mask (see Paths), OR'd into `static_bad` — integrator I4, option (a). No φ-sector logic and no per-region sums, so the φ ≈ 278–330° values from the old integrator frame need no re-derivation. **Still open as a separate analysis:** lobe amplitude (decays ~16 % over 300 s in the lowest q band, independent of the isotropic drift) vs droplet volume. It needs its own pass, because the first-pass sums no longer carry the lobe |
+| 8 | Anisotropic low-q lobe (r0423) | **First pass: resolved.** Excluded by the one static pixel mask (see Paths), OR'd into `static_bad` — integrator I4, option (a). No φ-sector logic and no per-region sums, so the φ ≈ 278–330° values from the old integrator frame need no re-derivation. **Still open as a separate analysis:** lobe amplitude (decays ~16 % over 300 s in the lowest q band, independent of the isotropic drift) vs droplet volume. It needs its own pass, because the first-pass sums no longer carry the lobe |
 | 9 | Transmission correction integration | `droplet_transmission.py` on stored sums; V/V₀ pairing (r0423 ↔ r0464) |
 | 10 | XPCS | Define q-binning; custom g2 model with KWW fitting (extra-speckle lacks it); shear vs diffusion diagnostic |
 | 11 | XCCA second pass | ROI list excluding Bragg q; per-shot masks; `AveragedAngularCorrelationMasked`; bulk chunk reader (integrator I3) |

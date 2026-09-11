@@ -16,9 +16,8 @@ from pathlib import Path
 from pyFAI.units import hc  # keV·Å, derived from scipy CODATA (pyFAI/units.py:66)
 
 __all__ = [
-    "DEFAULT_CUSTOM_MASK_FILE",
     "DEFAULT_GEOMETRY_FILE",
-    "DEFAULT_LOBE_MASK_FILE",
+    "DEFAULT_PIXEL_MASK_FILE",
     "EXPECTED_BITS",
     "FirstPassConfig",
     "file_sha256",
@@ -36,14 +35,16 @@ _PROPOSAL_ROOT = "/gpfs/exfel/exp/MID/202601/p010400"
 #: CrystFEL geometry in use for this beamtime.
 DEFAULT_GEOMETRY_FILE = f"{_PROPOSAL_ROOT}/usr/geometry/geom_latest.geom"
 
-#: Hand-drawn AGIPD mask; non-zero = excluded.
-DEFAULT_CUSTOM_MASK_FILE = f"{_PROPOSAL_ROOT}/usr/Shared/IA/custom_agipd_mask.npy"
-
-#: Static pixel mask covering the anisotropic low-q lobe (integrator I4,
-#: option (a)). This is the mask the live DAMNIT context used for the most
-#: recent reintegration of the runs; ``usr/masks`` is the same directory as
+#: The single hand-maintained AGIPD pixel mask; non-zero = excluded.
+#:
+#: It is the mask the live DAMNIT context used for the most recent
+#: reintegration of the runs, and it covers both the generally bad pixels and
+#: the anisotropic low-q lobe (integrator I4, option (a)) — there is
+#: deliberately no second mask to keep in step with it. The older
+#: ``usr/Shared/IA/custom_agipd_mask.npy`` is superseded and must not be
+#: combined with this one. ``usr/masks`` is the same directory as
 #: ``/gpfs/exfel/u/usr/MID/202601/p010400/masks``.
-DEFAULT_LOBE_MASK_FILE = f"{_PROPOSAL_ROOT}/usr/masks/mask_2026-09-08_AGIPD_SAXS.npy"
+DEFAULT_PIXEL_MASK_FILE = f"{_PROPOSAL_ROOT}/usr/masks/mask_2026-09-08_AGIPD_SAXS.npy"
 
 #: Where the per-run output file is written.
 DEFAULT_OUTPUT_ROOT = f"{_PROPOSAL_ROOT}/scratch/saxs_first_pass"
@@ -85,8 +86,7 @@ class FirstPassConfig:
     mask_bits: int = 0xFFFFFFFF
     expected_bits: frozenset[int] = EXPECTED_BITS
     use_asic_seams: bool = True
-    custom_mask_file: str | None = DEFAULT_CUSTOM_MASK_FILE
-    lobe_mask_file: str | None = DEFAULT_LOBE_MASK_FILE
+    pixel_mask_file: str | None = DEFAULT_PIXEL_MASK_FILE
     base_mask_trains: int = 8
     # ── run, scheduling and output (P3, context file §5) ──────────────────
     detector_name: str | None = None
@@ -158,8 +158,7 @@ class FirstPassConfig:
         """The input files whose sha256 enters :meth:`config_hash`."""
         return {
             "geometry_file": self.geometry_file,
-            "custom_mask_file": self.custom_mask_file,
-            "lobe_mask_file": self.lobe_mask_file,
+            "pixel_mask_file": self.pixel_mask_file,
         }
 
     @property

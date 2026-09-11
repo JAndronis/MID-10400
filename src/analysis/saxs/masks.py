@@ -2,10 +2,13 @@
 
 Three things are combined here:
 
-1. **The static mask.** ASIC seams, the custom mask and the low-q lobe mask
-   (integrator I4, option (a)), OR'd into one boolean pixel array. ``image.mask``
-   never sets ``NON_STANDARD_SIZE``, so the double-width ASIC-edge pixels are
-   unflagged in the data and must come from ``agipd_asic_seams()``.
+1. **The static mask.** ASIC seams OR'd with the single hand-maintained pixel
+   mask, which covers both the generally bad pixels and the anisotropic low-q
+   lobe (integrator I4, option (a)). There is deliberately only one such file:
+   two overlapping masks would have to be kept in step with each other.
+   ``image.mask`` never sets ``NON_STANDARD_SIZE``, so the double-width
+   ASIC-edge pixels are unflagged in the data and must come from
+   ``agipd_asic_seams()``.
 2. **The per-cell base mask.** The static bits in ``image.mask`` are per memory
    cell (4.05 % always flagged, 0.022 % varying), so a majority vote over a few
    sampled trains gives each cell a base mask and a precomputed denominator
@@ -98,7 +101,7 @@ class MaskSource:
     """One contribution to the static mask, recorded for provenance.
 
     ``n_excluded`` is this source's own count, before the OR with the others,
-    so an overlap between the custom mask and the lobe mask is visible.
+    so each source's contribution stays visible in the provenance record.
     """
 
     name: str
@@ -151,7 +154,7 @@ def load_pixel_mask(path: str | Path) -> np.ndarray:
 
 
 def build_static_bad(cfg: FirstPassConfig) -> StaticMask:
-    """ASIC seams ∪ custom mask ∪ lobe mask (context file §6.3, I4 option (a))."""
+    """ASIC seams ∪ the pixel mask (context file §6.3, I4 option (a))."""
     bad = np.zeros(NPIX, dtype=bool)
     sources: list[MaskSource] = []
 
@@ -160,15 +163,13 @@ def build_static_bad(cfg: FirstPassConfig) -> StaticMask:
         sources.append(MaskSource("asic_seams", None, None, int(seams.sum())))
         bad |= seams
 
-    for name, path in (
-        ("custom_mask", cfg.custom_mask_file),
-        ("lobe_mask", cfg.lobe_mask_file),
-    ):
-        if path is None:
-            continue
+    if cfg.pixel_mask_file is not None:
+        path = cfg.pixel_mask_file
         contribution = load_pixel_mask(path)
         sources.append(
-            MaskSource(name, str(path), file_sha256(path), int(contribution.sum()))
+            MaskSource(
+                "pixel_mask", str(path), file_sha256(path), int(contribution.sum())
+            )
         )
         bad |= contribution
 

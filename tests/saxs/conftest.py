@@ -46,8 +46,7 @@ def cfg() -> FirstPassConfig:
         run=423,
         npt=500,
         geometry_file=None,
-        custom_mask_file=None,
-        lobe_mask_file=None,
+        pixel_mask_file=None,
     )
 
 

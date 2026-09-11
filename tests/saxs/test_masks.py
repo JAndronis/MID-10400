@@ -42,8 +42,7 @@ def mask_cfg(tmp_path, **overrides) -> FirstPassConfig:
         "run": 423,
         "npt": 500,
         "geometry_file": None,
-        "custom_mask_file": None,
-        "lobe_mask_file": None,
+        "pixel_mask_file": None,
         "use_asic_seams": False,
     }
     return FirstPassConfig(**{**base, **overrides})
@@ -122,31 +121,39 @@ def mask_cfg_seams_only() -> FirstPassConfig:
         run=423,
         npt=500,
         geometry_file=None,
-        custom_mask_file=None,
-        lobe_mask_file=None,
+        pixel_mask_file=None,
         use_asic_seams=True,
     )
 
 
-def test_static_mask_is_the_union_of_its_sources(tmp_path):
-    custom = np.zeros((16, 512, 128), dtype=np.uint8)
-    custom[0, 0, :10] = 1
-    lobe = np.zeros((16, 512, 128), dtype=np.uint8)
-    lobe[0, 0, 5:15] = 1  # deliberately overlapping the custom mask
+def test_static_mask_is_the_union_of_seams_and_the_pixel_mask(tmp_path):
+    """The pixel mask overlaps the seams; the static mask is a union, not a sum."""
+    seams = np.broadcast_to(agipd_asic_seams(), (16, 512, 128))
+    pixel = np.zeros((16, 512, 128), dtype=np.uint8)
+    pixel[0, 0, :10] = 1  # not a seam row
+    pixel[0, 64, :10] = 1  # a seam row, so deliberately overlapping
 
     static = build_static_bad(
         mask_cfg(
             tmp_path,
-            custom_mask_file=str(write_mask(tmp_path, custom, "custom.npy")),
-            lobe_mask_file=str(write_mask(tmp_path, lobe, "lobe.npy")),
+            use_asic_seams=True,
+            pixel_mask_file=str(write_mask(tmp_path, pixel, "pixel.npy")),
         )
     )
-    assert static.n_excluded == 15  # union, not sum
     by_name = {source.name: source for source in static.sources}
-    assert by_name["custom_mask"].n_excluded == 10
-    assert by_name["lobe_mask"].n_excluded == 10  # own count, before the OR
-    assert by_name["custom_mask"].sha256 != by_name["lobe_mask"].sha256
-    assert all(source.sha256 is not None for source in static.sources)
+    assert by_name["asic_seams"].n_excluded == int(seams.sum())
+    assert by_name["pixel_mask"].n_excluded == 20  # own count, before the OR
+    assert by_name["pixel_mask"].sha256 is not None
+    # the ten seam-row pixels are counted once, not twice
+    assert static.n_excluded == int(seams.sum()) + 10
+
+
+def test_there_is_only_one_mask_file_field():
+    """One mask, deliberately: two would have to be kept in step."""
+    from dataclasses import fields
+
+    names = {f.name for f in fields(FirstPassConfig) if f.name.endswith("mask_file")}
+    assert names == {"pixel_mask_file"}
 
 
 def test_static_mask_records_the_seam_source_without_a_path():
@@ -157,16 +164,14 @@ def test_static_mask_records_the_seam_source_without_a_path():
 
 
 def test_static_hash_is_stable_and_content_sensitive(tmp_path):
-    custom = np.zeros((16, 512, 128), dtype=np.uint8)
-    custom[0, 0, :10] = 1
-    cfg = mask_cfg(
-        tmp_path, custom_mask_file=str(write_mask(tmp_path, custom, "a.npy"))
-    )
+    pixel = np.zeros((16, 512, 128), dtype=np.uint8)
+    pixel[0, 0, :10] = 1
+    cfg = mask_cfg(tmp_path, pixel_mask_file=str(write_mask(tmp_path, pixel, "a.npy")))
     assert build_static_bad(cfg).sha256 == build_static_bad(cfg).sha256
 
-    custom[0, 1, 0] = 1
+    pixel[0, 1, 0] = 1
     other = mask_cfg(
-        tmp_path, custom_mask_file=str(write_mask(tmp_path, custom, "b.npy"))
+        tmp_path, pixel_mask_file=str(write_mask(tmp_path, pixel, "b.npy"))
     )
     assert build_static_bad(other).sha256 != build_static_bad(cfg).sha256
 
