@@ -6,13 +6,12 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 from analysis_helpers import integrate_run, plot_ellipse, process_droplet_batch
+from damnit.context import Cell, Variable
 from extra.components import XGM, Scantool, XrayPulses
 from extra.data import by_id
 from extra.utils import imshow2
 from extra_speckle.pipeline import xpcs_offline
 from extra_speckle.utils import geometry_from_encoders
-
-from damnit.context import Cell, Variable
 
 XPCS_RESULTS = {}
 MASK_PATH = "/gpfs/exfel/u/usr/MID/202601/p010400/masks/mask_2026-09-08_AGIPD_SAXS.npy"
