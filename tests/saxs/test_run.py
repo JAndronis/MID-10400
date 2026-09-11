@@ -88,6 +88,9 @@ def test_end_to_end_inline(pipeline, tmp_path):
         assert (f["frames/status"][:] == FrameStatus.OK).all()
         assert f["provenance"].attrs["n_workers"] == pipeline.cfg.workers
         assert "operator_sha256" in f["provenance"].attrs
+        # P4 checks the wall time against the §2 budget from the file alone.
+        assert f["provenance"].attrs["wall_s"] > 0
+        assert f["provenance"].attrs["started_at"] > 0
         assert f["masks"].attrs["operator_sha256"] == f["operator"].attrs["sha256"]
         assert f["q/centers"].attrs["unit"] == "nm^-1"
 

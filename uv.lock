@@ -1805,6 +1805,7 @@ euxfel = [
     { name = "extra-proposal" },
     { name = "extra-speckle" },
     { name = "ipympl" },
+    { name = "pyfai" },
     { name = "scikit-image" },
 ]
 
@@ -1827,6 +1828,7 @@ requires-dist = [
     { name = "extra-speckle", marker = "extra == 'euxfel'", git = "https://git.xfel.eu/dataAnalysis/extra-speckle.git" },
     { name = "ipympl", marker = "extra == 'euxfel'" },
     { name = "pybeamtime", editable = "extern/pybeamtime" },
+    { name = "pyfai", marker = "extra == 'euxfel'" },
     { name = "scikit-image", marker = "extra == 'euxfel'" },
     { name = "xarray" },
 ]

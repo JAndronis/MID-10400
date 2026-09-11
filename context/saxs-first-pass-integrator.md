@@ -326,7 +326,8 @@ and compressed with gzip level 1.
                                                      operator_sha256, sampled trains
 /provenance                attrs: config JSON + hash, package versions, <pkg> commit, host,
                            n_workers, input-file sha256s, photon energy (config and XGM),
-                           calibration constants summary, run-check flags, timing summary
+                           calibration constants summary, run-check flags, timing summary,
+                           wall_s and started_at (P4 checks the wall time from the file alone)
 ```
 
 Size: ≈ 2.8 GB for r0423 at npt = 500. The frame arrays stay `(n, npt)`: I4 is decided as
@@ -411,6 +412,18 @@ the one static pixel mask OR'd into `static_bad`; the frame schema stays `(n, np
 - For 3 trains, pooled I(q) matches a dense pyFAI reference (engine with explicit `variance`)
   to < 1e-6.
 - Per-stage timing against the §2 budget; wall time ≤ ~6 min; every non-OK status accounted for.
+
+*How it is checked.* `scripts/p4_acceptance.py` runs the pass and then the four gates, and writes
+its verdict as JSON next to itself. Gate B re-reads what the writer stored, pools it the way §9
+does and compares that against a dense accumulation over whole trains, so the row-to-train
+mapping, the `f4` storage and `pooled_per_train` are inside the comparison — the per-frame kernel
+is the self-test's job, not gate B's. Gate C divides the workers' summed per-stage CPU seconds by
+the OK frame count to reach ms/frame/core; the §2 budget is a measurement, so a stage over budget
+is reported and only the wall time fails the gate. The gates are unit-tested against the mock run
+(`tests/saxs/test_p4_acceptance.py`), including a deliberately corrupted stored row.
+
+*Running it is the remaining work.* Nothing in P4 can be verified off the cluster: it needs a
+DAMNIT-partition node, the real geometry and mask files, and r0423.
 
 **P5 — DAMNIT integration**
 - Cluster variable on r0423 and r0426 via `context_python`.

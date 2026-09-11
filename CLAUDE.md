@@ -174,6 +174,7 @@ nucleation?
 | DAMNIT | per-run orchestration, summaries | |
 | extra-speckle | XPCS, Tier-2 data access | |
 | pyBeamtime (own) | multi-facility readers | EuXFEL reader plugin contract: `load_run(self, run_id, root_path)`. `get_run_path` is required in the ABC even though the docs omit it |
+| `scripts/p4_acceptance.py` | P4 acceptance for the SAXS first pass | runs the pass, then the four §10 gates; writes its verdict as JSON beside itself. Needs a node, the real geometry/mask files and r0423 |
 | `agipd_stage_rates.py` | 9-stage benchmark | run from the uv environment; writes JSON after each stage; `--train-offset` avoids page-cached trains |
 | pasha | legacy parallelism in `analysis_helpers.py` | fork-only; do not use in new code |
 | PyMuPDF | reading reference PDFs | rasterise at 2× (`fitz.Matrix(2, 2)`) before extraction |

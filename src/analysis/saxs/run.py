@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import platform
 import socket
+import time
 from collections.abc import Callable
 from concurrent.futures import BrokenExecutor, ProcessPoolExecutor, as_completed
 from multiprocessing import get_context
@@ -78,6 +79,11 @@ def run_first_pass(
     """
     # Before any pool exists, so spawned children inherit it (§3 rule 3).
     worker_module.set_thread_env()
+    # Wall time is an acceptance criterion (context file §10, P4), so it is
+    # recorded in provenance rather than left to whoever launched the job. It
+    # spans the plan, the self-test, the pool and the writer.
+    started_at = time.time()
+    started = time.perf_counter()
 
     work_dir = (
         Path(work_dir)
@@ -148,6 +154,8 @@ def run_first_pass(
                 "host": socket.gethostname(),
                 "platform": platform.platform(),
                 "n_workers": cfg.workers,
+                "started_at": started_at,
+                "wall_s": time.perf_counter() - started,
                 "package_versions": _package_versions(),
                 "operator_sha256": op.sha256,
                 "masks_sha256": base_masks.sha256,
