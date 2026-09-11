@@ -18,18 +18,20 @@ euxfel = [
     "euxfel-extra",
     "extra_data",
     "extra_geom",
+    "extra_proposal",
+    "extra-speckle",
     "dask[complete]",
     "dask_jobqueue",
     "ipympl",
-    "extra-speckle",
-    "pixel-masker",
     "scikit-image",
     "damnit"
 ]
 
 [dependency-groups]
 dev = [
+    "isal>=1.8.0",
     "pytest>=8",
+    "zlib-into>=0.4",
 ]
 
 [tool.uv.sources]
