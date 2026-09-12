@@ -374,8 +374,14 @@ analysis needs no plan object:
 
 | Reducer | Returns |
 |---|---|
-| `writer.pooled_per_train(file)` | `intensity`, `sigma` (trainId, q) and `n_frames` (trainId) |
-| `writer.per_pulse(file)` | `intensity` (trainId, pulseId, q) and `n_frames` (trainId, pulseId) |
+| `writer.pooled_per_train(file)` | a Dataset: `intensity`, `sigma` (trainId, q) and `n_frames` (trainId) |
+| `writer.per_pulse(file)` | a **DataArray** `intensity` (trainId, pulseId, q), with `n_frames` (trainId, pulseId) as a non-dimension coordinate |
+
+`per_pulse` returns a DataArray, not a Dataset, for two reasons that both come from DAMNIT: it is
+what `analysis_helpers.integrate_run` returned, and DAMNIT renders a 3-D DataArray in the table as
+`float32: (3000, 155, 500)` while a Dataset shows only `Dataset (930.49MB)`. Carrying `n_frames`
+as a coordinate keeps the companion array without turning it into a Dataset; it survives the
+netCDF round trip DAMNIT stores it through.
 
 `per_pulse` places each frame by its *stored* trainId and pulseId, never by its row position, so a
 dropped or short train cannot slide frames onto the wrong train (CLAUDE.md pitfall 4). Only `OK`
@@ -492,14 +498,15 @@ nominal photon energy disagrees with the configured one — see CLAUDE.md open t
 - Cluster variable on r0423 and r0426 via `context_python`.
 - Returns (trainId, q) pooled I(q); fails loudly if incomplete.
 
-*Implemented.* The stored variable is the **(trainId, pulseId, q)** grid rather than the pooled
-per-train view: per-pulse I(q) is what the old `agipd_saxs` provided and what the overview and any
+*Implemented.* The stored variable is the **(trainId, pulseId, q)** DataArray rather than the
+pooled per-train view: per-pulse I(q) is what the old `agipd_saxs` provided and what the overview and any
 per-pulse analysis need, it costs 0.93 GB against that variable's 3.7 GB, and the pooled view is
 one call away from the same file. Failing loudly needs no code of its own — `run_agipd_saxs`
 raises `IncompleteRun` unless `allow_incomplete`, and the wrapper does not catch it.
 
 `analysis/saxs/damnit.py` holds `config_for`, `agipd_saxs`, the two file readers and
-`overview_figure`; `src/amore/context.py` holds only the two decorated functions of §9.
+`overview_figure`, which draws the two maps with `extra.utils.imshow2` — the helper the old
+overview used, so the colour bars and the coordinate-labelled axes match it; `src/amore/context.py` holds only the two decorated functions of §9.
 `agipd_saxs` and `agipd_iq_overview` keep their names and their DAMNIT columns — this supersedes
 the old implementation rather than sitting beside it, so nothing downstream has to be repointed.
 What the column *holds* does change: I(q) in nm⁻¹ and undivided, where `analysis_helpers.

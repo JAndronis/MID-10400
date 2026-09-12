@@ -78,33 +78,27 @@ def pooled_from_file(path: str | Path) -> Any:
     return pooled_per_train(Path(path))
 
 
-def _masked(grid: Any) -> np.ma.MaskedArray:
-    """The intensity grid with un-integrated slots masked out.
-
-    Slots that hold no frame are stored as zeros (context file §3 rule 7), so
-    a plain ``mean`` would average them in and pull every curve down. The mask
-    is ``n_frames``, which is the companion array those zeros are read with.
-    """
-    intensity = np.asarray(grid["intensity"].values)
-    present = np.asarray(grid["n_frames"].values, dtype=bool)
-    return np.ma.masked_array(
-        intensity, mask=~np.broadcast_to(present[..., None], intensity.shape)
-    )
-
-
 def overview_figure(grid: Any, title: str = "") -> Any:
     """Three-panel I(q) overview: mean curve, per-pulse map, per-train map.
 
-    :param grid: the Dataset from :func:`agipd_saxs` or
+    The two maps go through ``extra.utils.imshow2``, which is what the old
+    ``agipd_iq_overview`` used: for a DataArray it hands off to xarray's own
+    ``plot.imshow``, so the colour bar and the real train and pulse ids on the
+    axes come from the array's coordinates rather than being drawn by hand.
+
+    :param grid: the DataArray from :func:`agipd_saxs` or
         :func:`per_pulse_from_file`.
     """
     import matplotlib.pyplot as plt
-    from matplotlib.colors import LogNorm
+    from extra.utils import imshow2
     from matplotlib.gridspec import GridSpec
 
-    masked = _masked(grid)
-    q = np.asarray(grid["q"].values)
-    n_trains, n_pulses, _ = masked.shape
+    # Slots holding no frame are stored as zeros (context file §3 rule 7);
+    # NaN is what makes xarray's mean skip them and what imshow2 leaves blank.
+    # The copy is skipped when every slot holds a frame — the usual case, and
+    # ~0.9 GB of it.
+    present = grid["n_frames"] > 0
+    intensity = grid if bool(present.all()) else grid.where(present)
 
     fig = plt.figure(figsize=(9, 7))
     gs = GridSpec(2, 2, figure=fig)
@@ -112,32 +106,45 @@ def overview_figure(grid: Any, title: str = "") -> Any:
     ax2 = fig.add_subplot(gs[1, 0])
     ax3 = fig.add_subplot(gs[1, 1])
 
-    ax1.plot(q, masked.mean(axis=(0, 1)))
+    ax1.plot(grid["q"].values, intensity.mean(("trainId", "pulseId")).values)
     ax1.set_yscale("log")
     ax1.set_xlabel("q [nm$^{-1}$]")
     ax1.set_ylabel("I(q) [photons / solid angle]")
     ax1.set_title(title or "Mean I(q) over all trains and pulses")
     ax1.grid(alpha=0.3)
 
-    for ax, data, ylabel, n in (
-        (ax2, masked.mean(axis=0), "Pulse", n_pulses),
-        (ax3, masked.mean(axis=1), "Train", n_trains),
-    ):
-        # LogNorm cannot take a non-positive vmin, and a run with nothing
-        # integrated has no positive value at all to take one from.
-        finite = np.ma.compressed(data)
-        finite = finite[finite > 0]
-        norm = LogNorm(vmin=finite.min(), vmax=finite.max()) if finite.size else None
-        ax.imshow(
-            data,
-            aspect="auto",
-            origin="upper",
-            norm=norm,
-            extent=[float(q.min()), float(q.max()), n, 0],
-        )
+    panels = (
+        (
+            ax2,
+            intensity.mean("trainId"),
+            "Pulse ID",
+            "I(q) per-pulse (averaged over trains)",
+        ),
+        (
+            ax3,
+            intensity.mean("pulseId"),
+            "Train",
+            "I(q) per-train (averaged over pulses)",
+        ),
+    )
+    for ax, data, ylabel, subtitle in panels:
+        values = np.asarray(data.values)
+        # LogNorm needs a positive value to anchor on, and imshow2 raises
+        # looking for one when a run has nothing integrated at all.
+        if np.isfinite(values).any() and (values[np.isfinite(values)] > 0).any():
+            imshow2(data, ax=ax, lognorm=True)
+        else:
+            ax.text(
+                0.5,
+                0.5,
+                "no integrated frames",
+                ha="center",
+                va="center",
+                transform=ax.transAxes,
+            )
         ax.set_xlabel("q [nm$^{-1}$]")
         ax.set_ylabel(ylabel)
-        ax.set_title(f"I(q) per {ylabel.lower()}")
+        ax.set_title(subtitle)
 
     fig.tight_layout()
     return fig

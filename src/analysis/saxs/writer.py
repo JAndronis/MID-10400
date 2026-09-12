@@ -387,7 +387,11 @@ def pooled_per_train(source: Any) -> Any:
 
 
 def per_pulse(source: Any, *, dtype: Any = np.float32, chunk_rows: int = 20_000) -> Any:
-    """Per-frame ``I(q)`` on a ``(trainId, pulseId, q)`` grid (context file §9).
+    """Per-frame ``I(q)`` as a ``(trainId, pulseId, q)`` DataArray (§9).
+
+    A ``DataArray`` rather than a ``Dataset``, matching what
+    ``analysis_helpers.integrate_run`` returned, with ``n_frames`` carried as a
+    non-dimension coordinate.
 
     Every frame placed on the grid is placed by its *stored* trainId and
     pulseId, never by its position in the frame table, so a dropped train or a
@@ -461,12 +465,21 @@ def per_pulse(source: Any, *, dtype: Any = np.float32, chunk_rows: int = 20_000)
             "slot with another; the pulse ids do not identify frames uniquely"
         )
 
-    result = xr.Dataset(
-        {
-            "intensity": (("trainId", "pulseId", "q"), intensity),
+    result = xr.DataArray(
+        intensity,
+        dims=("trainId", "pulseId", "q"),
+        coords={
+            "trainId": train_ids,
+            "pulseId": pulse_ids,
+            "q": q,
+            # A non-dimension coordinate rather than a second data variable,
+            # which would make this a Dataset. DAMNIT renders a 3-D DataArray
+            # in the table as "float32: (n, m, npt)" — the cell
+            # ``analysis_helpers.integrate_run`` produced — but a Dataset only
+            # as "Dataset (930.49MB)".
             "n_frames": (("trainId", "pulseId"), n_frames),
         },
-        coords={"trainId": train_ids, "pulseId": pulse_ids, "q": q},
+        name="intensity",
     )
     result.attrs["unplaced"] = json.dumps(unplaced, sort_keys=True)
     result.attrs["n_placed"] = placed
