@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 from extra_geom import agipd_asic_seams
 
-from analysis.saxs.config import NPIX, FirstPassConfig
+from analysis.saxs.config import NPIX, AgipdSaxsConfig
 from analysis.saxs.masks import (
     BaseMaskAccumulator,
     UnexpectedMaskBits,
@@ -36,7 +36,7 @@ def write_mask(tmp_path, array, name="mask.npy"):
     return path
 
 
-def mask_cfg(tmp_path, **overrides) -> FirstPassConfig:
+def mask_cfg(tmp_path, **overrides) -> AgipdSaxsConfig:
     base = {
         "proposal": 10400,
         "run": 423,
@@ -45,7 +45,7 @@ def mask_cfg(tmp_path, **overrides) -> FirstPassConfig:
         "pixel_mask_file": None,
         "use_asic_seams": False,
     }
-    return FirstPassConfig(**{**base, **overrides})
+    return AgipdSaxsConfig(**{**base, **overrides})
 
 
 # ── static mask: shape and convention asserts ─────────────────────────────────
@@ -115,8 +115,8 @@ def test_asic_seams_are_repeated_over_sixteen_modules():
     )
 
 
-def mask_cfg_seams_only() -> FirstPassConfig:
-    return FirstPassConfig(
+def mask_cfg_seams_only() -> AgipdSaxsConfig:
+    return AgipdSaxsConfig(
         proposal=10400,
         run=423,
         npt=500,
@@ -152,7 +152,7 @@ def test_there_is_only_one_mask_file_field():
     """One mask, deliberately: two would have to be kept in step."""
     from dataclasses import fields
 
-    names = {f.name for f in fields(FirstPassConfig) if f.name.endswith("mask_file")}
+    names = {f.name for f in fields(AgipdSaxsConfig) if f.name.endswith("mask_file")}
     assert names == {"pixel_mask_file"}
 
 

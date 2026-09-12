@@ -19,7 +19,7 @@ from typing import Any
 
 import numpy as np
 
-from analysis.saxs.config import FirstPassConfig
+from analysis.saxs.config import AgipdSaxsConfig
 from analysis.saxs.status import FrameStatus
 
 __all__ = ["Block", "RunPlan", "TrainRecord", "build_plan", "run_checks"]
@@ -94,13 +94,13 @@ class RunPlan:
         return counts
 
 
-def _open_detector(cfg: FirstPassConfig, dc: Any):
+def _open_detector(cfg: AgipdSaxsConfig, dc: Any):
     from extra_data.components import AGIPD1M
 
     return AGIPD1M(dc, detector_name=cfg.detector_name, min_modules=cfg.min_modules)
 
 
-def _open_control(cfg: FirstPassConfig) -> Any:
+def _open_control(cfg: AgipdSaxsConfig) -> Any:
     """Open the raw location, which is where the control sources live.
 
     ``open_run(..., data="proc")`` opens one location, and proc holds only the
@@ -116,7 +116,7 @@ def _open_control(cfg: FirstPassConfig) -> Any:
     return open_run(cfg.proposal, cfg.run, data="raw")
 
 
-def build_plan(cfg: FirstPassConfig, dc: Any = None, control_dc: Any = None) -> RunPlan:
+def build_plan(cfg: AgipdSaxsConfig, dc: Any = None, control_dc: Any = None) -> RunPlan:
     """Build the run plan (context file §6.8).
 
     :param dc: an open ``DataCollection``. When ``None``, the proc run named by
@@ -196,11 +196,11 @@ def build_plan(cfg: FirstPassConfig, dc: Any = None, control_dc: Any = None) -> 
         blocks=tuple(blocks),
         n_frames=n_frames,
         detector_name=det.detector_name,
-        checks=run_checks(control_dc, det, counts),
+        checks=run_checks(control_dc, det, counts, cfg),
     )
 
 
-def _control_or_none(cfg: FirstPassConfig) -> Any:
+def _control_or_none(cfg: AgipdSaxsConfig) -> Any:
     """:func:`_open_control`, or ``None`` when raw is not readable."""
     try:
         return _open_control(cfg)
@@ -260,7 +260,9 @@ def _build_blocks(records: list[TrainRecord], trains_per_block: int) -> list[Blo
     return blocks
 
 
-def run_checks(dc: Any, det: Any, counts: Any) -> dict[str, Any]:
+def run_checks(
+    dc: Any, det: Any, counts: Any, cfg: AgipdSaxsConfig | None = None
+) -> dict[str, Any]:
     """Provenance flags for the run (context file §6.8).
 
     None of these select frames in v1 (integrator I1); each is recorded and a
@@ -270,6 +272,8 @@ def run_checks(dc: Any, det: Any, counts: Any) -> dict[str, Any]:
 
     :param dc: a collection carrying the *control* sources — see
         :func:`_open_control`. ``None`` records every check as unavailable.
+    :param cfg: when given, the photon-energy check compares the machine's
+        nominal energy against ``cfg.photon_energy_kev``.
     """
     checks: dict[str, Any] = {}
     if dc is None:
@@ -306,19 +310,46 @@ def run_checks(dc: Any, det: Any, counts: Any) -> dict[str, Any]:
         return {"n_positions": int(len(positions)), "quadrants_moved": bool(moved)}
 
     def energy_check() -> dict[str, Any]:
+        """The machine's nominal photon energy, against the configured one.
+
+        ``XGM.photon_energy_by_train`` returns **keV** already (it converts
+        ``pulseEnergy.wavelengthUsed``, in nm, and tags the result keV), so
+        there is no eV to divide out.
+
+        No tolerance is invented here (CLAUDE.md working rule 2): the two are
+        called equal only within the float32 precision the XGM value carries,
+        and any wider gap is reported for a person to settle. It matters
+        because q scales with the energy, so a disagreement of x is a
+        disagreement of x in every q value this pass writes.
+        """
         from extra.components import XGM
 
         energies = np.asarray(XGM(dc).photon_energy_by_train())
         finite = energies[np.isfinite(energies)]
         if finite.size == 0:
             return {"available": False}
-        return {
+        mean_kev = float(finite.mean())
+        check: dict[str, Any] = {
             "available": True,
-            "mean_kev": float(finite.mean()) / 1000.0,
+            "mean_kev": mean_kev,
             "spread_fraction": float(
-                (finite.max() - finite.min()) / max(abs(finite.mean()), 1e-12)
+                (finite.max() - finite.min()) / max(abs(mean_kev), 1e-12)
             ),
         }
+        if cfg is not None:
+            relative = abs(mean_kev - cfg.photon_energy_kev) / cfg.photon_energy_kev
+            check["config_kev"] = cfg.photon_energy_kev
+            check["rel_difference"] = relative
+            check["agrees"] = bool(relative <= float(np.finfo(np.float32).eps))
+            if not check["agrees"]:
+                log.warning(
+                    "photon energy: config %.4f keV, XGM %.4f keV "
+                    "(%.2f %%); q scales with it",
+                    cfg.photon_energy_kev,
+                    mean_kev,
+                    100 * relative,
+                )
+        return check
 
     attempt("xray_pulses", pulse_check)
     attempt("quadrant_motors", quadrant_check)

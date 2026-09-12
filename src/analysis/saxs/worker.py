@@ -20,7 +20,7 @@ from typing import Any
 
 import numpy as np
 
-from analysis.saxs.config import FirstPassConfig
+from analysis.saxs.config import AgipdSaxsConfig
 from analysis.saxs.masks import BaseMasks, frame_bad, load_masks
 from analysis.saxs.operator import SparseOperator, load_operator
 from analysis.saxs.plan import Block
@@ -63,7 +63,7 @@ class WorkerPaths:
 
 @dataclass(slots=True)
 class _WorkerState:
-    cfg: FirstPassConfig
+    cfg: AgipdSaxsConfig
     op: SparseOperator
     masks: BaseMasks
     detector: Any
@@ -72,7 +72,7 @@ class _WorkerState:
 _STATE: _WorkerState | None = None
 
 
-def init(paths: WorkerPaths, cfg: FirstPassConfig) -> None:
+def init(paths: WorkerPaths, cfg: AgipdSaxsConfig) -> None:
     """Process initializer: load the operator and masks, open the run."""
     set_thread_env()
 
@@ -98,7 +98,7 @@ def init(paths: WorkerPaths, cfg: FirstPassConfig) -> None:
 
 
 def init_from_detector(
-    cfg: FirstPassConfig, op: SparseOperator, masks: BaseMasks, detector: Any
+    cfg: AgipdSaxsConfig, op: SparseOperator, masks: BaseMasks, detector: Any
 ) -> None:
     """In-process initializer for tests and single-process runs."""
     global _STATE

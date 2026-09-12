@@ -35,7 +35,7 @@ from pathlib import Path
 import numpy as np
 from extra_geom import agipd_asic_seams
 
-from analysis.saxs.config import NPIX, FirstPassConfig, file_sha256
+from analysis.saxs.config import NPIX, AgipdSaxsConfig, file_sha256
 from analysis.saxs.operator import SparseOperator
 from analysis.saxs.sparse import denominator
 
@@ -153,7 +153,7 @@ def load_pixel_mask(path: str | Path) -> np.ndarray:
     return bad
 
 
-def build_static_bad(cfg: FirstPassConfig) -> StaticMask:
+def build_static_bad(cfg: AgipdSaxsConfig) -> StaticMask:
     """ASIC seams ∪ the pixel mask (context file §6.3, I4 option (a))."""
     bad = np.zeros(NPIX, dtype=bool)
     sources: list[MaskSource] = []

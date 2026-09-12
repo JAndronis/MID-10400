@@ -19,7 +19,7 @@ pytest.importorskip("pyFAI", reason="P1 needs pyFAI")
 
 from extra_geom import AGIPD_1MGeometry  # noqa: E402
 
-from analysis.saxs.config import NPIX, FirstPassConfig  # noqa: E402
+from analysis.saxs.config import NPIX, AgipdSaxsConfig  # noqa: E402
 from analysis.saxs.masks import MaskSource, StaticMask  # noqa: E402
 from analysis.saxs.operator import build_operator  # noqa: E402
 
@@ -34,14 +34,14 @@ def quad_pos() -> list[tuple[float, float]]:
 
 
 @pytest.fixture(scope="session")
-def cfg() -> FirstPassConfig:
+def cfg() -> AgipdSaxsConfig:
     """Config for the synthetic geometry.
 
     The real defaults are GPFS paths, so every input file is set to ``None``
     here: the tests build their geometry and masks in-process, and
     ``config_hash`` must not try to sha256 a file that is not mounted.
     """
-    return FirstPassConfig(
+    return AgipdSaxsConfig(
         proposal=10400,
         run=423,
         npt=500,
@@ -177,7 +177,7 @@ def static_mask() -> StaticMask:
 
 
 @pytest.fixture(scope="session")
-def run_cfg(cfg) -> FirstPassConfig:
+def run_cfg(cfg) -> AgipdSaxsConfig:
     """Config sized for the mock run: small blocks, two workers."""
     from dataclasses import replace
 

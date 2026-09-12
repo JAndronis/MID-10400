@@ -1,6 +1,9 @@
-"""First-pass AGIPD SAXS loader and integrator.
+"""AGIPD SAXS loader and integrator — the ``agipd_saxs`` DAMNIT variable.
 
-See ``context/saxs-first-pass-integrator.md`` for the design. P1 provides the
+Supersedes ``amore/analysis_helpers.integrate_run`` in place: the DAMNIT
+variable keeps its name, and what it computes moves here.
+
+See ``context/agipd-saxs-integrator.md`` for the design. P1 provides the
 operator, the sparse kernels, the pure per-frame integration and the
 sparse-vs-pyFAI gate; P2 adds the static and per-cell base masks;
 P3 the plan, worker, writer and orchestration. DAMNIT integration is P5.
@@ -13,7 +16,7 @@ from analysis.saxs.config import (
     METHOD,
     NPIX,
     SHAPE,
-    FirstPassConfig,
+    AgipdSaxsConfig,
 )
 from analysis.saxs.masks import (
     BaseMaskAccumulator,
@@ -36,7 +39,7 @@ from analysis.saxs.operator import (
     save_operator,
 )
 from analysis.saxs.plan import Block, RunPlan, TrainRecord, build_plan
-from analysis.saxs.run import run_first_pass
+from analysis.saxs.run import run_agipd_saxs
 from analysis.saxs.selftest import SelfTestFailed, SelfTestReport, run_selftest
 from analysis.saxs.sparse import (
     FrameResult,
@@ -47,7 +50,7 @@ from analysis.saxs.sparse import (
 )
 from analysis.saxs.status import DataCheckFailed, FrameStatus
 from analysis.saxs.worker import BlockResult, WorkerPaths
-from analysis.saxs.writer import ConfigHashMismatch, FirstPassWriter, IncompleteRun
+from analysis.saxs.writer import AgipdSaxsWriter, ConfigHashMismatch, IncompleteRun
 
 __all__ = [
     "EXPECTED_BITS",
@@ -60,9 +63,9 @@ __all__ = [
     "BlockResult",
     "ConfigHashMismatch",
     "DataCheckFailed",
-    "FirstPassConfig",
+    "AgipdSaxsConfig",
     "FrameResult",
-    "FirstPassWriter",
+    "AgipdSaxsWriter",
     "FrameStatus",
     "IncompleteRun",
     "MaskSource",
@@ -87,7 +90,7 @@ __all__ = [
     "load_masks",
     "load_operator",
     "load_pixel_mask",
-    "run_first_pass",
+    "run_agipd_saxs",
     "run_selftest",
     "save_masks",
     "save_operator",

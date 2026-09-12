@@ -5,13 +5,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import xarray as xr
-from analysis_helpers import integrate_run, plot_ellipse, process_droplet_batch
+from analysis_helpers import plot_ellipse, process_droplet_batch
 from damnit.context import Cell, Variable
 from extra.components import XGM, Scantool, XrayPulses
 from extra.data import by_id
-from extra.utils import imshow2
 from extra_speckle.pipeline import xpcs_offline
-from extra_speckle.utils import geometry_from_encoders
 
 XPCS_RESULTS = {}
 MASK_PATH = "/gpfs/exfel/u/usr/MID/202601/p010400/masks/mask_2026-09-08_AGIPD_SAXS.npy"
@@ -366,77 +364,37 @@ def xpcs_saxs_plot(run, ds: "var#xpcs_pipeline"):
     return XPCS_RESULTS["figure_saxs"]
 
 
-BEAMCENTER = (607.4598, 672.0767)
-SDD = 7.5315962
+# ── AGIPD SAXS integration (analysis.saxs; context file §10, P5) ─────────────
+# `agipd_saxs` keeps its name and column: this is the same quantity, computed
+# by `analysis.saxs` instead of `analysis_helpers.integrate_run` — over an hour
+# per run against 6.3 min here, and without dividing by I0 in place, which
+# could not be undone afterwards.
+#
+# What the column holds therefore changes at this commit: I(q) in nm^-1 and not
+# I0-divided, where before it was A^-1 and divided. Runs processed earlier hold
+# the old quantity, so clear the column for them rather than plotting across
+# the boundary.
+#
+# Both variables are thin on purpose: DAMNIT execs this file into a dict, so a
+# function defined here cannot be pickled to the workers the pass spawns.
 
 
-@Variable("AGIPD I(q)", data="proc", cluster=True)
-def agipd_saxs(run, run_no: "meta#run_number", pulses: "var#pulses"):
+@Variable("AGIPD I(q)", data="proc", cluster=True, tags=["offline"])
+def agipd_saxs(run, proposal: "meta#proposal", run_no: "meta#run_number"):
+    """I(q) per (trainId, pulseId). Raises if any frame did not reach OK.
 
-    # return 'postponed'
+    `run` is unused: a data="proc" variable is handed a proc-only collection,
+    which holds no XGM, timeserver or motors, so the pass opens proc for the
+    frames and raw for its own run checks. The per-frame sums land in
+    scratch/agipd_saxs/r{run:04d}/; what is returned is the intensity grid.
+    """
+    from analysis.saxs import damnit
 
-    geom = geometry_from_encoders(run)
-
-    run = run.select(
-        [("*AGIPD1M-1/CORR/*", "*"), "*XGM*", ("*SELECTOR*", "*")], require_all=True
-    )
-    run = run.select_trains(np.s_[:])
-    i0 = XGM(run).pulse_energy()
-
-    result = integrate_run(
-        run,
-        sdd=SDD,  # meters
-        beamcenter=BEAMCENTER,
-        use_gpu_target=(0, 0),
-        npt=2000,
-        i0=i0,
-        geom=geom,
-        mask=MASK_PATH,
-    )
-
-    return result
+    return damnit.agipd_saxs(proposal, run_no)
 
 
-@Variable("AGIPD I(q) overview")
-def agipd_iq_overview(run, ai: "var#agipd_saxs"):
+@Variable("AGIPD I(q) overview", data="proc", cluster=True, tags=["offline"])
+def agipd_iq_overview(run, grid: "var#agipd_saxs"):
+    from analysis.saxs import damnit
 
-    from matplotlib.gridspec import GridSpec
-
-    fig = plt.figure(figsize=(9, 7))
-    gs = GridSpec(2, 2, figure=fig)
-    ax1 = fig.add_subplot(gs[0, :])
-    ax2 = fig.add_subplot(gs[1, 0])
-    ax3 = fig.add_subplot(gs[1, 1])
-
-    ax1.plot(ai.q, ai.mean(dim=("trainId", "pulseId")))
-    ax1.set_yscale("log")
-    ax1.set_xlabel("q [A^-1]")
-    ax1.set_ylabel("Intensity [arb. u]")
-    ax1.set_title("Mean I(q) over all trains and pulses")
-    ax1.grid()
-
-    pulse_mean = ai.mean("trainId")
-    imshow2(
-        pulse_mean,
-        ax=ax2,
-        lognorm=True,
-        extent=[ai.q.min(), ai.q.max(), len(ai.pulseId), 0],
-    )
-    ax2.set_xlabel("q [A^-1]")
-    ax2.set_ylabel("Pulse ID")
-    ax2.set_title("I(q) per-pulse (averaged over trains)")
-
-    train_mean = ai.mean("pulseId")
-    imshow2(
-        train_mean,
-        ax=ax3,
-        lognorm=True,
-        extent=[ai.q.min(), ai.q.max(), len(ai.trainId), 0],
-    )
-    ax3.set_xlabel("q [A^-1]")
-    ax3.set_ylabel("Train")
-    ax3.set_title("I(q) per-train (averaged over pulses)")
-
-    fig.tight_layout()
-
-    return fig
+    return damnit.overview_figure(grid)

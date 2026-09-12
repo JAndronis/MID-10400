@@ -15,7 +15,7 @@ import h5py  # noqa: E402
 
 from analysis.saxs import worker  # noqa: E402
 from analysis.saxs.plan import Block  # noqa: E402
-from analysis.saxs.run import run_first_pass  # noqa: E402
+from analysis.saxs.run import run_agipd_saxs  # noqa: E402
 from analysis.saxs.status import FrameStatus  # noqa: E402
 from analysis.saxs.writer import IncompleteRun  # noqa: E402
 
@@ -61,7 +61,7 @@ class BrokenPool(InlinePool):
 def run_on_mock(pipeline, tmp_path, **overrides):
     factory = overrides.pop("pool_factory", None) or InlinePool
     cfg = replace(pipeline.cfg, **overrides) if overrides else pipeline.cfg
-    return run_first_pass(
+    return run_agipd_saxs(
         cfg,
         dc=pipeline.dc,
         geometry=None if cfg.geometry_file else pipeline.geometry,
@@ -97,7 +97,7 @@ def test_end_to_end_inline(pipeline, tmp_path):
 
 def test_end_to_end_with_a_real_spawned_pool(pipeline, tmp_path):
     """The only test that actually spawns workers."""
-    pooled = run_first_pass(
+    pooled = run_agipd_saxs(
         pipeline.cfg,
         dc=pipeline.dc,
         geometry=pipeline.geometry,
@@ -107,7 +107,7 @@ def test_end_to_end_with_a_real_spawned_pool(pipeline, tmp_path):
     )
     assert pooled.n_frames.values.sum() == pipeline.plan.n_frames
 
-    inline = run_first_pass(
+    inline = run_agipd_saxs(
         pipeline.cfg,
         dc=pipeline.dc,
         geometry=pipeline.geometry,
@@ -156,7 +156,7 @@ def test_worker_exception_becomes_worker_error(pipeline, tmp_path, monkeypatch):
 
 def test_killed_worker_marks_not_processed_and_raises(pipeline, tmp_path):
     with pytest.raises(BrokenExecutor):
-        run_first_pass(
+        run_agipd_saxs(
             pipeline.cfg,
             dc=pipeline.dc,
             geometry=pipeline.geometry,

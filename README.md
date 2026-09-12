@@ -11,7 +11,7 @@ data-format facts and the pitfalls; the per-task design guides live in
 
 ```
 src/analysis/           analysis package (<pkg>)
-    saxs/               first-pass AGIPD SAXS loader and integrator
+    saxs/               AGIPD SAXS loader and integrator (`agipd_saxs`)
     agipd_integrate.py  earlier prototype, superseded by saxs/
 src/readers/            pyBeamtime reader plugin (EuXFELMIDRawReader)
     io/readers/euxfel.py
@@ -39,7 +39,7 @@ every benchmark was taken against.
 `pyBeamtime` is consumed as an **editable path dependency** pointing at a local
 checkout (see `[tool.uv.sources]`; the path is machine-specific).
 
-## SAXS first pass
+## AGIPD SAXS integration (`agipd_saxs`)
 
 `analysis.saxs` replaces `amore/analysis_helpers.integrate_run`. It integrates
 every AGIPD frame of a run over its photon hits with a sparse full-split
@@ -50,15 +50,15 @@ I(q), so any later grouping pools exactly:
 I(q) = Σ_G S / Σ_G N          σ(q) = sqrt(Σ_G V) / Σ_G N
 ```
 
-Design and phase plan: [`context/saxs-first-pass-integrator.md`](context/saxs-first-pass-integrator.md).
+Design and phase plan: [`context/agipd-saxs-integrator.md`](context/agipd-saxs-integrator.md).
 Implemented so far (P1): the operator, the sparse kernels, the pure per-frame
 integration and the sparse-vs-pyFAI gate.
 
 ```python
 from extra_geom import AGIPD_1MGeometry
-from analysis.saxs import FirstPassConfig, build_operator, denominator, integrate_frame
+from analysis.saxs import AgipdSaxsConfig, build_operator, denominator, integrate_frame
 
-cfg = FirstPassConfig(proposal=10400, run=423, geometry_file="…/geom_latest.geom")
+cfg = AgipdSaxsConfig(proposal=10400, run=423, geometry_file="…/geom_latest.geom")
 op, ai = build_operator(AGIPD_1MGeometry.from_crystfel_geom(cfg.geometry_file), cfg)
 result = integrate_frame(op, counts, bad, base_bad, denominator(op, base_bad))
 ```

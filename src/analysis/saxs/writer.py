@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -21,12 +22,18 @@ from typing import Any
 import h5py
 import numpy as np
 
-from analysis.saxs.config import FirstPassConfig
+from analysis.saxs.config import AgipdSaxsConfig
 from analysis.saxs.plan import Block, RunPlan
 from analysis.saxs.status import FrameStatus
 from analysis.saxs.worker import BlockResult
 
-__all__ = ["ConfigHashMismatch", "FirstPassWriter", "IncompleteRun"]
+__all__ = [
+    "ConfigHashMismatch",
+    "AgipdSaxsWriter",
+    "IncompleteRun",
+    "per_pulse",
+    "pooled_per_train",
+]
 
 log = logging.getLogger(__name__)
 
@@ -51,10 +58,10 @@ class IncompleteRun(RuntimeError):
     """Some frames did not reach ``OK`` and ``allow_incomplete`` is False."""
 
 
-class FirstPassWriter:
+class AgipdSaxsWriter:
     """The single writer for one run's output file."""
 
-    def __init__(self, handle: h5py.File, cfg: FirstPassConfig, plan: RunPlan) -> None:
+    def __init__(self, handle: h5py.File, cfg: AgipdSaxsConfig, plan: RunPlan) -> None:
         self._f = handle
         self._cfg = cfg
         self._plan = plan
@@ -62,8 +69,8 @@ class FirstPassWriter:
     # ── lifecycle ────────────────────────────────────────────────────────────
     @classmethod
     def open_or_create(
-        cls, cfg: FirstPassConfig, plan: RunPlan, path: Path | None = None
-    ) -> FirstPassWriter:
+        cls, cfg: AgipdSaxsConfig, plan: RunPlan, path: Path | None = None
+    ) -> AgipdSaxsWriter:
         """Open the run's output file, creating and initialising it if needed.
 
         An existing file whose stored config hash differs is refused unless
@@ -90,7 +97,7 @@ class FirstPassWriter:
 
     @staticmethod
     def _create_layout(
-        handle: h5py.File, cfg: FirstPassConfig, plan: RunPlan, config_hash: str
+        handle: h5py.File, cfg: AgipdSaxsConfig, plan: RunPlan, config_hash: str
     ) -> None:
         n, npt = plan.n_frames, cfg.npt
         frames = handle.create_group("frames")
@@ -151,7 +158,7 @@ class FirstPassWriter:
     def close(self) -> None:
         self._f.close()
 
-    def __enter__(self) -> FirstPassWriter:
+    def __enter__(self) -> AgipdSaxsWriter:
         return self
 
     def __exit__(self, *exc: object) -> None:
@@ -298,41 +305,169 @@ class FirstPassWriter:
         return bool((self._f["frames/status"][:] != FrameStatus.OK).any())
 
     def pooled_per_train(self) -> Any:
-        """Per-train pooled ``I(q)`` over the ``OK`` frames (context file §9).
+        """Per-train pooled ``I(q)`` — see :func:`pooled_per_train`."""
+        return pooled_per_train(self._f)
 
-        ``I(q) = Σ S / Σ N`` over each train's integrated frames. Trains with no
-        integrated frame are returned as zeros with ``count == 0``; there are no
-        NaN sentinels, so callers select on ``count``.
-        """
-        import xarray as xr
+    def per_pulse(self) -> Any:
+        """Per-frame ``I(q)`` on a (train, pulse) grid — see :func:`per_pulse`."""
+        return per_pulse(self._f)
 
-        status = self._f["frames/status"][:]
-        train_ids = np.array([t.train_id for t in self._plan.trains], dtype=np.uint64)
-        q = (
-            np.asarray(self._f["q/centers"][:])
-            if "q" in self._f
-            else np.arange(self._cfg.npt, dtype=np.float64)
-        )
 
-        intensity = np.zeros((train_ids.size, self._cfg.npt), dtype=np.float64)
+# ── reducers (context file §9) ────────────────────────────────────────────────
+# These take the output file rather than a live writer, so the same code serves
+# the run that produced it and any post hoc analysis of it months later. They
+# read the ``/trains`` table for the row-to-train map: ``frames/trainId`` is
+# only filled for blocks that were actually written, so a run with an
+# unprocessed block has rows carrying trainId 0 (CLAUDE.md pitfall 4).
+
+
+@contextmanager
+def _as_handle(source: Any) -> Any:
+    """Accept an open file or a path, and yield an open file either way."""
+    if isinstance(source, h5py.File):
+        yield source
+    else:
+        with h5py.File(source, "r") as handle:
+            yield handle
+
+
+def _q_centers(handle: h5py.File, npt: int) -> np.ndarray:
+    if "q" in handle:
+        return np.asarray(handle["q/centers"][:])
+    return np.arange(npt, dtype=np.float64)
+
+
+def pooled_per_train(source: Any) -> Any:
+    """Per-train pooled ``I(q)`` and ``σ(q)`` over the ``OK`` frames (§9).
+
+    ``I(q) = Σ S / Σ N`` and ``σ(q) = sqrt(Σ V) / Σ N`` over each train's
+    integrated frames. Trains with no integrated frame are returned as zeros
+    with ``n_frames == 0``; there are no NaN sentinels, so callers select on
+    ``n_frames``.
+    """
+    import xarray as xr
+
+    with _as_handle(source) as handle:
+        frames = handle["frames"]
+        status = frames["status"][:]
+        npt = int(frames["signal"].shape[1])
+        q = _q_centers(handle, npt)
+        train_ids = handle["trains/trainId"][:]
+        first = handle["trains/first"][:]
+        count = handle["trains/count"][:]
+
+        intensity = np.zeros((train_ids.size, npt), dtype=np.float64)
+        sigma = np.zeros((train_ids.size, npt), dtype=np.float64)
         counts = np.zeros(train_ids.size, dtype=np.uint32)
-        for index, train in enumerate(self._plan.trains):
-            if train.n_frames == 0:
+
+        for index in range(train_ids.size):
+            n = int(count[index])
+            if n == 0:
                 continue
-            rows = slice(train.first_row, train.first_row + train.n_frames)
+            rows = slice(int(first[index]), int(first[index]) + n)
             ok = status[rows] == FrameStatus.OK
             counts[index] = int(ok.sum())
             if not ok.any():
                 continue
-            signal = self._f["frames/signal"][rows][ok].sum(axis=0)
-            normalization = self._f["frames/normalization"][rows][ok].sum(axis=0)
+            signal = frames["signal"][rows][ok].sum(axis=0)
+            normalization = frames["normalization"][rows][ok].sum(axis=0)
+            variance = frames["variance"][rows][ok].sum(axis=0)
             valid = normalization > 0
             intensity[index, valid] = signal[valid] / normalization[valid]
+            sigma[index, valid] = np.sqrt(variance[valid]) / normalization[valid]
 
-        return xr.Dataset(
-            {
-                "intensity": (("trainId", "q"), intensity),
-                "n_frames": (("trainId",), counts),
-            },
-            coords={"trainId": train_ids, "q": q},
+    return xr.Dataset(
+        {
+            "intensity": (("trainId", "q"), intensity),
+            "sigma": (("trainId", "q"), sigma),
+            "n_frames": (("trainId",), counts),
+        },
+        coords={"trainId": train_ids, "q": q},
+    )
+
+
+def per_pulse(source: Any, *, dtype: Any = np.float32, chunk_rows: int = 20_000) -> Any:
+    """Per-frame ``I(q)`` on a ``(trainId, pulseId, q)`` grid (context file §9).
+
+    Every frame placed on the grid is placed by its *stored* trainId and
+    pulseId, never by its position in the frame table, so a dropped train or a
+    short one cannot slide frames onto the wrong train (CLAUDE.md pitfall 4).
+    The pulse axis is the sorted set of pulse ids actually seen.
+
+    Only ``OK`` frames carry trustworthy labels — a frame whose train failed
+    label validation was never given a pulse id, and an unwritten row carries
+    zeros — so those are counted in ``attrs["unplaced"]`` rather than guessed
+    onto a slot. Slots that received no frame are zero with ``n_frames == 0``,
+    the same selection idiom as :func:`pooled_per_train` and, like it, free of
+    NaN sentinels (context file §3 rule 7).
+
+    :param dtype: storage for the intensity grid. The default f4 costs ~0.9 GB
+        for a 3000-train, 155-pulse run at ``npt`` 500; f8 doubles that.
+    """
+    import xarray as xr
+
+    with _as_handle(source) as handle:
+        frames = handle["frames"]
+        status = frames["status"][:]
+        row_train = frames["trainId"][:]
+        row_pulse = frames["reader_pulseId"][:]
+        npt = int(frames["signal"].shape[1])
+        q = _q_centers(handle, npt)
+        train_ids = handle["trains/trainId"][:]
+        if not np.all(np.diff(train_ids.astype(np.int64)) > 0):
+            raise ValueError("the train table is not strictly increasing")
+
+        placeable = status == FrameStatus.OK
+        pulse_ids = np.unique(row_pulse[placeable])
+        unplaced = {
+            code.name: int(((status == code) & ~placeable).sum())
+            for code in FrameStatus
+            if code is not FrameStatus.OK and (status == code).any()
+        }
+
+        intensity = np.zeros((train_ids.size, pulse_ids.size, npt), dtype=dtype)
+        n_frames = np.zeros((train_ids.size, pulse_ids.size), dtype=np.uint8)
+
+        for start in range(0, status.size, chunk_rows):
+            stop = min(start + chunk_rows, status.size)
+            keep = placeable[start:stop]
+            if not keep.any():
+                continue
+            trains = row_train[start:stop][keep]
+            pulses = row_pulse[start:stop][keep]
+            # searchsorted returns size for anything past the last train, so
+            # the result is clamped before it is used as an index: an unknown
+            # trainId must reach the check below, not raise IndexError first.
+            train_index = np.clip(
+                np.searchsorted(train_ids, trains), 0, train_ids.size - 1
+            )
+            if not np.array_equal(train_ids[train_index], trains):
+                raise ValueError(
+                    "a frame carries a trainId that is not in the train table"
+                )
+            pulse_index = np.searchsorted(pulse_ids, pulses)
+
+            signal = frames["signal"][start:stop][keep]
+            normalization = frames["normalization"][start:stop][keep]
+            value = np.zeros_like(signal)
+            np.divide(signal, normalization, out=value, where=normalization > 0)
+            intensity[train_index, pulse_index] = value
+            n_frames[train_index, pulse_index] = 1
+
+    placed = int(n_frames.sum())
+    if placed != int(placeable.sum()):
+        raise ValueError(
+            f"{int(placeable.sum()) - placed} frame(s) shared a (train, pulse) "
+            "slot with another; the pulse ids do not identify frames uniquely"
         )
+
+    result = xr.Dataset(
+        {
+            "intensity": (("trainId", "pulseId", "q"), intensity),
+            "n_frames": (("trainId", "pulseId"), n_frames),
+        },
+        coords={"trainId": train_ids, "pulseId": pulse_ids, "q": q},
+    )
+    result.attrs["unplaced"] = json.dumps(unplaced, sort_keys=True)
+    result.attrs["n_placed"] = placed
+    return result

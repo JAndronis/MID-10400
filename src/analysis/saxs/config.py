@@ -1,4 +1,4 @@
-"""Frozen configuration for the first-pass AGIPD SAXS integrator.
+"""Frozen configuration for the AGIPD SAXS integrator (``agipd_saxs``).
 
 P1 scope: only the fields the operator, the sparse kernels and the self-test
 need (context file §5). The masking, planning, worker and writer fields arrive
@@ -19,7 +19,7 @@ __all__ = [
     "DEFAULT_GEOMETRY_FILE",
     "DEFAULT_PIXEL_MASK_FILE",
     "EXPECTED_BITS",
-    "FirstPassConfig",
+    "AgipdSaxsConfig",
     "file_sha256",
     "physical_cores",
 ]
@@ -48,7 +48,7 @@ DEFAULT_GEOMETRY_FILE = f"{_PROPOSAL_ROOT}/usr/geometry/geom_latest.geom"
 DEFAULT_PIXEL_MASK_FILE = f"{_PROPOSAL_ROOT}/usr/masks/mask_2026-09-08_AGIPD_SAXS.npy"
 
 #: Where the per-run output file is written.
-DEFAULT_OUTPUT_ROOT = f"{_PROPOSAL_ROOT}/scratch/saxs_first_pass"
+DEFAULT_OUTPUT_ROOT = f"{_PROPOSAL_ROOT}/scratch/agipd_saxs"
 
 #: ``BadPixels`` bits seen in r0423 and r0426 (CLAUDE.md, image.mask). Any
 #: other bit present in a run is a provenance flag and a warning, not a
@@ -92,7 +92,7 @@ def file_sha256(path: str | Path) -> str:
 
 
 @dataclass(frozen=True, slots=True)
-class FirstPassConfig:
+class AgipdSaxsConfig:
     """Immutable run configuration.
 
     ``geometry_file`` may be ``None`` only when the caller supplies a geometry
@@ -161,8 +161,8 @@ class FirstPassConfig:
 
     @property
     def output_file(self) -> Path:
-        """``{output_root}/r{run:04d}/saxs_first_pass.h5`` (context file §7)."""
-        return Path(self.output_root) / f"r{self.run:04d}" / "saxs_first_pass.h5"
+        """``{output_root}/r{run:04d}/agipd_saxs.h5`` (context file §7)."""
+        return Path(self.output_root) / f"r{self.run:04d}" / "agipd_saxs.h5"
 
     @property
     def workers(self) -> int:

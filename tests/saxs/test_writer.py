@@ -14,8 +14,8 @@ import h5py  # noqa: E402
 from analysis.saxs import worker  # noqa: E402
 from analysis.saxs.status import FrameStatus  # noqa: E402
 from analysis.saxs.writer import (  # noqa: E402
+    AgipdSaxsWriter,
     ConfigHashMismatch,
-    FirstPassWriter,
 )
 
 
@@ -73,7 +73,7 @@ def test_worker_records_bits_and_unseen_cells(worker_ready):
 # ── writer ────────────────────────────────────────────────────────────────────
 def test_output_schema(worker_ready, tmp_path):
     path = tmp_path / "out.h5"
-    with FirstPassWriter.open_or_create(
+    with AgipdSaxsWriter.open_or_create(
         worker_ready.cfg, worker_ready.plan, path
     ) as out:
         for block in worker_ready.plan.blocks:
@@ -103,7 +103,7 @@ def test_output_schema(worker_ready, tmp_path):
 def test_no_nan_anywhere(worker_ready, tmp_path):
     """§3 rule 7: status codes, never NaN sentinels."""
     path = tmp_path / "out.h5"
-    with FirstPassWriter.open_or_create(
+    with AgipdSaxsWriter.open_or_create(
         worker_ready.cfg, worker_ready.plan, path
     ) as out:
         for block in worker_ready.plan.blocks:
@@ -128,7 +128,7 @@ def test_rows_are_written_by_label_in_any_order(worker_ready, tmp_path):
         (ordered, list(results)),
         (shuffled, list(reversed(list(results)))),
     ):
-        with FirstPassWriter.open_or_create(
+        with AgipdSaxsWriter.open_or_create(
             worker_ready.cfg, worker_ready.plan, path
         ) as out:
             for index in order:
@@ -156,7 +156,7 @@ def test_mislabelled_frames_become_label_mismatch(worker_ready, tmp_path):
     result.train_id[0] = 999999
 
     path = tmp_path / "out.h5"
-    with FirstPassWriter.open_or_create(
+    with AgipdSaxsWriter.open_or_create(
         worker_ready.cfg, worker_ready.plan, path
     ) as out:
         out.write_block(block, result)
@@ -173,7 +173,7 @@ def test_write_block_rejects_a_wrong_length_result(worker_ready, tmp_path):
     result = worker.process_block(block)
     result.status = result.status[:-1]
     result.train_id = result.train_id[:-1]
-    with FirstPassWriter.open_or_create(
+    with AgipdSaxsWriter.open_or_create(
         worker_ready.cfg, worker_ready.plan, tmp_path / "out.h5"
     ) as out:
         with pytest.raises(ValueError, match="frames"):
@@ -183,7 +183,7 @@ def test_write_block_rejects_a_wrong_length_result(worker_ready, tmp_path):
 # ── resume and config hash ────────────────────────────────────────────────────
 def test_block_complete_tracks_progress(worker_ready, tmp_path):
     path = tmp_path / "out.h5"
-    with FirstPassWriter.open_or_create(
+    with AgipdSaxsWriter.open_or_create(
         worker_ready.cfg, worker_ready.plan, path
     ) as out:
         blocks = worker_ready.plan.blocks
@@ -196,12 +196,12 @@ def test_block_complete_tracks_progress(worker_ready, tmp_path):
 def test_reopening_resumes_rather_than_restarting(worker_ready, tmp_path):
     path = tmp_path / "out.h5"
     blocks = worker_ready.plan.blocks
-    with FirstPassWriter.open_or_create(
+    with AgipdSaxsWriter.open_or_create(
         worker_ready.cfg, worker_ready.plan, path
     ) as out:
         out.write_block(blocks[0], worker.process_block(blocks[0]))
 
-    with FirstPassWriter.open_or_create(
+    with AgipdSaxsWriter.open_or_create(
         worker_ready.cfg, worker_ready.plan, path
     ) as out:
         remaining = [b for b in blocks if not out.block_complete(b)]
@@ -210,19 +210,19 @@ def test_reopening_resumes_rather_than_restarting(worker_ready, tmp_path):
 
 def test_config_hash_mismatch_is_refused(worker_ready, tmp_path):
     path = tmp_path / "out.h5"
-    with FirstPassWriter.open_or_create(worker_ready.cfg, worker_ready.plan, path):
+    with AgipdSaxsWriter.open_or_create(worker_ready.cfg, worker_ready.plan, path):
         pass
     changed = replace(worker_ready.cfg, sdd_m=7.6)
     with pytest.raises(ConfigHashMismatch, match="config hash"):
-        FirstPassWriter.open_or_create(changed, worker_ready.plan, path)
+        AgipdSaxsWriter.open_or_create(changed, worker_ready.plan, path)
 
 
 def test_overwrite_replaces_a_mismatched_file(worker_ready, tmp_path):
     path = tmp_path / "out.h5"
-    with FirstPassWriter.open_or_create(worker_ready.cfg, worker_ready.plan, path):
+    with AgipdSaxsWriter.open_or_create(worker_ready.cfg, worker_ready.plan, path):
         pass
     changed = replace(worker_ready.cfg, sdd_m=7.6, overwrite=True)
-    with FirstPassWriter.open_or_create(changed, worker_ready.plan, path) as out:
+    with AgipdSaxsWriter.open_or_create(changed, worker_ready.plan, path) as out:
         assert not out.block_complete(worker_ready.plan.blocks[0])
 
 
@@ -230,7 +230,7 @@ def test_overwrite_replaces_a_mismatched_file(worker_ready, tmp_path):
 def test_mark_records_a_status_and_a_message(worker_ready, tmp_path):
     path = tmp_path / "out.h5"
     block = worker_ready.plan.blocks[0]
-    with FirstPassWriter.open_or_create(
+    with AgipdSaxsWriter.open_or_create(
         worker_ready.cfg, worker_ready.plan, path
     ) as out:
         out.mark(block, FrameStatus.WORKER_ERROR, "RuntimeError('boom')")
@@ -242,7 +242,7 @@ def test_mark_records_a_status_and_a_message(worker_ready, tmp_path):
 def test_mark_remaining_stamps_only_unprocessed_frames(worker_ready, tmp_path):
     path = tmp_path / "out.h5"
     blocks = worker_ready.plan.blocks
-    with FirstPassWriter.open_or_create(
+    with AgipdSaxsWriter.open_or_create(
         worker_ready.cfg, worker_ready.plan, path
     ) as out:
         out.write_block(blocks[0], worker.process_block(blocks[0]))
@@ -254,7 +254,7 @@ def test_mark_remaining_stamps_only_unprocessed_frames(worker_ready, tmp_path):
 
 def test_pooled_per_train(worker_ready, tmp_path):
     path = tmp_path / "out.h5"
-    with FirstPassWriter.open_or_create(
+    with AgipdSaxsWriter.open_or_create(
         worker_ready.cfg, worker_ready.plan, path
     ) as out:
         out.store_operator(worker_ready.op)

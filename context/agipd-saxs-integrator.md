@@ -1,4 +1,4 @@
-# SAXS first-pass integrator (AGIPD) — design and implementation guide
+# AGIPD SAXS integrator (`agipd_saxs`) — design and implementation guide
 
 Context file for `<pkg>.saxs`. This guide replaces `analysis_helpers.integrate_run`.
 
@@ -47,6 +47,10 @@ Per-train pooled I(q) is returned to DAMNIT.
 **Budget:** data read 4.6 + mask read 8.2 + sparse integration 6.2 ≈ 19 ms/frame/core.
 Target for r0423 (~465 k frames): ≈ 4.7 min on 36 workers.
 
+These were measured one core at a time. Under the real load — 36 workers competing for memory
+bandwidth — the full r0423 pass measured 5.10 / 9.81 / 10.11 ≈ 25.0 ms/frame/core (P4 below), so
+treat 19 ms as the unloaded floor, not the operating point.
+
 ---
 
 ## 3. Integrator rules
@@ -78,7 +82,7 @@ These add to the general pitfalls in CLAUDE.md.
 
 ```
 DAMNIT cluster job (one node, one run)
-  └─ <pkg>.saxs.run.run_first_pass(cfg)                          [parent]
+  └─ <pkg>.saxs.run.run_agipd_saxs(cfg)                          [parent]
        ├─ plan.build_plan          trains, frame counts, rows, blocks, run checks
        ├─ operator.build_operator  sparse full-split operator + Ω, hashed, saved
        ├─ masks.build_static_bad   ASIC seams ∪ pixel mask (incl. lobe, I4a), hashed
@@ -133,7 +137,7 @@ input file.
 | `trains_per_block` | 4 | unit of scheduling, ledger and resume (not memory) |
 | `n_workers` | physical cores | SMT only after P6 |
 | `min_modules` | 16 | trains with fewer → `MISSING_MODULES` |
-| `output_root` | `/gpfs/exfel/exp/MID/202601/p010400/scratch/saxs_first_pass` | file `r{run:04d}/saxs_first_pass.h5` |
+| `output_root` | `/gpfs/exfel/exp/MID/202601/p010400/scratch/agipd_saxs` | file `r{run:04d}/agipd_saxs.h5` |
 | `allow_incomplete` | `False` | if `False`, raise when any frame status ≠ OK |
 | `overwrite` | `False` | if `False`, refuse an existing file with a different config hash |
 
@@ -258,7 +262,7 @@ on failure: write provenance, raise SelfTestFailed; the pool is never started
 ### 6.7 Orchestration (`run.py`)
 
 ```
-def run_first_pass(cfg, pool_factory=None):
+def run_agipd_saxs(cfg, pool_factory=None):
     set_thread_env()                          # parent-side, before any pool exists (§3 rule 3)
     out    = writer.open_or_create(cfg)       # refuse on config-hash mismatch unless cfg.overwrite
     plan   = plan.build_plan(cfg)
@@ -303,7 +307,7 @@ run checks → provenance flags (no frame selection in v1):
 
 ## 7. Output schema (`writer.py`)
 
-File: `{output_root}/r{run:04d}/saxs_first_pass.h5`. Per-frame datasets are chunked by one train
+File: `{output_root}/r{run:04d}/agipd_saxs.h5`. Per-frame datasets are chunked by one train
 and compressed with gzip level 1.
 
 ```
@@ -365,17 +369,41 @@ With a per-frame scale a_f (e.g. 1/I0 or 1/T): numerator Σ a_f·S_f, variance �
 denominator unchanged. XGM `pulse_energy()` is indexed by pulse index. Align it explicitly to
 `reader_pulseId`/`cellId` before use.
 
-DAMNIT context file (thin wrapper only):
+Two reducers read the frame table back. Both work from the output file alone, so post hoc
+analysis needs no plan object:
+
+| Reducer | Returns |
+|---|---|
+| `writer.pooled_per_train(file)` | `intensity`, `sigma` (trainId, q) and `n_frames` (trainId) |
+| `writer.per_pulse(file)` | `intensity` (trainId, pulseId, q) and `n_frames` (trainId, pulseId) |
+
+`per_pulse` places each frame by its *stored* trainId and pulseId, never by its row position, so a
+dropped or short train cannot slide frames onto the wrong train (CLAUDE.md pitfall 4). Only `OK`
+frames carry trustworthy labels — a train that failed label validation was never given pulse ids,
+and an unwritten row is all zeros — so anything else is counted in `attrs["unplaced"]` rather than
+guessed onto a slot. Empty slots are zeros with `n_frames == 0`, never NaN (§3 rule 7). At r0423
+size the grid is 0.93 GB as f4; the pooled view is 12 MB.
+
+DAMNIT context file (thin wrappers only — DAMNIT `exec`s that file into a dict, so nothing defined
+there can be pickled to the spawned workers):
 
 ```python
-@Variable(title="SAXS first pass", cluster=True)
-def saxs_first_pass(run, proposal: "meta#proposal", run_no: "meta#run_number"):
-    from <pkg>.saxs.config import FirstPassConfig
-    from <pkg>.saxs.run import run_first_pass
-    return run_first_pass(FirstPassConfig(proposal=proposal, run=run_no))
+@Variable("AGIPD I(q)", data="proc", cluster=True, tags=["offline"])
+def agipd_saxs(run, proposal: "meta#proposal", run_no: "meta#run_number"):
+    from analysis.saxs.damnit import agipd_saxs
+    return agipd_saxs(proposal, run_no)          # (trainId, pulseId, q)
+
+
+@Variable("AGIPD I(q) overview", data="proc", cluster=True, tags=["offline"])
+def agipd_iq_overview(run, grid: "var#agipd_saxs"):
+    from analysis.saxs.damnit import overview_figure
+    return overview_figure(grid)
 ```
 
-The default `slurm_time` (2 h) covers ~5 min per run.
+DAMNIT's own `run` is deliberately unused: a `data="proc"` variable is handed a proc-only
+collection, which carries no XGM, timeserver or motors, so every run check would come back
+unavailable. Passing the proposal and run number lets the pass open proc for frames and raw for
+checks. The default `slurm_time` (2 h) covers the measured 6.3 min per run.
 
 ---
 
@@ -413,43 +441,74 @@ the one static pixel mask OR'd into `static_bad`; the frame schema stays `(n, np
   to < 1e-6.
 - Per-stage timing against the §2 budget; wall time ≤ ~6 min; every non-OK status accounted for.
 
+**P4 is closed (2026-09-11).** The wall time came in at 6.29 min against a "~6 min" estimate, and
+that estimate was a design target, not a constraint: the pipeline this replaces
+(`analysis_helpers.integrate_run`) takes over an hour for one run, and DAMNIT's default
+`slurm_time` is 2 h, which 6.29 min uses 5 % of. Accepted on that basis.
+
 *How it is checked.* `scripts/p4_acceptance.py` runs the pass and then the four gates, and writes
 its verdict as JSON next to itself. Gate B re-reads what the writer stored, pools it the way §9
 does and compares that against a dense accumulation over whole trains, so the row-to-train
 mapping, the `f4` storage and `pooled_per_train` are inside the comparison — the per-frame kernel
 is the self-test's job, not gate B's. Gate C divides the workers' summed per-stage CPU seconds by
 the OK frame count to reach ms/frame/core; the §2 budget is a measurement, so a stage over budget
-is reported and only the wall time fails the gate. The gates are unit-tested against the mock run
+is reported and only the wall time fails the gate (see the accepted target in the script). The gates are unit-tested against the mock run
 (`tests/saxs/test_p4_acceptance.py`), including a deliberately corrupted stored row.
 
-*Running it is the remaining work.* Nothing in P4 can be verified off the cluster: it needs a
-DAMNIT-partition node, the real geometry and mask files, and r0423.
+It cannot be run off the cluster: it needs a DAMNIT-partition node, the real geometry and mask
+files, and r0423. Rerun it whenever the frame loop, the masks or the geometry change.
 
-*Trial pass, 2026-09-11, max-exfl170, 10 trains of r0423 on 72 workers* — not an acceptance run
-(P4 asks for the full run on 36), but it settled the correctness question and exposed two defects:
-- Gate B **passed on real data**: pooled I(q) over 3 trains × 155 frames agrees with the dense
-  reference to 5.1e-8, all 500 bins populated, empty-bin sets equal. The `f4` storage costs about
-  5e-8, a factor 20 inside the tolerance.
-- Gate D passed: 1550/1550 OK, bits present exactly the expected set, no unexpected bits.
-- Every run check was unavailable, because `open_run(data="proc")` opens one location and proc
-  holds only corrected detector files — no timeserver, no XGM, no motors. `plan.build_plan` now
-  opens the raw location for the checks alone; the plan itself stays on proc, since `data="all"`
-  would put raw-only trains into the ledger and make a complete proc run look incomplete.
-- The run used 72 workers because `cfg.workers` defaulted to the affinity mask, which counts
-  logical CPUs. That silently ran the hyperthreaded configuration P6 exists to decide. The default
-  is now one worker per *physical* core, counted from sysfs sibling groups.
-- Per-stage cost: read_data 4.56 ms (budget 4.6), read_mask 8.65 (8.2), integrate 8.06 (6.2),
-  total 21.3 vs 19. Only 3 blocks ran, on a 36-core node, so no contention inflated these. The
-  integrate overrun is structural: the worker's timer spans `frame_bad` and the full-detector
-  passes inside `integrate_frame` (`flatnonzero(x)`, `bad != base_bad`, `bad.sum()`), which cost
-  several times the sparse gathers themselves. At 21.3 ms/frame/core the full run extrapolates to
-  ~4.6 min on 36 workers, or ~5.2 min at the 88 % read-scaling efficiency of §2 — inside the 6 min
-  target, but with less margin than the budget implies. Extrapolation only: a 3-block job measures
-  no contention, so the full run may be worse.
+*Result, 2026-09-11, max-exfl170, full r0423 on 36 workers* — **accepted**. Every correctness
+gate passes; the wall time is 4.9 % over the design estimate and was accepted as above.
+
+| Gate | Verdict | |
+|---|---|---|
+| Configuration | pass | 3001/3001 trains, 465 000 frames, 36 workers, config hash matches |
+| A self-test | pass | 8 real frames; max rel S and V exactly 0, N 1.3e-8 |
+| B dense reference | pass | 4.9e-8 over 3 trains × 155 frames, all 500 bins populated, empty-bin sets equal |
+| C timing | 377.6 s | over the ~360 s estimate, accepted; vs > 1 h for the pipeline it replaces |
+| D ledger | pass | 465 000/465 000 OK; one train NO_FRAMES owning no rows; bits exactly the expected set |
+
+Per-stage, per frame per core: read_data 5.10 (budget 4.6), read_mask 9.81 (8.2), integrate 10.11
+(6.2), total 25.0 against 19.0. Parallel efficiency 0.856, with 54.5 s of the wall outside the
+workers' timed stages. Every stage is above budget and `integrate` is the outlier at 1.63×; the §2
+figures were measured without 36 cores competing for memory bandwidth, and the frame loop's
+full-detector passes (`frame_bad`, `flatnonzero(x)`, `bad != base_bad`, `bad.sum()`) are pure
+memory traffic — they cost several times the sparse gathers even unloaded. A ten-train trial on
+the same node measured 21.3 ms/frame, so contention accounts for most of the gap between the two.
+
+The 54.5 s outside the workers was unattributed, because only the worker stages were timed.
+`run.py` now records each parent phase (`plan`, `operator`, `static_mask`, `base_masks`,
+`selftest`, `save_operator_and_masks`, `write_blocks`) under `provenance/setup_timings`. Nothing
+depends on that breakdown now that the wall time is accepted; it is there for whoever wants the
+14 % of the run that is serial, and for P6, which compares 36 against 72 workers end to end and
+needs the serial part separated out to read the comparison.
+
+The run also settled two things beyond the gates: every run check now resolves (constant pulse
+pattern, 155 frames = 155 X-ray pulses on all 3000 trains, quadrants stationary), and the XGM's
+nominal photon energy disagrees with the configured one — see CLAUDE.md open task 15.
 
 **P5 — DAMNIT integration**
 - Cluster variable on r0423 and r0426 via `context_python`.
 - Returns (trainId, q) pooled I(q); fails loudly if incomplete.
+
+*Implemented.* The stored variable is the **(trainId, pulseId, q)** grid rather than the pooled
+per-train view: per-pulse I(q) is what the old `agipd_saxs` provided and what the overview and any
+per-pulse analysis need, it costs 0.93 GB against that variable's 3.7 GB, and the pooled view is
+one call away from the same file. Failing loudly needs no code of its own — `run_agipd_saxs`
+raises `IncompleteRun` unless `allow_incomplete`, and the wrapper does not catch it.
+
+`analysis/saxs/damnit.py` holds `config_for`, `agipd_saxs`, the two file readers and
+`overview_figure`; `src/amore/context.py` holds only the two decorated functions of §9.
+`agipd_saxs` and `agipd_iq_overview` keep their names and their DAMNIT columns — this supersedes
+the old implementation rather than sitting beside it, so nothing downstream has to be repointed.
+What the column *holds* does change: I(q) in nm⁻¹ and undivided, where `analysis_helpers.
+integrate_run` gave Å⁻¹ divided by I0 in place. Runs processed before the switch hold the old
+quantity, so clear the column for them rather than plotting across the boundary.
+`tests/test_context.py` loads the context file the way DAMNIT does and checks that every `var#`
+resolves.
+
+*Running it on r0423 and r0426 is the remaining work* — it needs the cluster.
 
 **P6 — hyperthreading**
 - Compare 36 vs 72 workers end to end.
@@ -483,12 +542,12 @@ DAMNIT-partition node, the real geometry and mask files, and r0423.
     `usr/Shared/IA/custom_agipd_mask.npy`. Two overlapping masks have to be kept in step with each
     other, and neither is meaningful alone; the newer file already contains both, so it is the only
     one applied and the older one is retired.
-  - *What it costs.* The lobe pixels are absent from the first-pass sums. Changing the exclusion
+  - *What it costs.* The lobe pixels are absent from the `agipd_saxs` sums. Changing the exclusion
     later means reprocessing, and the lobe's per-frame amplitude is **not** recoverable from this
     pass — the lobe-amplitude vs droplet-volume correlation (CLAUDE.md task 8) needs its own pass.
   - *Rejected: (b) per-region sums.* K = 2 regions would keep the lobe recoverable post hoc, but at
     ×K storage (≈ 5.6 GB for r0423 at npt = 500) and a wider schema, for an analysis that is not
-    part of the first pass.
+    part of this pass.
 
 ---
 

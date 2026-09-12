@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 
-from analysis.saxs.config import FirstPassConfig
+from analysis.saxs.config import AgipdSaxsConfig
 
 
 # ── physical cores (P6 must not be answered by a default) ─────────────────────
@@ -60,7 +60,7 @@ def test_workers_defaults_to_physical_cores(monkeypatch):
     from analysis.saxs import config as config_module
 
     monkeypatch.setattr(config_module, "physical_cores", lambda *a, **k: 36)
-    cfg = FirstPassConfig(
+    cfg = AgipdSaxsConfig(
         proposal=1, run=1, geometry_file=None, pixel_mask_file=None, n_workers=None
     )
     assert cfg.workers == 36
@@ -70,7 +70,7 @@ def test_explicit_n_workers_still_wins(monkeypatch):
     from analysis.saxs import config as config_module
 
     monkeypatch.setattr(config_module, "physical_cores", lambda *a, **k: 36)
-    cfg = FirstPassConfig(
+    cfg = AgipdSaxsConfig(
         proposal=1, run=1, geometry_file=None, pixel_mask_file=None, n_workers=72
     )
     assert cfg.workers == 72

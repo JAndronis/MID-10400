@@ -40,10 +40,10 @@ def p4():
 @pytest.fixture
 def finished_run(mock_pipeline, geom, tmp_path):
     """A completed pass over the mock run, plus its output file."""
-    from analysis.saxs.run import run_first_pass
+    from analysis.saxs.run import run_agipd_saxs
 
     output = tmp_path / "out.h5"
-    run_first_pass(
+    run_agipd_saxs(
         mock_pipeline.cfg,
         dc=mock_pipeline.dc,
         geometry=geom,
@@ -124,6 +124,14 @@ def test_timing_divides_by_the_ok_frames(p4, finished_run):
     assert result["wall_s"] > 0  # from provenance, not from the caller
     assert result["passed"] is True
 
+    # The parent's serial phases explain the gap between the wall time and the
+    # workers' share of it.
+    assert {"plan", "operator", "base_masks", "selftest", "write_blocks"} <= set(
+        result["setup_s"]
+    )
+    assert result["setup_total_s"] == pytest.approx(sum(result["setup_s"].values()))
+    assert result["setup_total_s"] > 0
+
 
 def test_timing_uses_the_wall_time_from_provenance(p4, finished_run):
     _, output = finished_run
@@ -176,6 +184,23 @@ def test_ledger_passes_on_an_all_ok_run(p4, finished_run):
     assert result["non_ok"] == {}
     assert result["unexpected_bits"] == 0
     assert "xray_pulses" in result["run_checks"]
+
+
+def test_ledger_names_the_trains_behind_a_non_ok_train_status(p4, finished_run):
+    """A train owning no rows is invisible in the frame ledger."""
+    _, output = finished_run
+    with h5py.File(output, "r+") as handle:
+        handle["trains/status"][0] = FrameStatus.NO_FRAMES
+        expected = int(handle["trains/trainId"][0])
+        rows = int(handle["trains/count"][0])
+
+    result = p4.stage_ledger(output)
+    offender = result["non_ok_trains"][FrameStatus.NO_FRAMES.name]
+    assert offender["trains"] == [expected]
+    assert offender["n_trains"] == 1
+    assert offender["n_rows_owned"] == rows
+    # The frames themselves are untouched, so the frame ledger stays clean.
+    assert result["non_ok"] == {}
 
 
 def test_ledger_names_the_trains_behind_a_non_ok_status(p4, finished_run):

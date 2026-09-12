@@ -7,7 +7,7 @@ from dataclasses import asdict, replace
 import numpy as np
 import pytest
 
-from analysis.saxs.config import METHOD, NPIX, SHAPE, FirstPassConfig
+from analysis.saxs.config import METHOD, NPIX, SHAPE, AgipdSaxsConfig
 from analysis.saxs.operator import build_operator, load_operator, save_operator
 
 extra_geom = pytest.importorskip("extra_geom")
@@ -116,12 +116,12 @@ def test_load_rejects_a_corrupt_operator(op, tmp_path):
 
 def test_config_rejects_a_non_full_split_method():
     with pytest.raises(ValueError, match="rule 1"):
-        FirstPassConfig(proposal=10400, run=423, method=("no", "csr", "cython"))
+        AgipdSaxsConfig(proposal=10400, run=423, method=("no", "csr", "cython"))
 
 
 def test_config_hash_covers_every_field(cfg):
     baseline = cfg.config_hash()
-    assert baseline == FirstPassConfig(**asdict(cfg)).config_hash()
+    assert baseline == AgipdSaxsConfig(**asdict(cfg)).config_hash()
     for field, value in (("npt", 400), ("sdd_m", 7.6), ("photon_energy_kev", 9.1)):
         assert replace(cfg, **{field: value}).config_hash() != baseline
 

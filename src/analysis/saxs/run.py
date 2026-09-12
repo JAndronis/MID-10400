@@ -12,8 +12,9 @@ import logging
 import platform
 import socket
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from concurrent.futures import BrokenExecutor, ProcessPoolExecutor, as_completed
+from contextlib import contextmanager
 from multiprocessing import get_context
 from pathlib import Path
 from typing import Any
@@ -23,13 +24,19 @@ import numpy as np
 from analysis.saxs import masks as masks_module
 from analysis.saxs import operator as operator_module
 from analysis.saxs import worker as worker_module
-from analysis.saxs.config import FirstPassConfig, file_sha256
+from analysis.saxs.config import AgipdSaxsConfig, file_sha256
 from analysis.saxs.plan import RunPlan, build_plan
 from analysis.saxs.selftest import run_selftest
 from analysis.saxs.status import FrameStatus
-from analysis.saxs.writer import FirstPassWriter, IncompleteRun
+from analysis.saxs.writer import AgipdSaxsWriter, IncompleteRun
 
-__all__ = ["default_pool", "run_first_pass"]
+__all__ = ["REDUCERS", "default_pool", "run_agipd_saxs"]
+
+#: What ``run_agipd_saxs`` may return. ``pooled`` is the per-train I(q) of
+#: context file §9; ``per_pulse`` is the (trainId, pulseId, q) grid, which is
+#: what the DAMNIT variable stores; ``none`` skips the reduction for a caller
+#: that only wants the file written.
+REDUCERS = ("pooled", "per_pulse", "none")
 
 log = logging.getLogger(__name__)
 
@@ -39,6 +46,22 @@ def default_pool(n_workers: int, **kwargs: Any) -> ProcessPoolExecutor:
     return ProcessPoolExecutor(
         max_workers=n_workers, mp_context=get_context("spawn"), **kwargs
     )
+
+
+@contextmanager
+def _phase(into: dict[str, float], name: str) -> Iterator[None]:
+    """Time one parent-side setup phase into ``into``.
+
+    Everything before the pool starts is serial, so it is subtracted from the
+    whole run's parallel budget. Without this the only thing the output file
+    says about it is the gap between the wall time and the workers' own
+    timings, which is a number with no explanation attached.
+    """
+    started = time.perf_counter()
+    try:
+        yield
+    finally:
+        into[name] = time.perf_counter() - started
 
 
 def _package_versions() -> dict[str, str]:
@@ -53,8 +76,8 @@ def _package_versions() -> dict[str, str]:
     return found
 
 
-def run_first_pass(
-    cfg: FirstPassConfig,
+def run_agipd_saxs(
+    cfg: AgipdSaxsConfig,
     *,
     dc: Any = None,
     geometry: Any = None,
@@ -62,6 +85,7 @@ def run_first_pass(
     output_path: Path | None = None,
     work_dir: Path | None = None,
     pool_factory: Callable[..., Any] | None = None,
+    reduce: str = "pooled",
 ) -> Any:
     """Integrate every frame of a run and return pooled per-train ``I(q)``.
 
@@ -72,11 +96,19 @@ def run_first_pass(
     :param pool_factory: builds the executor. Defaults to :func:`default_pool`;
         injecting it lets the broken-pool and worker-error paths be exercised
         without killing real processes or putting test hooks in ``worker``.
+    :param reduce: which reduction to return, one of :data:`REDUCERS`. The
+        output file is identical either way — this only chooses what is read
+        back out of it before returning.
 
     :raises IncompleteRun: some frame is not ``OK`` and ``cfg.allow_incomplete``
         is False. The output file is still written and closed first, so the
         ledger explains what happened.
     """
+    # Checked before any work, so a typo costs nothing rather than surfacing
+    # after the whole run has been integrated.
+    if reduce not in REDUCERS:
+        raise ValueError(f"reduce must be one of {REDUCERS}, got {reduce!r}")
+
     # Before any pool exists, so spawned children inherit it (§3 rule 3).
     worker_module.set_thread_env()
     # Wall time is an acceptance criterion (context file §10, P4), so it is
@@ -92,28 +124,34 @@ def run_first_pass(
     )
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    plan = build_plan(cfg, dc=dc)
-    if geometry is None:
-        geometry = operator_module.geometry_from_config(cfg)
-    op, ai = operator_module.build_operator(geometry, cfg)
-    static = masks_module.build_static_bad(cfg)
-    base_masks, sampled = _build_base_masks(cfg, plan, op, static, dc)
-
-    _run_selftest(cfg, plan, op, ai, base_masks, dc)
-
-    operator_path = operator_module.save_operator(op, work_dir / "operator.npz")
-    masks_path = masks_module.save_masks(base_masks, work_dir / "masks.npz")
+    setup: dict[str, float] = {}
+    with _phase(setup, "plan"):
+        plan = build_plan(cfg, dc=dc)
+    with _phase(setup, "operator"):
+        if geometry is None:
+            geometry = operator_module.geometry_from_config(cfg)
+        op, ai = operator_module.build_operator(geometry, cfg)
+    with _phase(setup, "static_mask"):
+        static = masks_module.build_static_bad(cfg)
+    with _phase(setup, "base_masks"):
+        base_masks, sampled = _build_base_masks(cfg, plan, op, static, dc)
+    with _phase(setup, "selftest"):
+        _run_selftest(cfg, plan, op, ai, base_masks, dc)
+    with _phase(setup, "save_operator_and_masks"):
+        operator_path = operator_module.save_operator(op, work_dir / "operator.npz")
+        masks_path = masks_module.save_masks(base_masks, work_dir / "masks.npz")
     paths = worker_module.WorkerPaths(
         str(operator_path), str(masks_path), str(run_dir) if run_dir else None
     )
 
-    with FirstPassWriter.open_or_create(cfg, plan, output_path) as out:
+    with AgipdSaxsWriter.open_or_create(cfg, plan, output_path) as out:
         out.store_operator(op)
         out.store_masks(base_masks, sampled)
         todo = [b for b in plan.blocks if not out.block_complete(b)]
         log.info("%d of %d blocks to process", len(todo), len(plan.blocks))
 
         timings: dict[str, float] = {}
+        write_s = 0.0
         bits_present = 0
         unseen_cells = 0
 
@@ -132,7 +170,7 @@ def run_first_pass(
                     for future in as_completed(futures):
                         block = futures[future]
                         try:
-                            result = future.result()
+                            block_result = future.result()
                         except BrokenExecutor:
                             out.mark_remaining(FrameStatus.NOT_PROCESSED)
                             raise
@@ -140,10 +178,12 @@ def run_first_pass(
                             log.exception("block %d failed", block.index)
                             out.mark(block, FrameStatus.WORKER_ERROR, repr(error))
                             continue
-                        out.write_block(block, result)
-                        bits_present |= result.bits_present
-                        unseen_cells += result.unseen_cells
-                        for key, value in result.timings.items():
+                        write_started = time.perf_counter()
+                        out.write_block(block, block_result)
+                        write_s += time.perf_counter() - write_started
+                        bits_present |= block_result.bits_present
+                        unseen_cells += block_result.unseen_cells
+                        for key, value in block_result.timings.items():
                             timings[key] = timings.get(key, 0.0) + value
             except BrokenExecutor:
                 out.mark_remaining(FrameStatus.NOT_PROCESSED)
@@ -179,21 +219,26 @@ def run_first_pass(
                 "bits_present": int(bits_present),
                 "unseen_cell_frames": int(unseen_cells),
                 "timings": timings,
+                "setup_timings": {**setup, "write_blocks": write_s},
                 "status_summary": out.status_summary(),
                 "run_checks": plan.checks,
             }
         )
         incomplete = out.any_not_ok()
         summary = out.status_summary()
-        pooled = out.pooled_per_train()
+        reduced = None
+        if reduce == "pooled":
+            reduced = out.pooled_per_train()
+        elif reduce == "per_pulse":
+            reduced = out.per_pulse()
 
     if incomplete and not cfg.allow_incomplete:
         raise IncompleteRun(f"not every frame reached OK: {summary}")
-    return pooled
+    return reduced
 
 
 def _build_base_masks(
-    cfg: FirstPassConfig, plan: RunPlan, op: Any, static: Any, dc: Any
+    cfg: AgipdSaxsConfig, plan: RunPlan, op: Any, static: Any, dc: Any
 ) -> tuple[Any, np.ndarray]:
     """Sample trains evenly over the run and majority-vote their masks."""
     from extra_data import by_id
@@ -223,7 +268,7 @@ def _build_base_masks(
 
 
 def _run_selftest(
-    cfg: FirstPassConfig, plan: RunPlan, op: Any, ai: Any, base_masks: Any, dc: Any
+    cfg: AgipdSaxsConfig, plan: RunPlan, op: Any, ai: Any, base_masks: Any, dc: Any
 ) -> None:
     """Compare sparse against pyFAI on real frames before the pool starts."""
     from extra_data import by_id

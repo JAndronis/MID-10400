@@ -30,7 +30,7 @@ import numpy as np
 from extra_geom import AGIPD_1MGeometry
 from pyFAI.integrator.azimuthal import AzimuthalIntegrator
 
-from analysis.saxs.config import NPIX, SHAPE, FirstPassConfig
+from analysis.saxs.config import NPIX, SHAPE, AgipdSaxsConfig
 
 __all__ = [
     "SparseOperator",
@@ -108,7 +108,7 @@ def operator_sha256(
     return digest.hexdigest()
 
 
-def geometry_from_config(cfg: FirstPassConfig) -> AGIPD_1MGeometry:
+def geometry_from_config(cfg: AgipdSaxsConfig) -> AGIPD_1MGeometry:
     """Load the CrystFEL geometry named by ``cfg`` (context file §3 rule 4)."""
     if cfg.geometry_file is None:
         raise ValueError(
@@ -119,7 +119,7 @@ def geometry_from_config(cfg: FirstPassConfig) -> AGIPD_1MGeometry:
 
 
 def build_operator(
-    geom: AGIPD_1MGeometry, cfg: FirstPassConfig
+    geom: AGIPD_1MGeometry, cfg: AgipdSaxsConfig
 ) -> tuple[SparseOperator, AzimuthalIntegrator]:
     """Build the sparse operator from a geometry object.
 

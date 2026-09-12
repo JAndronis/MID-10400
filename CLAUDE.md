@@ -10,7 +10,7 @@ not packaged) are separate.
 
 | File | Read when |
 |---|---|
-| `context/saxs-first-pass-integrator.md` | Working on the first-pass AGIPD SAXS loader/integrator (`<pkg>.saxs`) |
+| `context/agipd-saxs-integrator.md` | Working on the AGIPD SAXS loader/integrator (`agipd_saxs`, `<pkg>.saxs`) |
 | `context/extra-toolkit-context.md` | Using EXtra components: XCCA toolbox, `XrayPulses`, `XGM`, calibration, quadrant motors |
 
 Adjust the paths above if the context files live elsewhere.
@@ -67,7 +67,7 @@ nucleation?
   which uses a different parameter.
 
 **Analysis passes:**
-1. SAXS/WAXS first pass on all runs.
+1. SAXS/WAXS on all runs (`agipd_saxs`).
 2. XCCA on runs selected from pass 1.
 3. XPCS.
 
@@ -103,7 +103,7 @@ nucleation?
 |---|---|
 | Facility / proposal path | European XFEL MID, `/gpfs/exfel/exp/MID/202601/p010400/` |
 | Beamtime | May 2026 |
-| Photon energy | 9.04 keV |
+| Photon energy | 9.04 keV — **disputed**: the XGM's `pulseEnergy.wavelengthUsed` gives 9.000 keV nominal on r0423, 0.44 % lower. q scales with it (open task 15) |
 | SAXS detector | AGIPD-1M at 7.531 m; q ≈ 0.076–1.07 nm⁻¹ with `geom_latest.geom` |
 | WAXS detectors | two JUNGFRAU-500K |
 | Pulse structure | ~1.128 MHz; pattern varies between runs (350 and 155 pulses/train seen). r0423, r0426: 155 AGIPD frames/train |
@@ -171,10 +171,10 @@ nucleation?
 | EXtra-geom | geometry | `AGIPD_1MGeometry.from_crystfel_geom`, `to_pyfai_detector()` (PONI = 0 at geometry origin), `agipd_asic_seams()` |
 | EXtra | components | `XrayPulses`, `XGM`, `CalibrationData.from_correction`, `AGIPD1MQuadrantMotors`, `extra.applications.xcca` — see `context/extra-toolkit-context.md` |
 | pyFAI | operators, reference | method tuples only; no Poisson error model on photon-count data |
-| DAMNIT | per-run orchestration, summaries | |
+| DAMNIT | per-run orchestration, summaries | Context variables are thin wrappers over `<pkg>`; `analysis.saxs.damnit` is the SAXS one. `tests/test_context.py` loads the context file the way DAMNIT does |
 | extra-speckle | XPCS, Tier-2 data access | |
 | pyBeamtime (own) | multi-facility readers | EuXFEL reader plugin contract: `load_run(self, run_id, root_path)`. `get_run_path` is required in the ABC even though the docs omit it |
-| `scripts/p4_acceptance.py` | P4 acceptance for the SAXS first pass | runs the pass, then the four §10 gates; writes its verdict as JSON beside itself. Needs a node, the real geometry/mask files and r0423 |
+| `scripts/p4_acceptance.py` | P4 acceptance for `agipd_saxs` | runs the pass, then the four §10 gates; writes its verdict as JSON beside itself. Needs a node, the real geometry/mask files and r0423 |
 | `agipd_stage_rates.py` | 9-stage benchmark | run from the uv environment; writes JSON after each stage; `--train-offset` avoids page-cached trains |
 | pasha | legacy parallelism in `analysis_helpers.py` | fork-only; do not use in new code |
 | PyMuPDF | reading reference PDFs | rasterise at 2× (`fitz.Matrix(2, 2)`) before extraction |
@@ -253,7 +253,7 @@ statistics (open task 6). Integer data cannot carry NaN, so bad pixels must come
 
 | Source | Status |
 |---|---|
-| XGM | `XGM(run).pulse_energy()` dims `(trainId, pulseIndex)` — pulse *index*, not pulse ID. `wavelength()`/`photon_energy()` raise if not constant; use `*_by_train()` |
+| XGM | `XGM(run).pulse_energy()` dims `(trainId, pulseIndex)` — pulse *index*, not pulse ID. `wavelength()`/`photon_energy()` raise if not constant; use `*_by_train()`. `photon_energy_by_train()` already returns **keV** (it converts `wavelengthUsed` in nm), so do not divide by 1000. Control source: raw only, not proc |
 | X-ray pulse pattern | `XrayPulses(run)`; replaces the fake `pulseId = np.arange(n_pulses)` of the old pipeline |
 | Lit-frame finder (LITFRM) | intended for XGM alignment (`data.xgmPulseId`); source and keys unverified — get them from `lsxfel` |
 | Droplet imaging | path length from `MID_EXP_CAM/PROC/DROPLET_DOWNSTREAM.current_vol`; verify per run with `lsxfel`. Ellipse-fit volume tracking lives in `analysis_helpers.py` |
@@ -305,10 +305,16 @@ statistics (open task 6). Integer data cannot carry NaN, so bad pixels must come
     Defaulting a worker count to it silently opts into hyperthreading, which is the decision the
     SAXS integrator's P6 exists to make. `analysis.saxs.config.physical_cores` counts sysfs
     sibling groups instead.
-11. **h5py attrs outlive their file.** An `AttributeManager` kept past its `with` block does not
+11. **DAMNIT annotations break under `from __future__ import annotations`.** DAMNIT's
+    dependency injection reads `func.__annotations__` and matches the `var#`/`meta#`/`mymdc#`
+    prefix. Under PEP 563 an annotation becomes its own *source text*, so `"var#x"` arrives as
+    `"'var#x'"` — quotes included — the prefix no longer matches and every dependency silently
+    resolves to nothing. Never add that import to `src/amore/context.py`, and pass
+    `dont_inherit=True` when compiling it (`compile()` inherits the caller's future flags).
+12. **h5py attrs outlive their file.** An `AttributeManager` kept past its `with` block does not
     raise on `.get`; it returns the default, so a provenance value reads as absent. Read every
     attribute inside the block.
-12. **Silent failures in the old pipeline.** pasha forks from a non-main thread; `ThreadPoolExecutor`
+13. **Silent failures in the old pipeline.** pasha forks from a non-main thread; `ThreadPoolExecutor`
     futures are never checked; `mp.Queue.empty()` is racy. Failures end as NaN rows.
 
 ---
@@ -317,17 +323,18 @@ statistics (open task 6). Integer data cannot carry NaN, so bad pixels must come
 
 | # | Task | Next step / gate |
 |---|---|---|
-| 1 | First-pass AGIPD SAXS integrator | Phases P1–P6 in `context/saxs-first-pass-integrator.md`; P1 needs no Maxwell |
+| 1 | AGIPD SAXS integrator (`agipd_saxs`) | **P1–P4 done.** P4 accepted on r0423 2026-09-11: 465 000/465 000 frames OK, pooled I(q) within 4.9e-8 of a dense pyFAI reference, 6.29 min on 36 workers against > 1 h for `analysis_helpers.integrate_run`. **P5 implemented**: `agipd_saxs` / `agipd_iq_overview` in `src/amore/context.py` keep their names and columns, now backed by `analysis.saxs.damnit` instead of `analysis_helpers.integrate_run` — the column's contents change from Å⁻¹ I0-divided to nm⁻¹ undivided, so clear it for runs processed before this. Next: run it on r0423 and r0426, then P6 (36 vs 72 workers) |
 | 2 | WAXS JUNGFRAU inspection → integrator extension | Adapt benchmark stages 1 and 7 to JUNGFRAU; then gain-aware handling and spec |
 | 3 | Lit-frame selection | LITFRM source/keys from `lsxfel`; compare with `XrayPulses` counts per train |
 | 4 | AGIPD geometry source of truth | Resolve encoder/motor source (absent in r0500) and decide CrystFEL file vs `geom.offset()` |
 | 5 | Polarisation correction | Confirm detector-frame ↔ lab-horizontal orientation and factor with MID; ≤ 5.4e-4 effect at q_max |
 | 6 | Correction settings | Photon threshold / recast settings for r0423, r0426 from the correction reports |
 | 7 | XGM normalisation recipe | Pulse-index alignment (LITFRM `data.xgmPulseId`), applied post hoc to stored sums |
-| 8 | Anisotropic low-q lobe (r0423) | **First pass: resolved.** Excluded by the one static pixel mask (see Paths), OR'd into `static_bad` — integrator I4, option (a). No φ-sector logic and no per-region sums, so the φ ≈ 278–330° values from the old integrator frame need no re-derivation. **Still open as a separate analysis:** lobe amplitude (decays ~16 % over 300 s in the lowest q band, independent of the isotropic drift) vs droplet volume. It needs its own pass, because the first-pass sums no longer carry the lobe |
+| 8 | Anisotropic low-q lobe (r0423) | **In `agipd_saxs`: resolved.** Excluded by the one static pixel mask (see Paths), OR'd into `static_bad` — integrator I4, option (a). No φ-sector logic and no per-region sums, so the φ ≈ 278–330° values from the old integrator frame need no re-derivation. **Still open as a separate analysis:** lobe amplitude (decays ~16 % over 300 s in the lowest q band, independent of the isotropic drift) vs droplet volume. It needs its own pass, because the `agipd_saxs` sums no longer carry the lobe |
 | 9 | Transmission correction integration | `droplet_transmission.py` on stored sums; V/V₀ pairing (r0423 ↔ r0464) |
 | 10 | XPCS | Define q-binning; custom g2 model with KWW fitting (extra-speckle lacks it); shear vs diffusion diagnostic |
 | 11 | XCCA second pass | ROI list excluding Bragg q; per-shot masks; `AveragedAngularCorrelationMasked`; bulk chunk reader (integrator I3) |
 | 12 | Tier-2 data access | extra-speckle orchestration without materialising full detector arrays |
 | 13 | pyBeamtime integration | EuXFEL reader plugin on top of the `<pkg>` reader layer |
 | 14 | Upstream issues | EXtra-data per-chunk lookup; pyFAI method-string resolution and OpenCL fallback warning; XCCA `from_dataset` double update |
+| 15 | Photon energy, 9.04 vs 9.000 keV | `cfg.photon_energy_kev` (9.04, from this file) sets the wavelength and so the q scale; `XGM.photon_energy_by_train()` reports 9.000 keV nominal on r0423, constant across all trains. The 0.44 % gap shifts every q by 0.44 % — 0.003 nm⁻¹ at the 0.6 nm⁻¹ Bragg peak, 0.005 at q_max. `plan.run_checks` records both and warns. Settle which is authoritative with MID; it is a config change plus a reintegration, not a code change |
