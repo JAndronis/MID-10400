@@ -25,6 +25,7 @@ euxfel = [
     "extra-speckle",
     "dask[complete]",
     "dask_jobqueue",
+    "matplotlib<=3.9",
     "ipympl",
     "scikit-image",
     "damnit"

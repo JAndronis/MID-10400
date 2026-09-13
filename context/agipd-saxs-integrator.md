@@ -20,7 +20,7 @@ phase until the previous phase's acceptance criteria pass.
 Per-train pooled I(q) is returned to DAMNIT.
 
 **Out of scope (v1):**
-- WAXS JUNGFRAU (CLAUDE.md open task 2);
+- WAXS JUNGFRAU (CLAUDE.md open task 2) — §14 maps which of this design carries over;
 - XCCA I(q,φ) (second pass);
 - XPCS;
 - bulk chunk reader (I3);
@@ -434,57 +434,22 @@ checks. The default `slurm_time` (2 h) covers the measured 6.3 min per run.
 
 ## 10. Phases and acceptance
 
-**P1 — operator, sparse kernels, self-test** (no Maxwell needed)
-- Unit tests on synthetic frames with a real-sized geometry (EXtra-geom test quad positions),
-  at 0.5 %, 2 % and 5 % occupancy.
-- Random static masks, per-frame flags, and frame/cell disagreement in both signs.
-- Gate: S, N and V match pyFAI to < 1e-6 and the same bins are empty in both paths.
+**P1 operator, sparse kernels, self-test — done.** Synthetic frames at 0.5/2/5 % occupancy on a
+real-sized geometry, random static masks and frame/cell disagreement in both signs; S, N and V
+match pyFAI to < 1e-6 with the same bins empty in both paths. `tests/saxs/test_operator.py`,
+`test_sparse.py`, `test_selftest.py`.
 
-**P2 — masks**
-- Seam and custom-mask construction (shape and convention asserts).
-- Majority vote; unseen-cell fallback; exactness for frame flags differing from the cell in either
-  direction; unexpected-bit flagging.
+**P2 masks — done.** Seam and pixel-mask construction, majority vote, unseen-cell fallback,
+exactness for frame flags differing from the cell either way, unexpected-bit flagging.
+`tests/saxs/test_masks.py`.
 
-**P3 — plan, worker, writer on a mock run.** I4 is decided: option (a), the lobe is excluded by
-the one static pixel mask OR'd into `static_bad`; the frame schema stays `(n, npt)`.
-- Mock run: EXtra-data `write_file` with `AGIPDModule(raw=False)`, then rewrite `image/data` as
-  int16 photon counts and `image/mask` as uint32 static + dynamic bits. Both chunked
-  (1, 512, 128), shuffle + gzip.
-- Test cases:
-  - dropped train;
-  - train with < 16 modules;
-  - zero-frame train;
-  - worker exception → WORKER_ERROR;
-  - killed worker → NOT_PROCESSED and raise;
-  - resume completes only missing blocks;
-  - config-hash mismatch refused.
-- Invariants: rows written by label; no NaN anywhere.
+**P3 plan, worker, writer — done**, on a mock run (EXtra-data `write_file` with
+`AGIPDModule(raw=False)`, `image/data` rewritten as int16 counts and `image/mask` as uint32, both
+chunked (1, 512, 128), shuffle + gzip). Covered: dropped train, < 16 modules, zero-frame train,
+worker exception → WORKER_ERROR, killed worker → NOT_PROCESSED and raise, resume completes only
+missing blocks, config-hash mismatch refused. Invariants: rows written by label, no NaN anywhere.
 
-**P4 — on-node acceptance, r0423**
-- Full run with 36 workers; self-test passes.
-- For 3 trains, pooled I(q) matches a dense pyFAI reference (engine with explicit `variance`)
-  to < 1e-6.
-- Per-stage timing against the §2 budget; wall time ≤ ~6 min; every non-OK status accounted for.
-
-**P4 is closed (2026-09-11).** The wall time came in at 6.29 min against a "~6 min" estimate, and
-that estimate was a design target, not a constraint: the pipeline this replaces
-(`analysis_helpers.integrate_run`) takes over an hour for one run, and DAMNIT's default
-`slurm_time` is 2 h, which 6.29 min uses 5 % of. Accepted on that basis.
-
-*How it is checked.* `scripts/p4_acceptance.py` runs the pass and then the four gates, and writes
-its verdict as JSON next to itself. Gate B re-reads what the writer stored, pools it the way §9
-does and compares that against a dense accumulation over whole trains, so the row-to-train
-mapping, the `f4` storage and `pooled_per_train` are inside the comparison — the per-frame kernel
-is the self-test's job, not gate B's. Gate C divides the workers' summed per-stage CPU seconds by
-the OK frame count to reach ms/frame/core; the §2 budget is a measurement, so a stage over budget
-is reported and only the wall time fails the gate (see the accepted target in the script). The gates are unit-tested against the mock run
-(`tests/saxs/test_p4_acceptance.py`), including a deliberately corrupted stored row.
-
-It cannot be run off the cluster: it needs a DAMNIT-partition node, the real geometry and mask
-files, and r0423. Rerun it whenever the frame loop, the masks or the geometry change.
-
-*Result, 2026-09-11, max-exfl170, full r0423 on 36 workers* — **accepted**. Every correctness
-gate passes; the wall time is 4.9 % over the design estimate and was accepted as above.
+**P4 on-node acceptance, r0423 — accepted 2026-09-11** (max-exfl170, full run, 36 workers).
 
 | Gate | Verdict | |
 |---|---|---|
@@ -494,136 +459,138 @@ gate passes; the wall time is 4.9 % over the design estimate and was accepted as
 | C timing | 377.6 s | over the ~360 s estimate, accepted; vs > 1 h for the pipeline it replaces |
 | D ledger | pass | 465 000/465 000 OK; one train NO_FRAMES owning no rows; bits exactly the expected set |
 
-Per-stage, per frame per core: read_data 5.10 (budget 4.6), read_mask 9.81 (8.2), integrate 10.11
-(6.2), total 25.0 against 19.0. Parallel efficiency 0.856, with 54.5 s of the wall outside the
-workers' timed stages. Every stage is above budget and `integrate` is the outlier at 1.63×; the §2
-figures were measured without 36 cores competing for memory bandwidth, and the frame loop's
-full-detector passes (`frame_bad`, `flatnonzero(x)`, `bad != base_bad`, `bad.sum()`) are pure
-memory traffic — they cost several times the sparse gathers even unloaded. A ten-train trial on
-the same node measured 21.3 ms/frame, so contention accounts for most of the gap between the two.
+The wall time was a design target, not a constraint: `analysis_helpers.integrate_run` takes over an
+hour for one run and DAMNIT's default `slurm_time` is 2 h, of which 6.29 min is 5 %.
 
-The 54.5 s outside the workers was unattributed, because only the worker stages were timed.
-`run.py` now records each parent phase (`plan`, `operator`, `static_mask`, `base_masks`,
-`selftest`, `save_operator_and_masks`, `write_blocks`) under `provenance/setup_timings`. Nothing
-depends on that breakdown now that the wall time is accepted; it is there for whoever wants the
-14 % of the run that is serial, and for P6, which compares 36 against 72 workers end to end and
-needs the serial part separated out to read the comparison.
+*Why every stage came in over the §2 budget.* Per frame per core: read_data 5.10 (budget 4.6),
+read_mask 9.81 (8.2), integrate 10.11 (6.2), total 25.0 against 19.0; `integrate` is the outlier at
+1.63×. The §2 figures were measured without 36 cores competing for memory bandwidth, and the frame
+loop's full-detector passes (`frame_bad`, `flatnonzero(x)`, `bad != base_bad`, `bad.sum()`) are
+pure memory traffic — several times the cost of the sparse gathers even unloaded. A ten-train trial
+on the same node measured 21.3 ms/frame, so contention accounts for most of the gap. **Treat 19 ms
+as the unloaded floor, not the operating point** — this is the trap to avoid when budgeting WAXS.
 
-The run also settled two things beyond the gates: every run check now resolves (constant pulse
-pattern, 155 frames = 155 X-ray pulses on all 3000 trains, quadrants stationary), and the XGM's
-nominal photon energy disagrees with the configured one — see CLAUDE.md open task 15.
+Parallel efficiency 0.856, with 54.5 s (14 %) of the wall outside the workers' timed stages.
+`run.py` records each parent phase (`plan`, `operator`, `static_mask`, `base_masks`, `selftest`,
+`save_operator_and_masks`, `write_blocks`) under `provenance/setup_timings` so P6 can separate the
+serial part; nothing else depends on it.
 
-**P5 — DAMNIT integration**
-- Cluster variable on r0423 and r0426 via `context_python`.
-- Returns (trainId, q) pooled I(q); fails loudly if incomplete.
+`scripts/p4_acceptance.py` runs the pass and the gates and writes its verdict as JSON beside
+itself; the gates are unit-tested against the mock run (`tests/saxs/test_p4_acceptance.py`),
+including a deliberately corrupted stored row. Gate B re-reads what the writer stored and pools it
+the way §9 does, so the row-to-train map, the `f4` storage and `pooled_per_train` are all inside
+the comparison; the per-frame kernel is the self-test's job. It needs a DAMNIT-partition node, the
+real geometry and mask files, and r0423. **Rerun it whenever the frame loop, the masks or the
+geometry change** — including the 2026-09-13 beam-centre change, which has not been re-gated.
 
-*Implemented.* The stored variable is the **(trainId, pulseId, q)** DataArray rather than the
-pooled per-train view: per-pulse I(q) is what the old `agipd_saxs` provided and what the overview and any
-per-pulse analysis need, it costs 0.93 GB against that variable's 3.7 GB, and the pooled view is
-one call away from the same file. Failing loudly needs no code of its own — `run_agipd_saxs`
-raises `IncompleteRun` unless `allow_incomplete`, and the wrapper does not catch it.
+The run also settled that every run check resolves (constant pulse pattern, 155 frames = 155 X-ray
+pulses on all 3000 trains, quadrants stationary) and surfaced the XGM photon-energy disagreement
+(CLAUDE.md open task 15).
 
-`analysis/saxs/damnit.py` holds `config_for`, `agipd_saxs`, the two file readers and
-`overview_figure`, which draws the two maps with `extra.utils.imshow2` — the helper the old
-overview used, so the colour bars and the coordinate-labelled axes match it; `src/amore/context.py` holds only the two decorated functions of §9.
-`agipd_saxs` and `agipd_iq_overview` keep their names and their DAMNIT columns — this supersedes
-the old implementation rather than sitting beside it, so nothing downstream has to be repointed.
-What the column *holds* does change: I(q) in nm⁻¹ and undivided, where `analysis_helpers.
-integrate_run` gave Å⁻¹ divided by I0 in place. Runs processed before the switch hold the old
-quantity, so clear the column for them rather than plotting across the boundary.
-`tests/test_context.py` loads the context file the way DAMNIT does and checks that every `var#`
-resolves.
+**P5 DAMNIT integration — implemented; not yet run on the cluster.** `agipd_saxs` and
+`agipd_iq_overview` keep their names and columns, backed by `analysis/saxs/damnit.py`
+(`config_for`, `agipd_saxs`, the two file readers, and `overview_figure`, which draws the two
+maps with `extra.utils.imshow2` — the helper the old overview used, so the colour bars and the
+coordinate-labelled axes match it); `src/amore/context.py` holds
+only the two decorated wrappers of §9. Two choices worth keeping:
 
-*Running it on r0423 and r0426 is the remaining work* — it needs the cluster.
+- The stored variable is the **(trainId, pulseId, q)** DataArray, not the pooled per-train view:
+  per-pulse I(q) is what the old `agipd_saxs` gave and what the overview needs, it costs 0.93 GB
+  against 3.7 GB, and the pooled view is one call away from the same file.
+- Failing loudly needed no code — `run_agipd_saxs` raises `IncompleteRun` unless
+  `allow_incomplete`, and the wrapper does not catch it.
 
-**P6 — hyperthreading**
-- Compare 36 vs 72 workers end to end.
-- Keep 72 only for a throughput gain ≥ 15 % with no memory pressure.
+What the column *holds* changed twice: from Å⁻¹ I0-divided to nm⁻¹ undivided (P5), then the q axis
+moved again with the beam centre (2026-09-13). Clear the column and reprocess rather than plotting
+across either boundary. `tests/test_context.py` loads the context file the way DAMNIT does and
+checks every `var#` resolves.
+
+*Remaining:* run it on r0423 and r0426. Needs the cluster.
+
+**P6 hyperthreading — open.** Compare 36 vs 72 workers end to end; keep 72 only for a throughput
+gain ≥ 15 % with no memory pressure.
 
 ---
 
 ## 11. Integrator open items
 
 - **I1 — Lit-frame selection.** v1 integrates all frames and flags a mismatch between frames and
-  X-ray pulses. Selection logic waits for the LITFRM source and keys from `lsxfel`.
-- **I2 — Polarisation.** Not applied in v1.
-  - Effect ≤ 5.4e-4 at q_max = 1.07 nm⁻¹ before azimuthal averaging.
-  - Needs the detector-frame ↔ lab-horizontal orientation and the polarisation factor confirmed
-    (CLAUDE.md task 5).
-  - Can be applied post hoc as a per-(cell, q-bin) factor from the base masks, without
-    reprocessing.
+  X-ray pulses. Selection waits for the LITFRM source and keys from `lsxfel`.
+- **I2 — Polarisation.** Not applied in v1. Effect ≤ 5.4e-4 at q_max = 1.07 nm⁻¹ before azimuthal
+  averaging. Needs the detector-frame ↔ lab-horizontal orientation and the factor confirmed
+  (CLAUDE.md task 5). Applicable post hoc as a per-(cell, q-bin) factor from the base masks,
+  without reprocessing.
 - **I3 — Bulk chunk reader** (for the XCCA pass): one `chunk_iter` per dataset, contiguous `pread`,
-  ISA-L inflate, `zlib_into` unshuffle.
-  - In-memory decode floor: 0.9 ms (data) and 1.6 ms (mask) per frame.
-  - Build only with its own bit-exact benchmark measuring CPU and wall time.
-- **I4 — Anisotropic low-q lobe** (r0423; CLAUDE.md task 8). **Decided: option (a), a static
-  pixel mask.** `cfg.pixel_mask_file` points at
-  `/gpfs/exfel/exp/MID/202601/p010400/usr/masks/mask_2026-09-08_AGIPD_SAXS.npy` — the single mask file,
-  which covers the generally bad pixels *and* the lobe. `masks.build_static_bad` OR's it into
-  `static_bad` alongside the ASIC seams, and its sha256 goes into provenance.
-  - *Why (a).* The mask is defined in pixel space, so it needs no φ range and no re-derivation of
-    the old integrator's φ ≈ 278–330°, and it is unaffected by the unresolved geometry question
-    (CLAUDE.md task 4). Storage and the `(n, npt)` frame schema are unchanged, so P3 is unblocked.
-  - *Why one file.* An earlier draft kept the lobe mask separate from
-    `usr/Shared/IA/custom_agipd_mask.npy`. Two overlapping masks have to be kept in step with each
-    other, and neither is meaningful alone; the newer file already contains both, so it is the only
-    one applied and the older one is retired.
-  - *What it costs.* The lobe pixels are absent from the `agipd_saxs` sums. Changing the exclusion
-    later means reprocessing, and the lobe's per-frame amplitude is **not** recoverable from this
-    pass — the lobe-amplitude vs droplet-volume correlation (CLAUDE.md task 8) needs its own pass.
-  - *Rejected: (b) per-region sums.* K = 2 regions would keep the lobe recoverable post hoc, but at
-    ×K storage (≈ 5.6 GB for r0423 at npt = 500) and a wider schema, for an analysis that is not
-    part of this pass.
+  ISA-L inflate, `zlib_into` unshuffle. In-memory decode floor 0.9 ms (data) and 1.6 ms (mask) per
+  frame. Build only with its own bit-exact benchmark measuring CPU and wall time.
+- **I4 — Anisotropic low-q lobe. Decided: option (a), a static pixel mask.** The single
+  `cfg.pixel_mask_file` carries the bad pixels *and* the lobe, OR'd into `static_bad` by
+  `masks.build_static_bad`; no φ range and no re-derivation of the old integrator's φ ≈ 278–330°,
+  and it is unaffected by the unresolved geometry question. Rejected: per-region sums, which would
+  keep the lobe recoverable at ×K storage (≈ 5.6 GB for r0423) and a wider schema, for an analysis
+  that is not part of this pass. *Cost:* the lobe pixels are absent from the sums, so the
+  lobe-amplitude vs droplet-volume correlation (CLAUDE.md task 8) needs its own pass, and changing
+  the exclusion later means reprocessing.
 
 ---
 
 ## 12. APIs to verify against installed source before use
 
-- **EXtra-data:**
-  - `open_run(proposal, run, data="proc")`
-  - `AGIPD1M(dc, detector_name=, min_modules=)`
-  - `.select_trains(by_id[...])`
-  - `.frame_counts`
-  - `det["image.*"].ndarray(decompress_threads=)`
-  - `.train_id_coordinates()`, `.pulse_id_coordinates()`, `.cell_id_coordinates()`
-- **EXtra:**
-  - `XrayPulses(dc).pulse_counts()`, `.is_constant_pattern()`
-  - `XGM(dc).photon_energy_by_train()`
-  - `CalibrationData.from_correction(proposal, run, detector_name)`
-  - `AGIPD1MQuadrantMotors(dc).positions(compressed=True)`
-  - `extra.calibration.BadPixels`
-- **EXtra-geom:**
-  - `AGIPD_1MGeometry.from_crystfel_geom()`
-  - `.to_pyfai_detector()`
-  - `agipd_asic_seams()`
-- **pyFAI 2026.5.0:**
-  - `integrate1d(..., method=tuple)`
-  - `res.method.{split,algo,impl}_lower`
-  - `ai.engines[...].engine.{lut, bin_centers, nnz, integrate_ng(weights, variance=, solidangle=)}`
-  - result fields `signal`, `normalization`, `variance`
-  - `ai.solidAngleArray(shape)`
-- **DAMNIT:**
-  - `@Variable(cluster=True)`
-  - `meta#proposal`, `meta#run_number`
-  - `damnit db-config context_python`
+- **EXtra-data:** `open_run(proposal, run, data="proc")`;
+  `AGIPD1M(dc, detector_name=, min_modules=)`; `.select_trains(by_id[...])`; `.frame_counts`;
+  `det["image.*"].ndarray(decompress_threads=)`; `.train_id_coordinates()`;
+  `.pulse_id_coordinates()`; `.cell_id_coordinates()`
+- **EXtra:** `XrayPulses(dc).pulse_counts()`; `.is_constant_pattern()`;
+  `XGM(dc).photon_energy_by_train()`;
+  `CalibrationData.from_correction(proposal, run, detector_name)`;
+  `AGIPD1MQuadrantMotors(dc).positions(compressed=True)`; `extra.calibration.BadPixels`
+- **EXtra-geom:** `AGIPD_1MGeometry.from_crystfel_geom()`; `.to_pyfai_detector()`;
+  `.to_distortion_array()`; `agipd_asic_seams()`
+- **pyFAI 2026.5.0:** `integrate1d(..., method=tuple)`; `res.method.{split,algo,impl}_lower`;
+  `ai.engines[...].engine.{lut, bin_centers, nnz, integrate_ng(weights, variance=, solidangle=)}`;
+  result fields `signal`, `normalization`, `variance`; `ai.solidAngleArray(shape)`;
+  `ai.setFit2D(directDist_mm, centerX, centerY)`
+- **DAMNIT:** `@Variable(cluster=True)`; `meta#proposal`; `meta#run_number`;
+  `damnit db-config context_python`
 
 ---
 
 ## 13. Do not port from `analysis_helpers.integrate_run`
 
-- **Method string `"csc"`** — resolves to no-split NumPy histogram.
-- **The OpenCL path** — silently falls back to the slowest CPU engine.
-- **Three geometries per run:**
-  - CPU workers ignore `beamcenter`;
-  - the q axis comes from another integrator;
-  - `setFit2D` is applied on re-shifted corners.
-- **`reshape(unstacked_shape)` with -1 plus offset arithmetic.**
-- **In-place `data /= i0` before integration.**
-- **`astype(float32)` + NaN masking of int16 data.**
-- **Unreliable concurrency:**
-  - pasha fork from a non-main thread;
-  - unchecked futures;
-  - `mp.Queue.empty()` loop condition;
-  - silent `join(timeout)`.
-- **`pulseId = np.arange(n_pulses)`.**
-- **`xgm.wavelength()` mid-run.**
+CLAUDE.md pitfalls 1, 2, 3, 7, 13–16 carry the general cases. Specific to this module:
+
+- **Three geometries per run** — CPU workers ignore `beamcenter`, the q axis comes from another
+  integrator, and `setFit2D` is applied on re-shifted corners.
+- **`reshape(unstacked_shape)` with -1 plus offset arithmetic** (CLAUDE.md pitfall 4).
+- **In-place `data /= i0` before integration** — irreversible; normalise the stored sums (§9).
+- **`astype(float32)` + NaN masking of int16 data** — the mask belongs in the operator's
+  denominator, not in the values.
+- **`pulseId = np.arange(n_pulses)`** — use `XrayPulses` / reader coordinates.
+- **`xgm.wavelength()` mid-run** — raises if not constant; use `*_by_train()`.
+- **Unreliable concurrency** — pasha forked from a non-main thread, unchecked futures, an
+  `mp.Queue.empty()` loop condition, a silent `join(timeout)`. Failures end as NaN rows.
+
+---
+
+## 14. What carries over to the WAXS integrator (CLAUDE.md open task 2)
+
+Nothing here is a WAXS design decision — the JUNGFRAU-500K data have **not** been inspected
+(dtype, compression, frames per train, gain and mask bits, value distribution all unknown). This
+records which parts of this design are detector-agnostic and which rest on an AGIPD fact that has
+to be re-measured before it can be reused.
+
+| Part | Carries over? |
+|---|---|
+| Sufficient statistics S, N, V and the pooling of §9 | **Yes, if** the data are counts. `V = Σc²·x` is the Poisson variance of integer photons; on float ADU it is not a variance at all and the error model has to be re-derived |
+| Status ledger (§8), rows by label, no NaN sentinels | **Yes.** Detector-independent |
+| Output schema (§7), resume, provenance, config hash | **Yes**, but two JUNGFRAUs means either a detector axis or one file each — decide before writing, it is a schema change afterwards |
+| Plan / worker / writer split, spawned pool, single writer | **Yes.** `plan.py` needs a JUNGFRAU frame-count source instead of `AGIPD1M.frame_counts` |
+| Sparse integration over photon hits (§6.2, §6.4) | **Only if sparse.** The 6.2 vs 19.0 ms/frame win comes from 0.7–1.8 % nonzero. Measure occupancy first (benchmark stage 1); a dense WAXS detector wants dense pyFAI per frame and this whole kernel is the wrong shape |
+| Per-cell base mask (§6.3) | **Unclear.** It exists because AGIPD's static bits are per memory cell. Whether JUNGFRAU has an analogous per-cell structure is unmeasured; if not, `static_bad` plus the per-frame correction is the whole story and `masks.py` simplifies |
+| Operator build (§6.1) and §3 rule 4 | **Partly.** The full-split assertion and the beam-centre discipline carry. The geometry does not: `usr/geometry` has no JUNGFRAU `.geom`, but `masks_and_calibration/data/calibration/` holds `jf1.poni`, `jf2.poni` and per-detector masks (`jf1_mask.edf`, `jf2_mask.edf`). PONI files are forbidden for AGIPD by rule 4 because a geometry object exists; for JUNGFRAU they may be the only source, so rule 4 needs an explicit JUNGFRAU clause rather than being quietly broken |
+| `EXPECTED_BITS`, `agipd_asic_seams()`, `min_modules=16`, `mask_bits` blanket | **No.** All AGIPD-specific. The blanket `mask_bits` is only correct while every bit present marks an unusable pixel (CLAUDE.md pitfall 6) — re-establish that per detector |
+| The 19 ms/frame budget | **No.** Re-measure. And see P4: budget under load, not one core at a time |
+
+First step, per CLAUDE.md open task 2: adapt benchmark stages 1 and 7 to JUNGFRAU and get the
+value distribution, occupancy, dtype and gain/mask semantics. The sparse-vs-dense fork and the
+error model both hang on that measurement, so it comes before any spec.
