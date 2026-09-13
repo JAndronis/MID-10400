@@ -12,7 +12,6 @@ re-asserted anyway, which helps only libraries imported lazily.
 
 from __future__ import annotations
 
-import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -20,6 +19,8 @@ from typing import Any
 
 import numpy as np
 
+# Re-exported: ``run.py`` and the tests reach these through this module.
+from analysis.common.cpu import THREAD_ENV, set_thread_env
 from analysis.saxs.config import AgipdSaxsConfig
 from analysis.saxs.masks import BaseMasks, frame_bad, load_masks
 from analysis.saxs.operator import SparseOperator, load_operator
@@ -28,24 +29,13 @@ from analysis.saxs.sparse import integrate_frame
 from analysis.saxs.status import DataCheckFailed, FrameStatus
 
 __all__ = [
+    "THREAD_ENV",
     "BlockResult",
     "WorkerPaths",
     "init",
     "process_block",
     "set_thread_env",
 ]
-
-THREAD_ENV = ("EXTRA_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS")
-
-
-def set_thread_env() -> None:
-    """Pin every numerical library to one thread.
-
-    Called by the parent *before* the pool is constructed, so spawned children
-    inherit it at process start (context file §3 rule 3).
-    """
-    for name in THREAD_ENV:
-        os.environ[name] = "1"
 
 
 @dataclass(frozen=True, slots=True)

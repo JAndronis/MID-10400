@@ -15,6 +15,11 @@ from pathlib import Path
 
 from pyFAI.units import hc  # keV·Å, derived from scipy CODATA (pyFAI/units.py:66)
 
+# Re-exported: the whole package and its tests reach these through
+# ``analysis.saxs.config``, and ``test_config`` calls ``physical_cores`` with a
+# fixture topology root.
+from analysis.common.cpu import file_sha256, physical_cores
+
 __all__ = [
     "DEFAULT_BEAM_CENTER_PX",
     "DEFAULT_BEAM_CENTER_PY",
@@ -76,40 +81,6 @@ DEFAULT_BEAM_CENTER_PY: float = 672.076693118667
 #: failure: every bit in these files marks an unusable pixel, so the blanket
 #: ``mask_bits`` stays correct, but an unrecorded bit must be looked at.
 EXPECTED_BITS: frozenset[int] = frozenset({0, 1, 7, 8, 9, 12, 13})
-
-
-#: Linux CPU topology, where a core's hyperthread siblings are listed.
-CPU_TOPOLOGY_ROOT = Path("/sys/devices/system/cpu")
-
-
-def physical_cores(root: Path = CPU_TOPOLOGY_ROOT) -> int | None:
-    """Physical cores available to this process, or ``None`` off Linux.
-
-    Counts distinct hyperthread-sibling groups over the CPUs in this process's
-    affinity mask, so a core contributes once however many threads it exposes
-    and a cgroup-restricted job is not told about cores it cannot use.
-
-    :param root: sysfs CPU topology root; the tests point it at a fixture.
-    """
-    if not hasattr(os, "sched_getaffinity"):
-        return None
-    groups: set[str] = set()
-    for cpu in os.sched_getaffinity(0):
-        try:
-            siblings = (root / f"cpu{cpu}/topology/thread_siblings_list").read_text()
-        except OSError:
-            return None
-        groups.add(siblings.strip())
-    return len(groups) or None
-
-
-def file_sha256(path: str | Path) -> str:
-    """sha256 of a file's bytes, read in 1 MiB blocks."""
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for block in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 @dataclass(frozen=True, slots=True)

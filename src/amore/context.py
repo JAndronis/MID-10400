@@ -398,3 +398,60 @@ def agipd_iq_overview(run, grid: "var#agipd_saxs"):
     from analysis.saxs import damnit
 
     return damnit.overview_figure(grid)
+
+
+# ── JUNGFRAU WAXS integration (analysis.waxs; context/jungfrau-waxs-integrator) ─
+# One variable per detector, because the pass is per detector: the two
+# JUNGFRAU-500Ks have different geometries, different static masks and
+# different q ranges, so each gets its own PONI and its own output file under
+# scratch/jungfrau_waxs/r{run:04d}/. They are combined only in the overview,
+# and there as two traces with their overlap visible — never concatenated.
+#
+# Thin on purpose, like the AGIPD pair above: DAMNIT execs this file into a
+# dict, so a function defined here cannot be pickled to the spawned workers.
+
+
+@Variable("JF1 I(q)", data="proc", cluster=True, tags=["offline"])
+def jungfrau_waxs_jf1(run, proposal: "meta#proposal", run_no: "meta#run_number"):
+    """I(q) per (trainId, cellId) for JUNGFRAU 1. Raises unless every frame is OK.
+
+    There is no pulse axis: JUNGFRAU's reader has no pulse ids, and which of a
+    train's X-ray pulses each memory cell sampled is unresolved, so the cell id
+    is stored and no pulse id is invented.
+    """
+    from analysis.waxs import damnit
+
+    return damnit.jungfrau_waxs(proposal, run_no, "jf1")
+
+
+@Variable("JF2 I(q)", data="proc", cluster=True, tags=["offline"])
+def jungfrau_waxs_jf2(run, proposal: "meta#proposal", run_no: "meta#run_number"):
+    """I(q) per (trainId, cellId) for JUNGFRAU 2."""
+    from analysis.waxs import damnit
+
+    return damnit.jungfrau_waxs(proposal, run_no, "jf2")
+
+
+@Variable("JUNGFRAU I(q) overview", data="proc", cluster=True, tags=["offline"])
+def jungfrau_waxs_overview(
+    run, jf1: "var#jungfrau_waxs_jf1", jf2: "var#jungfrau_waxs_jf2"
+):
+    from analysis.waxs import damnit
+
+    return damnit.overview_figure(jf1, jf2)
+
+
+@Variable("JUNGFRAU I(q) combined", data="proc", cluster=True, tags=["offline"])
+def jungfrau_waxs_combined(
+    run, jf1: "var#jungfrau_waxs_jf1", jf2: "var#jungfrau_waxs_jf2"
+):
+    """Both detectors on one scale, jf2 fitted onto jf1 over their overlap.
+
+    `attrs` carry the factor, the overlap it was fitted over and the reduced
+    chi-squared of the residual. That chi-squared is a cross-check on the two
+    PONIs only when the overlap carries a feature: on a run with no Bragg
+    peaks a q error is absorbed by the factor instead of showing up here.
+    """
+    from analysis.waxs import damnit
+
+    return damnit.combined_curve(jf1, jf2)

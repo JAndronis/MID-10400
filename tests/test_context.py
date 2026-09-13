@@ -100,20 +100,47 @@ def test_the_saxs_variables_keep_their_names(variables):
     assert "geometry_from_encoders" not in code
 
 
-def test_the_context_file_holds_no_heavy_saxs_logic():
+INTEGRATION_VARIABLES = (
+    "agipd_saxs",
+    "agipd_iq_overview",
+    "jungfrau_waxs_jf1",
+    "jungfrau_waxs_jf2",
+    "jungfrau_waxs_overview",
+    "jungfrau_waxs_combined",
+)
+
+
+@pytest.mark.parametrize("name", INTEGRATION_VARIABLES)
+def test_the_context_file_holds_no_heavy_integration_logic(name):
     """DAMNIT execs this file, so nothing defined here can reach a worker.
 
-    The integration functions must stay in ``analysis.saxs``; a helper defined
-    in the context file would fail to pickle only once the pool spawned.
+    The integration functions must stay in ``analysis.saxs`` and
+    ``analysis.waxs``; a helper defined in the context file would fail to
+    pickle only once the pool spawned. Each wrapper is a docstring, an import
+    and a call — anything with statements beyond that has logic in it that
+    belongs in the package instead.
     """
+    import ast
+
     source = (CONTEXT_DIR / "context.py").read_text()
     imports = [
         line for line in source.splitlines() if line.startswith(("import ", "from "))
     ]
     assert not any("integrate_run" in line for line in imports)
 
-    # Each body is an import plus a call; anything longer has logic in it that
-    # belongs in the package instead.
-    body = source[source.index("def agipd_saxs") :]
-    indented = [line for line in body.splitlines() if line.startswith("    ")]
-    assert len(indented) < 20, "the SAXS variables have grown bodies"
+    tree = ast.parse(source)
+    functions = {
+        node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)
+    }
+    assert name in functions, f"{name} is not defined in the context file"
+    body = functions[name].body
+    if (
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+    ):
+        body = body[1:]  # the docstring
+    kinds = [type(node).__name__ for node in body]
+    assert kinds == ["ImportFrom", "Return"], (
+        f"{name} does something other than import and call: {kinds}"
+    )

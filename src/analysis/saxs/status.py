@@ -1,35 +1,12 @@
-"""Frame status codes and the data-check exception.
+"""Frame status codes and the data-check exception (context file §8).
 
-The codes are the ledger values written to ``/frames/status`` (context file
-§8). They are shared by the sparse kernels, the worker, the writer and the
-orchestration, so they live in their own module rather than in ``config``,
-which holds only the frozen config dataclass.
+These moved to :mod:`analysis.common.status` when the JUNGFRAU WAXS pass
+started sharing them; the names stay importable from here because the whole
+SAXS package and its tests refer to them by this path.
 """
 
 from __future__ import annotations
 
-from enum import IntEnum
+from analysis.common.status import DataCheckFailed, FrameStatus
 
 __all__ = ["DataCheckFailed", "FrameStatus"]
-
-
-class FrameStatus(IntEnum):
-    """Per-frame ledger codes (context file §8)."""
-
-    OK = 0
-    MISSING_MODULES = 1
-    NO_FRAMES = 2
-    LABEL_MISMATCH = 3
-    DATA_CHECK_FAILED = 4
-    WORKER_ERROR = 5
-    NOT_PROCESSED = 255
-
-
-class DataCheckFailed(ValueError):
-    """``image.data`` is not integer photon counts, or carries negative counts.
-
-    Raised rather than returned: there is no dense fallback and no NaN
-    sentinel, so a frame that fails the check must not hand back arrays a
-    caller could mistake for an integration. Callers that need the §8 code for
-    the ledger use :func:`analysis.saxs.sparse.frame_data_status` instead.
-    """

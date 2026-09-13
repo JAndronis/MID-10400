@@ -21,6 +21,10 @@ euxfel = [
     # Required by analysis.saxs (operator + self-test). Previously present only
     # transitively, via extra-speckle and damnit.
     "pyfai",
+    # Required by analysis.waxs, which reads the JUNGFRAU .edf static masks
+    # directly. Arrives transitively via pyFAI today; named here because it is
+    # imported by name, the same reason pyfai is.
+    "fabio",
     "extra_proposal",
     "extra-speckle",
     "dask[complete]",

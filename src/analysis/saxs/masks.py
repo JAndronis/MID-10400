@@ -35,6 +35,18 @@ from pathlib import Path
 import numpy as np
 from extra_geom import agipd_asic_seams
 
+# Re-exported: the mask vocabulary and the train sampling are detector-agnostic
+# and now live under ``analysis.common``, but the SAXS package, its tests and
+# ``scripts/p4_acceptance.py`` reach them through this module.
+from analysis.common.masks import (
+    MaskSource,
+    StaticMask,
+    UnexpectedMaskBits,
+    bits_to_mask,
+    describe_bits,
+    frame_bad,
+)
+from analysis.common.plan import evenly_spaced
 from analysis.saxs.config import NPIX, AgipdSaxsConfig, file_sha256
 from analysis.saxs.operator import SparseOperator
 from analysis.saxs.sparse import denominator
@@ -62,67 +74,7 @@ STACKED_SHAPE = (16, 512, 128)
 ACCEPTED_MASK_SHAPES = (STACKED_SHAPE, MODULE_SHAPE, (16 * 512, 128))
 
 
-class UnexpectedMaskBits(UserWarning):
-    """A ``BadPixels`` bit outside ``cfg.expected_bits`` was present."""
-
-
-def bits_to_mask(bits: Iterable[int]) -> int:
-    """Turn bit *positions* into a uint32 bitmask."""
-    value = 0
-    for bit in bits:
-        if not 0 <= bit < 32:
-            raise ValueError(f"bit position out of range for uint32: {bit}")
-        value |= 1 << bit
-    return value
-
-
-def describe_bits(value: int) -> str:
-    """Name the set bits of a ``BadPixels`` field, for warnings and provenance.
-
-    The bit *set* is recorded exactly by the caller; only this human-readable
-    rendering is best-effort, so a missing ``euxfel-EXtra`` degrades to bare bit
-    numbers instead of failing. The import is deferred because ``extra`` is a
-    large package and workers have no use for it.
-    """
-    positions = [bit for bit in range(32) if value & (1 << bit)]
-    try:
-        from extra.calibration import BadPixels
-    except ImportError:
-        return ", ".join(f"bit {bit}" for bit in positions) or "none"
-    names = {member.value.bit_length() - 1: member.name for member in BadPixels}
-    return (
-        ", ".join(f"{bit} {names.get(bit, 'UNKNOWN')}" for bit in positions) or "none"
-    )
-
-
 # ── static mask ───────────────────────────────────────────────────────────────
-@dataclass(frozen=True, slots=True)
-class MaskSource:
-    """One contribution to the static mask, recorded for provenance.
-
-    ``n_excluded`` is this source's own count, before the OR with the others,
-    so each source's contribution stays visible in the provenance record.
-    """
-
-    name: str
-    path: str | None
-    sha256: str | None
-    n_excluded: int
-
-
-@dataclass(frozen=True, slots=True)
-class StaticMask:
-    """Pixels excluded for every frame of the run."""
-
-    bad: np.ndarray  # bool (NPIX,), read-only
-    sha256: str
-    sources: tuple[MaskSource, ...]
-
-    @property
-    def n_excluded(self) -> int:
-        return int(self.bad.sum())
-
-
 def load_pixel_mask(path: str | Path) -> np.ndarray:
     """Load a stored pixel mask as a flat boolean array, non-zero = excluded.
 
@@ -179,24 +131,6 @@ def build_static_bad(cfg: AgipdSaxsConfig) -> StaticMask:
         sha256=hashlib.sha256(np.packbits(bad).tobytes()).hexdigest(),
         sources=tuple(sources),
     )
-
-
-def frame_bad(
-    mask_frame: np.ndarray, mask_bits: int, static_bad: np.ndarray
-) -> np.ndarray:
-    """This frame's bad-pixel mask: ``((m & mask_bits) != 0) | static_bad``.
-
-    ``mask_frame`` is one frame of ``image.mask``, either ``(16, 512, 128)`` or
-    already flat. A blanket ``mask_bits`` is only correct while every bit
-    present marks an unusable pixel (CLAUDE.md pitfall 6), which is why the
-    accumulator records the bit set actually seen.
-    """
-    flat = mask_frame.reshape(-1)
-    if flat.size != static_bad.size:
-        raise ValueError(
-            f"mask frame has {flat.size} pixels, static mask has {static_bad.size}"
-        )
-    return ((flat & np.uint32(mask_bits)) != 0) | static_bad
 
 
 # ── per-cell base masks ───────────────────────────────────────────────────────
@@ -369,23 +303,6 @@ def _base_masks_sha256(
     digest.update(np.ascontiguousarray(n_samples).tobytes())
     digest.update(np.packbits(base_bad, axis=-1).tobytes())
     return digest.hexdigest()
-
-
-def evenly_spaced(train_ids: np.ndarray, n: int) -> np.ndarray:
-    """Pick up to ``n`` train ids spread evenly over ``train_ids``.
-
-    Endpoints included. Returns fewer than ``n`` only when the run has fewer
-    trains than that.
-    """
-    train_ids = np.asarray(train_ids)
-    if train_ids.ndim != 1:
-        raise ValueError(f"train_ids must be 1-D, got shape {train_ids.shape}")
-    if train_ids.size == 0:
-        raise ValueError("no trains to sample base masks from")
-    if n < 1:
-        raise ValueError(f"n must be positive, got {n}")
-    positions = np.linspace(0, train_ids.size - 1, min(n, train_ids.size))
-    return train_ids[np.unique(np.rint(positions).astype(np.int64))]
 
 
 # ── persistence ───────────────────────────────────────────────────────────────

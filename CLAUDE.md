@@ -2,9 +2,11 @@
 
 Repository guide for Claude Code. Read this file first, then the context file for the task at hand.
 
-`<pkg>` = `analysis` (`src/analysis/`), this repository's src-layout analysis package.
-The pyBeamtime reader plugin (`src/readers/`) and the DAMNIT context files (`src/amore/`,
-not packaged) are separate.
+`<pkg>` = `analysis` (`src/analysis/`), this repository's src-layout analysis package. It holds
+`analysis.common` (detector-agnostic: status codes, the train/block row model, the mask vocabulary,
+CPU and pool helpers, the frame-table writer), `analysis.saxs` (AGIPD) and `analysis.waxs`
+(JUNGFRAU). The pyBeamtime reader plugin (`src/readers/`) and the DAMNIT context files
+(`src/amore/`, not packaged) are separate.
 
 ## Context files
 
@@ -172,10 +174,12 @@ nucleation?
 | EXtra-geom | geometry | `AGIPD_1MGeometry.from_crystfel_geom`, `to_pyfai_detector()` (PONI = 0 at geometry origin), `agipd_asic_seams()` |
 | EXtra | components | `XrayPulses`, `XGM`, `CalibrationData.from_correction`, `AGIPD1MQuadrantMotors`, `extra.applications.xcca` — see `context/extra-toolkit-context.md` |
 | pyFAI | operators, reference | method tuples only; no Poisson error model on photon-count data |
-| DAMNIT | per-run orchestration, summaries | Context variables are thin wrappers over `<pkg>`; `analysis.saxs.damnit` is the SAXS one. `tests/test_context.py` loads the context file the way DAMNIT does |
+| DAMNIT | per-run orchestration, summaries | Context variables are thin wrappers over `<pkg>`: `analysis.saxs.damnit` for `agipd_saxs`, `analysis.waxs.damnit` for `jungfrau_waxs_jf1`/`jf2`/`_overview`. `tests/test_context.py` loads the context file the way DAMNIT does and asserts, by AST, that every wrapper body is an import plus a call |
 | extra-speckle | XPCS, Tier-2 data access | |
 | pyBeamtime (own) | multi-facility readers | EuXFEL reader plugin contract: `load_run(self, run_id, root_path)`. `get_run_path` is required in the ABC even though the docs omit it |
 | `scripts/p4_acceptance.py` | P4 acceptance for `agipd_saxs` | runs the pass, then the four §10 gates; writes its verdict as JSON beside itself. Needs a node, the real geometry/mask files and r0423 |
+| `scripts/w1_facts.py` | W1 facts for `analysis.waxs` | per run and detector: file existence + sha256, source names, lit-cell split and readout noise (**open task 2's O4**), whether `data.mask` is train-invariant, whether an ROI over the lit cells saves I/O, extreme-pixel counts. `--runs 423 426 --detectors jf1 jf2`; JSON beside itself |
+| `scripts/w4_acceptance.py` | W4 acceptance for `analysis.waxs` | one detector at a time: configuration, NaN-equivalence self-test, an independent per-frame-mask reference against the stored sums, timing, ledger. `--run 423 --detector jf1 --workers 36`; JSON beside itself |
 | `agipd_stage_rates.py` | 9-stage benchmark | run from the uv environment; writes JSON after each stage; `--train-offset` avoids page-cached trains |
 | pasha | legacy parallelism in `analysis_helpers.py` | fork-only; do not use in new code |
 | PyMuPDF | reading reference PDFs | rasterise at 2× (`fitz.Matrix(2, 2)`) before extraction |
@@ -194,9 +198,10 @@ nucleation?
 | What | Path |
 |---|---|
 | Control sources (XGM, timeserver, motors) | raw only. `open_run(..., data="proc")` opens **one** location and proc holds corrected detector files alone, so `XrayPulses`, `XGM` and `AGIPD1MQuadrantMotors` all raise against it. Use `data="raw"` (or `"all"`) for those |
-| Proc (corrected) data | `/gpfs/exfel/exp/MID/202601/p010400/proc/r{run:04d}/CORR-R{run:04d}-AGIPD{module:02d}-S{seq:05d}.h5` (one file per module per sequence) |
+| Proc (corrected) data | `/gpfs/exfel/exp/MID/202601/p010400/proc/r{run:04d}/CORR-R{run:04d}-AGIPD{module:02d}-S{seq:05d}.h5` (one file per module per sequence). JUNGFRAU: `CORR-R{run:04d}-JNGFR{modno:02d}-S{seq:05d}.h5`, modno 01 = jf1 and 02 = jf2, 6 × 500 trains each on r0423. Same tree as `/gpfs/exfel/d/proc/MID/202601/p010400/r{run:04d}` |
 | Scratch | `/gpfs/exfel/exp/MID/202601/p010400/scratch/` |
 | AGIPD geometry in use | `/gpfs/exfel/exp/MID/202601/p010400/usr/geometry/geom_latest.geom` |
+| JUNGFRAU geometry and masks | `usr/geometry/jf{1,2}.poni` and `usr/masks/jf{1,2}.edf` (pyFAI PONI files and native pyFAI masks — non-zero = excluded, no inversion). `usr/geometry` and `usr/masks` are the same directories as `/gpfs/exfel/u/usr/MID/202601/p010400/{geometry,masks}` |
 | AGIPD pixel mask | `/gpfs/exfel/exp/MID/202601/p010400/usr/masks/mask_2026-09-08_AGIPD_SAXS.npy` — the **only** mask file. Non-zero = excluded; carries the bad pixels *and* the low-q lobe (integrator I4, option (a)); OR'd into `static_bad` with the ASIC seams. `usr/masks` is the same directory as `/gpfs/exfel/u/usr/MID/202601/p010400/masks` |
 | Superseded | `usr/Shared/IA/custom_agipd_mask.npy` and `usr/masks/mask_2026-05-11_AGIPD_updated.npy`. Do **not** apply either alongside the mask above |
 
@@ -266,7 +271,7 @@ statistics (open task 6). Integer data cannot carry NaN, so bad pixels must come
 | X-ray pulse pattern | `XrayPulses(run)`; replaces the fake `pulseId = np.arange(n_pulses)` of the old pipeline |
 | Lit-frame finder (LITFRM) | intended for XGM alignment (`data.xgmPulseId`); source and keys unverified — get them from `lsxfel` |
 | Droplet imaging | path length from `MID_EXP_CAM/PROC/DROPLET_DOWNSTREAM.current_vol`; verify per run with `lsxfel`. Ellipse-fit volume tracking lives in `analysis_helpers.py` |
-| JUNGFRAU-500K (WAXS) | **Inspected, both detectors** (r0423 train 2637695397). `float32` in **keV**, single-photon peak 8.87 / 9.12 keV; `(train, cell, 512, 1024)` with **16 memory cells/train, only cells 0–7 lit on both** (dark cells ≤ 0.004 % of pixels above half a photon); readout σ 0.323 / 0.317 keV; **dense** — 0.002–0.004 % exactly zero. `data.mask` bits {0, 1, 21 `WRONG_GAIN_VALUE`, 22 `NON_STANDARD_SIZE`} — bit 22 **is** set, so no seam mask is needed. **jf2 carries 15 pixels at up to ±1.8e5 keV, in every cell, that `data.mask` does not flag** (jf1's 10 equivalents are all flagged) — `data.mask` alone is not sufficient. Geometry from `jf1.poni` / `jf2.poni` (pyFAI `Jungfrau`, 75 µm, 232 mm, 9.04 keV); static masks `jf1_mask.edf` / `jf2_mask.edf` are **native pyFAI masks from silx view** — non-zero = excluded, pass straight to `mask=`, no inversion — covering 75.9 % / 84.4 %. q populated after masking: jf1 11.5–23.7, jf2 9.8–18.5 nm⁻¹. Full detail and open questions: `context/jungfrau-waxs-integrator.md` |
+| JUNGFRAU-500K (WAXS) | **Sources settled** (`lsxfel`, r0423 proc): `MID_EXP_JF500K1/CORR/JNGFR01:daqOutput` and `MID_EXP_JF500K2/CORR/JNGFR02:daqOutput`, keys `data.adc` / `data.mask` / `data.memoryCell`. Each carries a legacy `…/DET/JNGFR0n:daqOutput` **soft link** to the CORR name; it appears in `instrument_sources` but not in `source_to_modno`, because `_source_corr_pat` matches `/CORR/` alone. Both names match `_det_name_pat`, so auto-detection raises "Multiple detectors found" against a whole run — pass `detector_name` (and `first_modno` 1 / 2). **Inspected, both detectors** (r0423 train 2637695397). `float32` in **keV**, single-photon peak 8.87 / 9.12 keV; `(train, cell, 512, 1024)` with **16 memory cells/train, only cells 0–7 lit on both** (dark cells ≤ 0.004 % of pixels above half a photon); readout σ 0.323 / 0.317 keV; **dense** — 0.002–0.004 % exactly zero. `data.mask` bits {0, 1, 21 `WRONG_GAIN_VALUE`, 22 `NON_STANDARD_SIZE`} — bit 22 **is** set, so no seam mask is needed. **jf2 carries 15 pixels at up to ±1.8e5 keV, in every cell, that `data.mask` does not flag** (jf1's 10 equivalents are all flagged) — `data.mask` alone is not sufficient. Geometry from `jf1.poni` / `jf2.poni` (pyFAI `Jungfrau`, 75 µm, 232 mm, 9.04 keV); static masks `jf1_mask.edf` / `jf2_mask.edf` are **native pyFAI masks from silx view** — non-zero = excluded, pass straight to `mask=`, no inversion — covering 75.9 % / 84.4 %. q populated after masking: jf1 11.5–23.7, jf2 9.8–18.5 nm⁻¹. Full detail and open questions: `context/jungfrau-waxs-integrator.md`. **Integrator implemented** (`analysis.waxs`): dense pyFAI per frame with the per-frame mask carried as NaN (pitfall 16), `Var = σ_read² + E·x` in keV² stored unclamped, lit cells and σ_read measured per run |
 | Quadrant motors | `AGIPD1MQuadrantMotors`; assert no movement within a run |
 
 ### Read performance (r0423, one core, HDF5 path unless stated)
@@ -337,7 +342,16 @@ statistics (open task 6). Integer data cannot carry NaN, so bad pixels must come
     nested bare `except:` clauses end in `"Encoder positions not found, setting all values to 0"`
     and hardcoded quad positions. A `Setup` that looks configured can be running nominal geometry.
     Read its printed output; pass `geom=` to mean a specific file.
-16. **`extra_speckle.saxs.get` hard-wires npt and the split scheme.** `_apply_pyfai` passes
+16. **pyFAI rebuilds its sparse matrix whenever the mask changes.** `setup_sparse_integrator`
+    keys the cached matrix on a checksum of the mask and its own docstring calls the rebuild "a
+    very time consuming operation". So a *per-frame* mask passed to `integrate1d(mask=)` rebuilds
+    the full-split matrix every frame — measured 16.8 vs 2.3–2.9 ms/frame on a JUNGFRAU module. On
+    float data the fix is to build the engine once with the static mask and carry the per-frame
+    mask as **NaN in the data and variance arrays**: pyFAI's preprocessing drops a non-finite pixel
+    from the numerator *and* the normalisation, giving bit-identical sums (measured 0.0e+00 max
+    relative difference on all three sums, both detectors, all 500 bins). Integer data cannot carry
+    NaN, which is why AGIPD needs its sparse denominator correction instead.
+17. **`extra_speckle.saxs.get` hard-wires npt and the split scheme.** `_apply_pyfai` passes
     `npt=300`, so `get(..., npt=500)` raises on the duplicate keyword rather than rebinning; and
     `get` consumes `method` for its own `"1d"`/`"2d"` switch, so pyFAI's method can never be passed
     through and it always runs the default `("bbox","csr","cython")`. Its default unit is `q_A^-1`.
@@ -349,7 +363,7 @@ statistics (open task 6). Integer data cannot carry NaN, so bad pixels must come
 | # | Task | Next step / gate |
 |---|---|---|
 | 1 | AGIPD SAXS integrator (`agipd_saxs`) | **P1–P4 done.** P4 accepted on r0423 2026-09-11: 465 000/465 000 frames OK, pooled I(q) within 4.9e-8 of a dense pyFAI reference, 6.29 min on 36 workers against > 1 h for `analysis_helpers.integrate_run`. **P5 implemented**: `agipd_saxs` / `agipd_iq_overview` in `src/amore/context.py` keep their names and columns, now backed by `analysis.saxs.damnit` instead of `analysis_helpers.integrate_run` — the column's contents change from Å⁻¹ I0-divided to nm⁻¹ undivided, so clear it for runs processed before this. **The beam centre moved on 2026-09-13** (open task 4), which moves the q axis again and changes every stored operator hash — anything integrated before that date must be reprocessed, not merged. Next: run it on r0423 and r0426, then P6 (36 vs 72 workers) |
-| 2 | WAXS JUNGFRAU integrator (`<pkg>.waxs`) | **Spec written: `context/jungfrau-waxs-integrator.md`.** The data is inspected (see the JUNGFRAU row above) and the two forks are settled by measurement: **dense**, not the sparse kernel, and `Var = σ_read² + E·x` in keV², not `Σc²·x`. One output file per detector, combined only at the plot. Both detectors inspected and consistent; the `.edf` mask convention is settled (native pyFAI masks, non-zero = excluded). Remaining before code: source names and keys from `lsxfel`. Then phase W1 |
+| 2 | WAXS JUNGFRAU integrator (`<pkg>.waxs`) | **W0, W2, W3 and W5 done 2026-09-13; W1 and W4 need the cluster.** `analysis.common` extracted (SAXS suite passes unedited, `config_hash` byte-identical); `analysis.waxs` implemented and gated on the real r0423 train of both detectors — σ_read 0.3230/0.3175 keV, lit cells (0…7), and the D5′ NaN path **exactly** equal to the per-frame-mask reference on all 500 bins. 105 WAXS tests, 334 in the suite. Two spec decisions were amended by measurement (context file §3 D3 and D5′) and one general pyFAI trap recorded (pitfall 16). Three DAMNIT variables wired: `jungfrau_waxs_jf1`, `jungfrau_waxs_jf2`, `jungfrau_waxs_overview`. **O5 resolved and O6 closed 2026-09-13.** `analysis.waxs.combine` fits a scale factor for jf2 against jf1 over their overlap and merges the two into one curve (`damnit.combined_curve`, DAMNIT variable `jungfrau_waxs_combined`); its χ²ᵣ is a cross-check on the two PONIs **only when the overlap carries a feature** — a q error is degenerate with a scale factor on a featureless curve (measured: 5 % q shift gives χ²ᵣ 0.22 smooth, 776 with a peak), so it bites on r0426 and not on r0423. O6 is closed by decision: no combined SAXS+WAXS curve is planned. **W1 O1 done 2026-09-13:** source names, module numbers and the legacy-alias behaviour settled from `lsxfel` (see the JUNGFRAU row) and wired into `config.DETECTOR_NAMES`/`DETECTOR_MODNOS`; the mock now reproduces the real `/CORR/` layout with its soft-linked `/DET/` alias, and `config_for(proposal, run, detector)` needs no arguments beyond those. Geometry and mask paths confirmed: `usr/geometry/jf{1,2}.poni` and `usr/masks/jf{1,2}_mask.edf`. **Next, on Maxwell:** `scripts/w1_facts.py --runs 423 426` (settles O4 and the two I/O questions), then `scripts/w4_acceptance.py --run 423 --detector jf1|jf2 --workers 36` |
 | 3 | Lit-frame selection | LITFRM source/keys from `lsxfel`; compare with `XrayPulses` counts per train |
 | 4 | AGIPD geometry source of truth | **Beam centre wired, not settled.** `agipd_saxs` now applies the agreed `(607.46, 672.08)` via `set_pixel_corners(to_distortion_array())` + `setFit2D`, paired with `geom_latest.geom`. That pairing merges the r488 fcc doublet (0.584 + 0.633 → 0.610 nm⁻¹), so it is the pairing that needs confirming, not the code. Note the old pipeline and `extra_speckle.Setup` agree with each other because they share this construction — and `Setup` with `geom=None` silently builds from motor encoders (`geometry_from_encoders`, bare `except:`, falls back to hardcoded quad positions), so it may not be the same geometry at all. Decisive test: `integrate2d` and check whether I(q,χ) on the 0.633 nm⁻¹ ring is flat in χ or sinusoidal — amplitude and phase give the displacement and its direction. Then resolve the encoder source (absent in r0500) and CrystFEL file vs `geom.offset()` |
 | 5 | Polarisation correction | Confirm detector-frame ↔ lab-horizontal orientation and factor with MID; ≤ 5.4e-4 effect at q_max |

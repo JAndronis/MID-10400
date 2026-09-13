@@ -14,84 +14,19 @@ reader later.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
 
+# Re-exported: the row model is detector-agnostic and now lives in
+# ``analysis.common.plan``, but the SAXS package and its tests name it here.
+from analysis.common.plan import Block, RunPlan, TrainRecord, build_blocks
 from analysis.saxs.config import AgipdSaxsConfig
 from analysis.saxs.status import FrameStatus
 
 __all__ = ["Block", "RunPlan", "TrainRecord", "build_plan", "run_checks"]
 
 log = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True, slots=True)
-class TrainRecord:
-    """One train's place in the flat frame table."""
-
-    train_id: int
-    n_frames: int
-    first_row: int
-    status: FrameStatus
-
-
-@dataclass(frozen=True, slots=True)
-class Block:
-    """A unit of scheduling, ledger and resume — not a unit of memory."""
-
-    index: int
-    train_ids: tuple[int, ...]
-    expected_frames: tuple[int, ...]
-    first_rows: tuple[int, ...]
-
-    @property
-    def n_frames(self) -> int:
-        return sum(self.expected_frames)
-
-    def rows(self) -> np.ndarray:
-        """Every output row this block owns, in train order."""
-        return np.concatenate(
-            [
-                np.arange(first, first + count, dtype=np.int64)
-                for first, count in zip(
-                    self.first_rows, self.expected_frames, strict=True
-                )
-            ]
-        )
-
-    def frames_for(self, train_id: int) -> tuple[int, int]:
-        """``(first_row, n_frames)`` for one train of this block."""
-        index = self.train_ids.index(train_id)
-        return self.first_rows[index], self.expected_frames[index]
-
-
-@dataclass(frozen=True, slots=True)
-class RunPlan:
-    """Everything the workers and the writer need to address rows by label."""
-
-    trains: tuple[TrainRecord, ...]
-    blocks: tuple[Block, ...]
-    n_frames: int
-    detector_name: str
-    checks: dict[str, Any] = field(default_factory=dict)
-
-    @property
-    def train_ids(self) -> np.ndarray:
-        return np.array([t.train_id for t in self.trains], dtype=np.uint64)
-
-    def record(self, train_id: int) -> TrainRecord:
-        for train in self.trains:
-            if train.train_id == train_id:
-                return train
-        raise KeyError(f"train {train_id} is not in the plan")
-
-    def status_counts(self) -> dict[str, int]:
-        counts: dict[str, int] = {}
-        for train in self.trains:
-            counts[train.status.name] = counts.get(train.status.name, 0) + 1
-        return counts
 
 
 def _open_detector(cfg: AgipdSaxsConfig, dc: Any):
@@ -182,7 +117,7 @@ def build_plan(cfg: AgipdSaxsConfig, dc: Any = None, control_dc: Any = None) -> 
     if control_dc is None:
         control_dc = _control_or_none(cfg) if opened_here else dc
 
-    blocks = _build_blocks(records, cfg.trains_per_block)
+    blocks = build_blocks(records, cfg.trains_per_block)
     n_frames = int(counts.sum())
     log.info(
         "run %d: %d trains, %d frames, %d blocks",
@@ -226,38 +161,6 @@ def _modules_present(dc: Any, det: Any) -> dict[int, int]:
     )
     present = (per_module > 0).sum(axis=1)
     return {int(tid): int(value) for tid, value in present.items()}
-
-
-def _build_blocks(records: list[TrainRecord], trains_per_block: int) -> list[Block]:
-    """Group *consecutive* OK trains into blocks of at most ``trains_per_block``.
-
-    A non-OK train ends the current run of consecutive trains, so a block never
-    straddles a gap and a block's rows are always contiguous.
-    """
-    blocks: list[Block] = []
-    current: list[TrainRecord] = []
-    runs: list[list[TrainRecord]] = []
-    for record in records:
-        if record.status is FrameStatus.OK:
-            current.append(record)
-        elif current:
-            runs.append(current)
-            current = []
-    if current:
-        runs.append(current)
-
-    for consecutive in runs:
-        for start in range(0, len(consecutive), trains_per_block):
-            chunk = consecutive[start : start + trains_per_block]
-            blocks.append(
-                Block(
-                    index=len(blocks),
-                    train_ids=tuple(t.train_id for t in chunk),
-                    expected_frames=tuple(t.n_frames for t in chunk),
-                    first_rows=tuple(t.first_row for t in chunk),
-                )
-            )
-    return blocks
 
 
 def run_checks(

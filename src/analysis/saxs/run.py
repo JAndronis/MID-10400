@@ -12,15 +12,15 @@ import logging
 import platform
 import socket
 import time
-from collections.abc import Callable, Iterator
-from concurrent.futures import BrokenExecutor, ProcessPoolExecutor, as_completed
-from contextlib import contextmanager
-from multiprocessing import get_context
+from collections.abc import Callable
+from concurrent.futures import BrokenExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
+# Re-exported: ``default_pool`` is part of this module's documented surface.
+from analysis.common.cpu import default_pool, package_versions, phase
 from analysis.saxs import masks as masks_module
 from analysis.saxs import operator as operator_module
 from analysis.saxs import worker as worker_module
@@ -39,41 +39,6 @@ __all__ = ["REDUCERS", "default_pool", "run_agipd_saxs"]
 REDUCERS = ("pooled", "per_pulse", "none")
 
 log = logging.getLogger(__name__)
-
-
-def default_pool(n_workers: int, **kwargs: Any) -> ProcessPoolExecutor:
-    """The real pool: spawned processes only (context file §3 rule 6)."""
-    return ProcessPoolExecutor(
-        max_workers=n_workers, mp_context=get_context("spawn"), **kwargs
-    )
-
-
-@contextmanager
-def _phase(into: dict[str, float], name: str) -> Iterator[None]:
-    """Time one parent-side setup phase into ``into``.
-
-    Everything before the pool starts is serial, so it is subtracted from the
-    whole run's parallel budget. Without this the only thing the output file
-    says about it is the gap between the wall time and the workers' own
-    timings, which is a number with no explanation attached.
-    """
-    started = time.perf_counter()
-    try:
-        yield
-    finally:
-        into[name] = time.perf_counter() - started
-
-
-def _package_versions() -> dict[str, str]:
-    from importlib.metadata import PackageNotFoundError, version
-
-    found = {}
-    for name in ("numpy", "h5py", "EXtra-data", "EXtra-geom", "euxfel-EXtra", "pyFAI"):
-        try:
-            found[name] = version(name)
-        except PackageNotFoundError:
-            found[name] = "not installed"
-    return found
 
 
 def run_agipd_saxs(
@@ -125,19 +90,19 @@ def run_agipd_saxs(
     work_dir.mkdir(parents=True, exist_ok=True)
 
     setup: dict[str, float] = {}
-    with _phase(setup, "plan"):
+    with phase(setup, "plan"):
         plan = build_plan(cfg, dc=dc)
-    with _phase(setup, "operator"):
+    with phase(setup, "operator"):
         if geometry is None:
             geometry = operator_module.geometry_from_config(cfg)
         op, ai = operator_module.build_operator(geometry, cfg)
-    with _phase(setup, "static_mask"):
+    with phase(setup, "static_mask"):
         static = masks_module.build_static_bad(cfg)
-    with _phase(setup, "base_masks"):
+    with phase(setup, "base_masks"):
         base_masks, sampled = _build_base_masks(cfg, plan, op, static, dc)
-    with _phase(setup, "selftest"):
+    with phase(setup, "selftest"):
         _run_selftest(cfg, plan, op, ai, base_masks, dc)
-    with _phase(setup, "save_operator_and_masks"):
+    with phase(setup, "save_operator_and_masks"):
         operator_path = operator_module.save_operator(op, work_dir / "operator.npz")
         masks_path = masks_module.save_masks(base_masks, work_dir / "masks.npz")
     paths = worker_module.WorkerPaths(
@@ -199,7 +164,7 @@ def run_agipd_saxs(
                 "n_blocks": len(plan.blocks),
                 "started_at": started_at,
                 "wall_s": time.perf_counter() - started,
-                "package_versions": _package_versions(),
+                "package_versions": package_versions(),
                 "operator_sha256": op.sha256,
                 "masks_sha256": base_masks.sha256,
                 "static_mask_sha256": static.sha256,

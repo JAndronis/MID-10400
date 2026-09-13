@@ -76,13 +76,25 @@ schema as the AGIPD file. The two detectors have different geometries, different
 different q ranges and different orientations; a shared file would need a detector axis on every
 dataset and a per-detector operator, for no gain. Combining happens **only at the plot** (§6 O5).
 
-**D3 — Error model: `Var(x) = σ_read² + E·x`, in keV².** `Σc²·x` is the Poisson variance of
-*integer photon counts*; on keV-valued data with a 45 % negative tail it is not a variance at all
-and can go negative. For a pixel holding `x` keV of deposited energy from `E`-keV photons the
-photon count is `x/E`, whose Poisson variance is `x/E`, which in keV² is `E·x`; the readout term
-adds `σ_read² ≈ 0.10 keV²`. Pass this per-pixel array to pyFAI as `variance=` — never
+**D3 — Error model: `Var(x) = σ_read² + E·x`, in keV², stored unclamped.** `Σc²·x` is the Poisson
+variance of *integer photon counts*; on keV-valued data with a 45 % negative tail it is not a
+variance at all and can go negative. For a pixel holding `x` keV of deposited energy from `E`-keV
+photons the photon count is `x/E`, whose Poisson variance is `x/E`, which in keV² is `E·x`; the
+readout term adds `σ_read² ≈ 0.10 keV²`. Pass this per-pixel array to pyFAI as `variance=` — never
 `ErrorModel.POISSON` (CLAUDE.md pitfall 2). **Confirm `E` and σ_read per run** rather than
-hardcoding this train's numbers.
+hardcoding this train's numbers: `cells.CellAccumulator` measures σ_read from the dark cells of the
+sampled trains and recovers 0.3230 / 0.3175 keV on r0423.
+
+*Amended 2026-09-13, measured.* This expression is **negative for 23–26 % of kept pixels** (x
+reaches −1.7 keV on r0423), and integrated it leaves **5 of 4000 occupied per-frame bins** with
+`sum_variance ≤ 0` on jf1, none on jf2. Clamping the Poisson term at `max(x, 0)` removes every
+negative bin but biases the noise floor upward on each negative-noise pixel, and **that bias does
+not cancel on pooling** while the unbiased form's negatives do. So the sums are **stored
+unclamped** — the same "store sufficient statistics, decide post hoc" rule as AGIPD §9 — and the
+per-frame negative bins are counted into `/frames/n_negative_variance_bins`, where the fact stays
+visible. `common.writer.pooled_per_train` gives σ = 0 for any bin whose *pooled* variance is still
+non-positive and counts those in `attrs["negative_variance_bins"]`, rather than rooting a negative
+number.
 
 **D4 — Lit-cell selection is mandatory, and it comes from the data.** Cells 8–15 hold no photons
 at all (0.00 % of pixels above half a photon, against 42–49 % in cells 0–7). Integrating all 16
@@ -97,10 +109,33 @@ what it exists to supply for AGIPD. The `.edf` is a native pyFAI mask and shares
 so it is loaded and used as-is — `fabio.open(path).data != 0` — with its sha256 in `config_hash`
 the way `pixel_mask_file` is for AGIPD.
 
-Combine it with the per-frame `data.mask` and pass the union to `integrate1d(mask=)` per frame;
-do **not** put it on `detector.mask` instead. A detector-level mask is static, and the per-frame
-bits have to join it anyway, so one union at the call site keeps a single code path and keeps the
-denominator exact per frame (AGIPD §6.4's reason, unchanged).
+~~Combine it with the per-frame `data.mask` and pass the union to `integrate1d(mask=)` per frame.~~
+
+**D5′ — Amended 2026-09-13, measured. The per-frame mask is a NaN, not a `mask=` argument.**
+pyFAI keys its cached sparse matrix on a checksum of the mask, so a mask that changes per frame
+rebuilds the full-split CSC matrix *every frame* — its own docstring calls that "a very time
+consuming operation" (`pyFAI/integrator/common.py`, `setup_sparse_integrator`). Measured on r0423:
+**16.8 ms/frame**.
+
+Build the engine **once** with the `.edf` static mask, and carry the per-frame `data.mask` as
+**NaN in the data and the variance arrays**. pyFAI's preprocessing drops a non-finite pixel from
+the numerator *and* the normalisation, which is exactly the exact-denominator property AGIPD has to
+reconstruct sparsely. Measured: **bit-identical** sums — max relative difference `0.0e+00` on
+`sum_signal`, `sum_normalization` and `sum_variance`, over all 500 bins, on **both** detectors — at
+**2.3–2.9 ms/frame** with a single cached engine.
+
+The option exists here and not for AGIPD because JUNGFRAU frames are `float32`. AGIPD's `int16`
+cannot carry NaN, which is precisely what forced the sparse denominator correction there. The
+consequence is that the WAXS pass needs **no gather kernel at all**: `analysis.saxs.sparse` stays
+where it is, and `waxs/masks.py` has no per-cell base mask to build.
+
+Because the whole design rests on that equivalence, `waxs/selftest.py` gates it on real frames —
+the NaN path against a reference that *does* pass the union to `integrate1d(mask=)` — so a change
+in how pyFAI preprocesses non-finite values cannot pass silently. That replaces the AGIPD §6.6
+gate, which would be dense-vs-dense here and prove nothing (§4).
+
+A NaN already present in `data.adc` would be indistinguishable from that sentinel, which is why
+D6's check rejects a non-finite value on any pixel the static mask keeps.
 
 **D6 — A value-range data check, because `data.mask` is not sufficient.** jf2 carries 15 pixels
 reaching ±1.8e5 keV — some 20 000 photons where the lit-cell mean is 5.3 — in **every** memory
@@ -117,22 +152,31 @@ counts — is wrong here in both halves (§2), so this replaces it rather than a
 
 ---
 
-## 4. What is inherited from `analysis.saxs` unchanged
+## 4. The shared layer, and what is JUNGFRAU's own
 
-Verified against the installed source, not assumed.
+*Rewritten 2026-09-13: the detector-agnostic parts were moved out of
+`analysis.saxs` into `analysis.common` rather than imported across from the SAXS package. The
+`analysis.saxs.*` modules keep re-export shims, so the whole AGIPD test suite passes unedited and
+`AgipdSaxsConfig.config_hash()` is byte-identical — no existing `agipd_saxs.h5` is invalidated.*
 
-| Module | Verdict |
+| `analysis.common` module | Contents | Notes |
+|---|---|---|
+| `status.py` | `FrameStatus`, `DataCheckFailed` | As-is. Codes are detector-independent; only the exception's docstring generalised off `image.data` |
+| `cpu.py` | `physical_cores`, `file_sha256`, `THREAD_ENV`, `set_thread_env`, `default_pool`, `phase`, `package_versions` | Was split across AGIPD's `config`, `worker` and `run` |
+| `plan.py` | `TrainRecord`, `Block`, `RunPlan`, `build_blocks`, `evenly_spaced` | The row model. Each pass keeps its own `build_plan` and `run_checks` |
+| `masks.py` | `MaskSource`, `StaticMask`, `UnexpectedMaskBits`, `bits_to_mask`, `describe_bits`, `frame_bad` | The mask vocabulary and the per-frame union |
+| `writer.py` | `FrameTableWriter`, `ConfigHashMismatch`, `IncompleteRun`, `pooled_per_train`, `as_handle`, `q_centers` | The layout, ledger, resume and label checks. The per-frame column schema is class attributes, so each pass declares its own |
+
+| `analysis.waxs` module | Verdict |
 |---|---|
-| `status.py` | **As-is.** Codes and the data-check exception are detector-independent |
-| `selftest.py` | **As-is.** Works off `op.shape` / `op.omega` and touches zero config fields. Under D1 it becomes a dense-vs-dense identity check, so weaken or retire the gate rather than pretend it proves something |
-| `writer.py` | **Type change only.** Touches exactly five config fields — `config_hash`, `method`, `npt`, `output_file`, `overwrite` — all detector-agnostic. Take a `Protocol` instead of the concrete `AgipdSaxsConfig`; the ledger, resume, label checks and both reducers of §9 carry over |
-| `operator.py` | **Mostly.** The body only calls `to_pyfai_detector()` / `to_distortion_array()`. Under §5 R4 the JUNGFRAU path loads a PONI instead, so `build_operator` gains a branch; the hashing, save/load and the `("full","csc","cython")` assertion are unchanged |
-| `sparse.py` | **Not used** (D1). Left to the AGIPD pass |
-| `plan.py` | **New, same shape.** `frame_counts` and `frames_per_train` are set in `MultimodDetectorBase.__init__`, so they exist on `JUNGFRAU` too and the row model survives; the run checks are AGIPD components and need JUNGFRAU equivalents |
-| `masks.py` | **New, simpler.** No seams (D5), a different bit set, and the per-cell base mask is probably unnecessary — with 16 fixed cells the cell axis is cheap to carry exactly |
-| `worker.py`, `config.py`, `run.py` | **New.** `run.py`'s orchestration shape is reusable; it calls the builders by name |
-
----
+| `config.py` | **New.** `JungfrauWaxsConfig`, one per detector; `config_for(proposal, run, detector)` fills the per-detector PONI and `.edf` paths |
+| `operator.py` | **New, and much smaller than AGIPD's.** No LUT is lifted out: under D5′ pyFAI keeps the matrix and the pass keeps only the q axis, the solid angle, the static mask and the PONI text, hashed together |
+| `masks.py` | **New, simpler.** The `.edf` alone. No seams (D5), no per-cell base mask (D5′ removes the reason for one) |
+| `cells.py` | **New.** Lit-cell selection and the readout-noise measurement, off the same sampled trains |
+| `integrate.py` | **New.** `ErrorModel` and the pure per-frame dense integration. The AGIPD `sparse.py` is not used and not moved |
+| `plan.py` | **New, same shape.** The one thing that does not transfer is the row model: see §5 R6 |
+| `worker.py`, `writer.py`, `run.py`, `damnit.py` | **New**, following the AGIPD shapes |
+| `selftest.py` | **New, and it is not the AGIPD gate.** Dense-vs-dense would be an identity check; this one gates D5′'s NaN equivalence on real frames |
 
 ## 5. Rules that differ from the AGIPD integrator (§3 there)
 
@@ -157,14 +201,61 @@ established, store the cell id and the train id and leave pulse id absent — do
 from position** (CLAUDE.md pitfall 4). The rectangular layout makes position *within* a train
 meaningful (it is the cell index), but the train axis is still addressed by label.
 
+**R6 — `JUNGFRAU.frame_counts` counts entries, not frames.** `JUNGFRAU` is a
+`MultimodDetectorBase`, whose `frame_counts` is the INDEX *entry* count — one per train — while
+each entry holds `_frames_per_entry` memory cells (16 here). `AGIPD1M.frame_counts` counts frames
+directly. So a train's rows are the *lit cells of its single entry*, not its entry count, and
+assuming otherwise is a silent off-by-sixteen. EXtra-data's reader assumes one entry per train
+throughout (`buffer_shape` is `(modules, trains) + entry_shape`), so a train with two entries
+cannot be represented at all and `plan.build_plan` refuses the run rather than reading it wrong.
+
+**R7 — One module per detector.** Each of this experiment's JUNGFRAU-500Ks is a single module with
+its own PONI, its own `.edf` and its own q range, so `plan.open_detector` refuses a multi-module
+selection outright. A consequence for the ledger: `MISSING_MODULES` cannot arise — a train has its
+one module or none, and none is `NO_FRAMES`.
+
+**R8 — No `decompress_threads`.** That argument is `XtdfImageMultimodKeyData`'s, i.e. AGIPD's;
+`MultimodKeyData.ndarray` does not take it, so CLAUDE.md pitfall 3 does not arise on this read
+path. The parent still pins `EXTRA_NUM_THREADS=1` before the pool exists.
+
 ---
 
 ## 6. Open questions
 
-- **O1 — Source names and keys.** Unverified for this proposal. Get them from `lsxfel` on r0423;
-  do not hardcode. `JUNGFRAU._main_data_key` is `data.adc` and `_mask_data_key` is `data.mask`,
-  and `_det_name_pat` matches several MID naming conventions, so `detector_name` will very likely
-  have to be passed explicitly with two JUNGFRAUs present.
+- **O1 — Resolved 2026-09-13 from `lsxfel` on `/gpfs/exfel/d/proc/MID/202601/p010400/r0423`.**
+
+  | | jf1 | jf2 |
+  |---|---|---|
+  | Detector name | `MID_EXP_JF500K1` | `MID_EXP_JF500K2` |
+  | Corrected source | `MID_EXP_JF500K1/CORR/JNGFR01:daqOutput` | `MID_EXP_JF500K2/CORR/JNGFR02:daqOutput` |
+  | Legacy source | `…/DET/JNGFR01:daqOutput` → the CORR one | `…/DET/JNGFR02:daqOutput` → the CORR one |
+  | `first_modno` | 1 | 2 |
+  | Files | `CORR-R0423-JNGFR01-S{seq:05d}.h5`, 6 × 500 trains | `CORR-R0423-JNGFR02-S{seq:05d}.h5`, 6 × 500 trains |
+
+  Keys are `data.adc`, `data.mask` and `data.memoryCell`, as the component's defaults expect.
+
+  Three consequences, each pinned by a test:
+
+  1. **Corrected data uses `/CORR/`.** Since 2026/1 (`_data_is_raw`: *"corrected data always uses
+     /CORR/ in its source names"*), and `_source_corr_pat` matches only that. A mock written with
+     the old `/DET/` names silently takes the raw-name fallback path instead — which is what this
+     one did until the names were known.
+  2. **The legacy `/DET/` alias does not become a second module**, though it easily could look as
+     if it should. It is an `h5py.SoftLink` listed in `METADATA/dataSourceId`, and
+     `DataCollection.instrument_sources` **includes** legacy names — only `detector_sources`
+     subtracts them — so `_source_matches` really does iterate over it. What keeps it out is
+     `_source_corr_pat` matching `/CORR/` alone. If that ever widened, two sources would collapse
+     onto one module number and `MultimodDetectorBase.__init__`'s own assertion would fire.
+  3. **Auto-detection cannot work.** Both names match `_det_name_pat`, so
+     `_find_detector_name` raises *"Multiple detectors found"* against a whole run. `config.py`
+     therefore fills `detector_name` and `first_modno` from the detector rather than leaving them
+     to it, and the filled name enters `config_hash` — which Karabo source a run was integrated
+     from is part of what identifies the result.
+
+  A related trap the config now refuses outright: `dataclasses.replace(cfg, detector="jf2")` keeps
+  jf1's `detector_name`, PONI and mask, and integrating one detector's frames through the other's
+  geometry yields a plausible-looking I(q) and no error anywhere — the AGIPD beam-centre trap
+  (CLAUDE.md pitfall 14) in another guise. Use `config_for(proposal, run, detector)`.
 - **O2 — Resolved 2026-09-13: non-zero = excluded.** `jf1_mask.edf` and `jf2_mask.edf` are native
   **pyFAI** masks written from silx view, so they carry pyFAI's own polarity, which the installed
   source states twice — `integrate1d_ng`: *"array with 0 for valid pixels, all other are masked"*;
@@ -186,43 +277,128 @@ meaningful (it is the cell index), but the train axis is still addressed by labe
   distinct (`module=2`, different sha256). §2 now carries both detectors.
 - **O4 — Is the lit-cell split run-invariant?** Measured on one train of one run. If it varies,
   D4's "fail loudly" becomes the mechanism that catches it, but the config needs to express the
-  expected set per run rather than globally.
-- **O5 — How to combine the two detectors in a plot.** After masking they populate 11.5–23.7 (jf1)
-  and 9.8–18.5 (jf2), so they **overlap over 11.5–18.5 nm⁻¹** — this is not concatenation. Plot as
-  two traces with the overlap visible: it exposes any normalisation mismatch between the detectors
-  instead of hiding it, and the overlap is wide enough to be a genuine cross-check on the two
-  PONIs. Pooling onto a common grid needs the two `N` arrays on the same absolute scale, which is
-  untested and involves different solid-angle coverage and different masks; do that only after the
-  two traces are seen to agree.
-- **O6 — AGIPD ↔ JUNGFRAU q continuity.** AGIPD covers 0.077–1.067 nm⁻¹; JUNGFRAU populates
-  9.8–23.7 after masking. The **gap is 1.07–9.8 nm⁻¹** — wider than the raw detector ranges
-  suggest, and with no overlap to cross-normalise against. Any combined SAXS+WAXS curve is two
-  disconnected pieces with a free relative scale between them. Say so explicitly wherever such a
-  plot is produced, and note the predecessor's fcc peaks at 0.6/0.7/1.0 nm⁻¹ sit in the AGIPD
-  range, not here.
+  expected set per run rather than globally. **`scripts/w1_facts.py` answers this**: run it over
+  r0423 and r0426 and read `o4_lit_cells_by_run` and `o4_lit_cells_invariant` out of its JSON.
+- **O5 — Resolved 2026-09-13: fit a scale factor over the overlap.** After masking the two populate
+  11.5–23.7 (jf1) and 9.8–18.5 (jf2), so they overlap over ~11.5–18.5 nm⁻¹. `analysis.waxs.combine`
+  fits a single multiplicative factor for jf2 against jf1 over that range and merges them into one
+  curve; `damnit.combined_curve` is the DAMNIT-facing form, and the overview draws jf2 on jf1's
+  scale with the factor in the legend.
+
+  The original worry — that pooling needs both `N` arrays on the same absolute scale, which is
+  untested across different solid-angle coverage and different masks — is answered by construction:
+  a *fitted* factor absorbs whatever the relative normalisation is. What it cannot absorb is a
+  difference in **shape**, which is what `reduced_chi2` and `residual_rms` report.
+
+  **Where that cross-check is blind, measured.** A relative error between the two q axes is
+  degenerate with a scale factor whenever the overlap is featureless: for a power law
+  `I(1.05·q) = 1.05⁻²·I(q)` exactly. On a smooth `100/q² + 0.5`, a 5 % q shift leaves χ²ᵣ at 0.22 —
+  invisible. Put a Bragg-like peak in the overlap and the same shift gives χ²ᵣ 776, and 1 % gives
+  77. So this is a real cross-check on the two PONIs **only on a run whose overlap has a feature**:
+  it bites on r0426, not on r0423. A good χ² on r0423 says the two detectors agree in shape, not
+  that either q axis is right.
+
+  Implementation notes: only jf2 is interpolated (jf1 keeps its own bins, so the result is on a real
+  q axis); the fit is weighted least squares through the origin, with a `median`-of-ratios
+  alternative for outlier-heavy data; `combine_files` works off the stored sums, which is the path
+  that gives a meaningful χ² because the per-cell grid carries no errors.
+- **O6 — Closed 2026-09-13 by decision, not by measurement.** AGIPD covers 0.077–1.067 nm⁻¹ and
+  JUNGFRAU populates 9.8–23.7, so the gap is 1.07–9.8 nm⁻¹ with no overlap to cross-normalise
+  against. No combined SAXS+WAXS curve is planned at any point, so the question does not arise and
+  the warning it prompted has been removed from the overview figure. If that ever changes, the
+  constraint is unchanged: two disconnected pieces with a free relative scale between them, and the
+  predecessor's fcc peaks at 0.6/0.7/1.0 nm⁻¹ sit in the AGIPD range, not here.
 
 ---
 
 ## 7. Phases and acceptance
 
-**W1 — data and geometry facts.** Adapt benchmark stages 1 and 7 to JUNGFRAU; confirm O1, O2, O3
-and O4 across several runs, including a crystallised one (r0426). Gate: the §2 table is confirmed
-run-to-run, or amended with what varies.
+**W0 — shared layer. Done 2026-09-13.** The detector-agnostic parts of `analysis.saxs` moved to
+`analysis.common` (§4), with re-export shims left behind. Gate: the whole existing test suite —
+213 passed, 1 skipped — passes with **no test file edited**, and
+`AgipdSaxsConfig(proposal=10400, run=423).config_hash()` is byte-identical
+(`5f589d2a8090d075…`), so no stored `agipd_saxs.h5` is invalidated.
 
-**W2 — operator and error model.** PONI loading with the R4 wavelength assertion; dense
-integration with an explicit `variance=`; the D3 constants measured per run rather than
-hardcoded. Gate: a synthetic frame with known Poisson statistics recovers its input variance, and
-the wavelength assertion fires on a deliberately mismatched PONI.
+**W1 — data and geometry facts. Partly done; the rest needs Maxwell.**
 
-**W3 — masks, plan, worker, writer.** Static `.edf` ∪ `data.mask`, lit-cell selection with the D4
-loud failure, the row model over the rectangular cell axis, the AGIPD writer behind its Protocol.
-Gate: the AGIPD P3 test list (dropped train, missing modules, zero-frame train, worker error,
-killed worker, resume, config-hash mismatch) on a JUNGFRAU mock run.
+- **O1 — done 2026-09-13.** Source names, module numbers, file naming and the legacy-alias
+  behaviour are settled and wired into `config.DETECTOR_NAMES` / `DETECTOR_MODNOS`; the mock run now
+  reproduces the real `/CORR/` layout including the soft-linked `/DET/` alias.
 
-**W4 — on-node acceptance, r0423.** Both detectors, full run. Gate: pooled I(q) matches a dense
-pyFAI reference; every non-OK status accounted for; the lit-cell set matches the config; timing
-recorded. **Budget under load, not one core at a time** — see the AGIPD P4 note, where every
-single-core figure came in 1.3–1.6× optimistic.
+Remaining, all needing the cluster. **`scripts/w1_facts.py` answers every one of them in a single
+pass** and writes its findings as JSON beside itself:
 
-**W5 — DAMNIT integration.** Two variables backed by `analysis.waxs.damnit`, plus the combined
-overview of O5.
+    python scripts/w1_facts.py --runs 423 426 --detectors jf1 jf2
+
+- Confirm `usr/geometry/jf{1,2}.poni` and `usr/masks/jf{1,2}.edf` exist and that the `.edf` sha256s
+  match the `data/jf{1,2}_mask.edf` copies used here (those carry a `_mask` suffix the cluster ones
+  do not).
+- **O4**, re-check the lit-cell set and the bit set on a crystallised run (r0426). D4's loud failure
+  is the mechanism that catches a change, but the config has to be able to express a per-run set.
+- **Is `data.mask` train-invariant?** It is uint32 and the same size as the data, so reading it
+  doubles the I/O (≈ 200 GB per detector per run). If the dynamic bits never change between trains,
+  one read per run replaces 3000. Measure; do not assume.
+- **Does `roi` save I/O?** `MultimodKeyData.ndarray(roi=(np.s_[0:8],))` would read only the lit
+  cells — note the *tuple*, because EXtra-data concatenates it onto an index expression and a bare
+  slice raises `TypeError` — but it slices the *array* axis while the lit set is defined by
+  `data.memoryCell` values, and whether it saves anything depends on the proc chunk layout. v1
+  reads all sixteen and selects in memory (worker docstring), which is correct and twice the I/O.
+  `scripts/w1_facts.py` times both.
+
+**W2 — operator and error model. Done 2026-09-13**, on the real r0423 train of **both** detectors.
+
+| Gate | Verdict |
+|---|---|
+| PONI load, shape and wavelength assertion | pass; fires on a PONI refined at 9.000 keV |
+| Method resolution `("full","csc","cython")` | pass, asserted on the probe |
+| σ_read measured from the dark cells | 0.3230 (jf1) / 0.3175 (jf2) keV — the §2 numbers |
+| Lit cells measured from the data | (0…7) on both; 42–53 % against ≤ 0.08 % |
+| Poisson recovery on a synthetic frame | model mean variance within 0.04 % of the true one |
+| **NaN equivalence (D5′)** | **max rel S, N, V all exactly `0.0e+00`**, 8 frames per detector, all 500 bins, one cached engine |
+| Per-frame cost | 2.3–2.9 ms against 16.8 ms for the per-frame-mask path |
+
+The q values in that run are **not** real — the PONI files are on GPFS, so a synthetic geometry was
+used. Nothing gated above depends on where the beam centre is.
+
+**W3 — masks, plan, worker, writer. Done 2026-09-13**, on a mock JUNGFRAU run built with
+`extra_data.tests.mockdata.jungfrau.JUNGFRAUModule` (which already writes the right dtypes, so
+unlike the AGIPD mock the images need no recasting). Covered: dropped train, zero-entry train,
+multi-entry refusal, block never straddling a gap, repeated `memoryCell` → `LABEL_MISMATCH`,
+`DATA_CHECK_FAILED` on an extreme pixel, worker exception → `WORKER_ERROR`, broken pool →
+`NOT_PROCESSED` and raise, resume completing only missing blocks, config-hash mismatch refused, a
+real spawned pool, the D4 loud failure end to end, and `ReadNoiseUnavailable` when a run has no
+dark cell. Invariants: rows written by label, no NaN anywhere in the file.
+
+**W4 — on-node acceptance, r0423. Script written; the run needs Maxwell.**
+`scripts/w4_acceptance.py`, one detector at a time, verdict as JSON beside itself:
+
+    python scripts/w4_acceptance.py --run 423 --detector jf1 --workers 36
+    python scripts/w4_acceptance.py --run 423 --detector jf2 --workers 36
+
+| Gate | Asks |
+|---|---|
+| 0 configuration | the whole run, on the workers claimed, at this config hash, with the configured lit set? |
+| A self-test | did the NaN path equal the per-frame-mask reference on real frames? (read back from provenance) |
+| B reference | does an **independent** integration reproduce what was stored? |
+| C timing | wall time, ms/frame/core per stage, parallel efficiency, serial fraction |
+| D ledger | every frame accounted for, expected cells and bits, negative-variance bins counted |
+
+Gate B is the one that earns its keep: it re-integrates a few fully-OK trains the slow way —
+`integrate1d(mask = static | dynamic)` per frame — and compares against what the *writer stored*,
+so the row-to-train map, the `f4` storage and the whole chain are inside the comparison rather than
+just the kernel. Its ability to fail is tested against a deliberately corrupted stored row.
+
+Only the wall time is a verdict; a stage over `BUDGET_MS` is reported, not failed. **Budget under
+load, not one core at a time** — the AGIPD P4 found every single-core figure 1.3–1.6× optimistic,
+and the 2.3–2.9 ms/frame above was measured on one idle core of a laptop, which is why `BUDGET_MS`
+here is set well above it.
+
+**W5 — DAMNIT. Implemented 2026-09-13; not yet run on the cluster.** Three variables in
+`src/amore/context.py`, all thin wrappers over `analysis.waxs.damnit`: `jungfrau_waxs_jf1`,
+`jungfrau_waxs_jf2` (each returning the `(trainId, cellId, q)` grid — 48 MB at 3000 trains × 8 cells
+× npt 500, against 0.93 GB for the AGIPD per-pulse grid) and `jungfrau_waxs_overview`, which draws
+the two as **two traces with their overlap shaded** (§6 O5) and states the AGIPD gap on the figure
+(§6 O6). `tests/test_context.py` now checks every integration wrapper's body is an import and a
+call, by AST rather than by line count.
+
+*Remaining:* run them on r0423 and r0426. Needs the cluster and the real PONI files.
