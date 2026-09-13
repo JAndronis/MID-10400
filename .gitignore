@@ -30,6 +30,7 @@ user_processed/
 *.npz
 *.dat
 *.nc
+data/
 
 # OS cruft
 .DS_Store

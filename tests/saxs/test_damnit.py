@@ -52,7 +52,8 @@ def test_per_pulse_has_the_dims_p5_asks_for(finished):
     pipeline, output = finished
     grid = per_pulse(output)
 
-    assert grid["intensity"].dims == ("trainId", "pulseId", "q")
+    assert grid.dims == ("trainId", "pulseId", "q")
+    assert grid.name == "intensity"
     assert grid["n_frames"].dims == ("trainId", "pulseId")
     with h5py.File(output) as handle:
         assert np.array_equal(grid["trainId"].values, handle["trains/trainId"][:])
@@ -81,9 +82,7 @@ def test_every_frame_lands_on_the_slot_its_labels_name(finished):
 
             t = trains.index(frames["trainId"][row])
             p = pulses.index(frames["reader_pulseId"][row])
-            assert np.allclose(
-                grid["intensity"].values[t, p], expected, rtol=1e-6, atol=0
-            )
+            assert np.allclose(grid.values[t, p], expected, rtol=1e-6, atol=0)
 
 
 def test_a_slot_with_no_frame_is_zero_not_nan(finished):
@@ -95,11 +94,11 @@ def test_a_slot_with_no_frame_is_zero_not_nan(finished):
         pulse = int(handle["frames/reader_pulseId"][0])
 
     grid = per_pulse(output)
-    assert np.isfinite(grid["intensity"].values).all()
+    assert np.isfinite(grid.values).all()
     t = list(grid["trainId"].values).index(train)
     p = list(grid["pulseId"].values).index(pulse)
     assert grid["n_frames"].values[t, p] == 0
-    assert not grid["intensity"].values[t, p].any()
+    assert not grid.values[t, p].any()
     assert json.loads(grid.attrs["unplaced"]) == {FrameStatus.DATA_CHECK_FAILED.name: 1}
 
 
@@ -139,8 +138,8 @@ def test_per_pulse_refuses_an_unknown_train(finished):
 
 def test_per_pulse_dtype_is_settable(finished):
     _, output = finished
-    assert per_pulse(output)["intensity"].dtype == np.float32
-    assert per_pulse(output, dtype=np.float64)["intensity"].dtype == np.float64
+    assert per_pulse(output).dtype == np.float32
+    assert per_pulse(output, dtype=np.float64).dtype == np.float64
 
 
 def test_chunking_does_not_change_the_grid(finished):
@@ -148,7 +147,7 @@ def test_chunking_does_not_change_the_grid(finished):
     _, output = finished
     whole = per_pulse(output, chunk_rows=10**9)
     split = per_pulse(output, chunk_rows=3)
-    assert np.array_equal(whole["intensity"].values, split["intensity"].values)
+    assert np.array_equal(whole.values, split.values)
     assert np.array_equal(whole["n_frames"].values, split["n_frames"].values)
 
 
@@ -244,28 +243,38 @@ def _synthetic_grid(n_trains: int = 4, n_pulses: int = 6, npt: int = 5):
 
     rng = np.random.default_rng(0)
     intensity = (rng.random((n_trains, n_pulses, npt)) + 1.0).astype(np.float32)
-    return xr.Dataset(
-        {
-            "intensity": (("trainId", "pulseId", "q"), intensity),
+    return xr.DataArray(
+        intensity,
+        dims=("trainId", "pulseId", "q"),
+        coords={
+            "trainId": np.arange(n_trains, dtype=np.uint64),
+            "pulseId": np.arange(n_pulses, dtype=np.uint64),
+            "q": np.linspace(0.1, 1.0, npt),
             "n_frames": (
                 ("trainId", "pulseId"),
                 np.ones((n_trains, n_pulses), dtype=np.uint8),
             ),
         },
-        coords={
-            "trainId": np.arange(n_trains, dtype=np.uint64),
-            "pulseId": np.arange(n_pulses, dtype=np.uint64),
-            "q": np.linspace(0.1, 1.0, npt),
-        },
+        name="intensity",
     )
+
+
+def _axes(fig):
+    """``(plot axes, colour-bar axes)`` — matplotlib counts both in ``axes``."""
+    bars = [ax for ax in fig.axes if ax.get_label() == "<colorbar>"]
+    return [ax for ax in fig.axes if ax not in bars], bars
 
 
 def test_overview_figure_builds_from_the_grid_alone(finished):
     _, output = finished
     fig = damnit.overview_figure(damnit.per_pulse_from_file(output))
-    assert len(fig.axes) == 3
+    plots, bars = _axes(fig)
+    assert len(plots) == 3
     assert fig.axes[0].get_yscale() == "log"
     assert "nm" in fig.axes[0].get_xlabel()
+
+    # Both maps carry a colour bar, as the pipeline this replaces did.
+    assert len(bars) == 2
 
 
 def test_overview_averages_only_the_slots_that_hold_a_frame(finished):
@@ -275,11 +284,11 @@ def test_overview_averages_only_the_slots_that_hold_a_frame(finished):
     is exact instead of being whatever the mock happens to contain.
     """
     grid = _synthetic_grid(n_trains=4, n_pulses=6, npt=5)
-    full = grid["intensity"].values.copy()
+    full = grid.values.copy()
 
     # Half the pulses never held a frame: zeros, with n_frames saying so.
     grid["n_frames"].values[:, 1::2] = 0
-    grid["intensity"].values[:, 1::2] = 0.0
+    grid.values[:, 1::2] = 0.0
 
     curve = damnit.overview_figure(grid).axes[0].lines[0].get_ydata()
     kept = full[:, 0::2].reshape(-1, full.shape[-1]).mean(axis=0)
@@ -294,18 +303,27 @@ def test_overview_survives_a_run_with_nothing_integrated(finished):
     _, output = finished
     grid = damnit.per_pulse_from_file(output)
     grid["n_frames"].values[:] = 0
-    grid["intensity"].values[:] = 0.0
-    assert len(damnit.overview_figure(grid).axes) == 3
+    grid.values[:] = 0.0
+
+    plots, bars = _axes(damnit.overview_figure(grid))
+    assert len(plots) == 3
+    # Nothing to scale a colour bar against, so the maps say so instead.
+    assert bars == []
+    assert all(
+        "no integrated frames" in [text.get_text() for text in ax.texts]
+        for ax in plots[1:]
+    )
 
 
 # ── DAMNIT storage ────────────────────────────────────────────────────────────
 def test_the_grid_survives_damnits_writer(finished, tmp_path):
-    """DAMNIT stores a Dataset as netCDF; uint64 trainIds must come back."""
+    """DAMNIT stores a DataArray as netCDF; uint64 trainIds must come back."""
     damnit_pkg = pytest.importorskip("damnit")
     support = Path(damnit_pkg.__file__).parent / "ctxsupport"
     sys.path.insert(0, str(support))
     try:
-        from damnit_writing import save_dataset_netcdf
+        from damnit_ctx import Cell
+        from damnit_writing import save_dataarray_netcdf
     finally:
         sys.path.remove(str(support))
 
@@ -315,9 +333,15 @@ def test_the_grid_survives_damnits_writer(finished, tmp_path):
     grid = damnit.per_pulse_from_file(output)
     stored = tmp_path / "damnit.h5"
     with h5py.File(stored, "w") as handle:
-        save_dataset_netcdf(handle, "agipd_saxs", grid)
+        save_dataarray_netcdf(handle, "agipd_saxs", grid)
 
-    back = xr.open_dataset(stored, group="agipd_saxs", engine="h5netcdf")
+    back = xr.open_dataarray(stored, group="agipd_saxs", engine="h5netcdf")
     assert back["trainId"].dtype == np.uint64
-    assert back["intensity"].dims == ("trainId", "pulseId", "q")
-    assert np.array_equal(back["intensity"].values, grid["intensity"].values)
+    assert back.dims == ("trainId", "pulseId", "q")
+    assert np.array_equal(back.values, grid.values)
+    # n_frames rides along as a coordinate, so it survives the round trip too.
+    assert np.array_equal(back["n_frames"].values, grid["n_frames"].values)
+
+    # The table cell must read like the old pipeline's, not "Dataset (930MB)".
+    summary = Cell(grid).get_summary("agipd_saxs")
+    assert summary == f"{grid.dtype}: {grid.shape}"

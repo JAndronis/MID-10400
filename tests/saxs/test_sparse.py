@@ -72,6 +72,7 @@ def tiny_operator() -> SparseOperator:
         method=METHOD,
         sdd_m=7.531,
         wavelength_m=1.3715e-10,
+        beam_center=None,
         sha256="tiny",
     )
 

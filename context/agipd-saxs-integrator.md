@@ -66,9 +66,19 @@ These add to the general pitfalls in CLAUDE.md.
    initializer runs only after the child has imported the worker module — and therefore numpy —
    so setting the variables there is too late for thread pools that already exist. Workers
    re-assert them anyway, which only helps libraries imported lazily.
-4. **Geometry.** The geometry object is the single source.
-   - Use `AzimuthalIntegrator(detector=geom.to_pyfai_detector(), dist=sdd, wavelength=λ)`, PONI = 0.
-   - No `setFit2D`, no second `set_pixel_corners`, no PONI files.
+4. **Geometry.** The geometry object is the single source of detector *positions*. Where the beam
+   sits on it is `cfg.beam_center`, and the two conventions are not interchangeable:
+   - `cfg.beam_center is None` → `AzimuthalIntegrator(detector=geom.to_pyfai_detector(), dist=sdd,
+     wavelength=λ)`, PONI = 0 at the geometry origin.
+   - `cfg.beam_center == (px, py)` → `detector.set_pixel_corners(geom.to_distortion_array())` and
+     then `ai.setFit2D(sdd_mm, px, py)`. **Both steps or neither.** The two corner arrays have
+     different origins — the distortion array's is the corner of the assembled bounding box, so its
+     coordinates are all positive; `to_pyfai_detector()`'s is the geometry origin — so `setFit2D`
+     on the unreplaced array places the beam where neither convention means. This is what
+     `extra_speckle.setup.configuration.ConfigSAXS` does and what the agreed `(px, py)` were
+     derived against; `test_operator.py` cross-checks our construction against it.
+   - `setFit2D` also sets `ai.dist`, so `sdd` goes through it in mm rather than being set twice.
+   - Still no PONI files.
 5. **Identity.** Train, pulse and cell identity come from reader coordinates. Rows are written by
    label.
 6. **Processes.** Spawn only. Worker functions live in `<pkg>`.
@@ -125,7 +135,9 @@ input file.
 | `proposal`, `run` | — | from DAMNIT `meta#proposal`, `meta#run_number` |
 | `detector_name` | `None` | auto-detect via `AGIPD1M`; record the detected name |
 | `geometry_file` | `.../usr/geometry/geom_latest.geom` | sha256 recorded; assert corner z spread < 1 mm so distance is not applied twice |
-| `sdd_m` | 7.531 | |
+| `sdd_m` | 7.531 | the agreed beam centre came with 7531.5962 mm, 0.6 mm / 0.008 % away; unresolved |
+| `beam_center_px` | 607.4598195630211 | Fit2D `centerX`, in the `to_distortion_array()` frame — see §3 rule 4 |
+| `beam_center_py` | 672.076693118667 | Fit2D `centerY`, same frame. Set with `px` or not at all; both `None` means PONI = 0 |
 | `photon_energy_kev` | 9.04 | compare with `XGM(run).photon_energy_by_train()`; fail if not constant or > 0.1 % apart |
 | `npt` | 500 | unit `q_nm^-1`; q range from geometry, recorded |
 | `mask_bits` | `0xFFFFFFFF` | every bit present in these files marks unusable pixels |
@@ -153,7 +165,14 @@ sorted order.
 
 ```
 geom  = AGIPD_1MGeometry.from_crystfel_geom(cfg.geometry_file)
-ai    = AzimuthalIntegrator(detector=geom.to_pyfai_detector(), dist=cfg.sdd_m, wavelength=λ)
+det   = geom.to_pyfai_detector()
+if cfg.beam_center is None:                        # PONI = 0 at the geometry origin
+    ai = AzimuthalIntegrator(detector=det, dist=cfg.sdd_m, wavelength=λ)
+else:                                              # §3 rule 4: both steps together
+    det.set_pixel_corners(geom.to_distortion_array())
+    ai = AzimuthalIntegrator(detector=det, wavelength=λ)
+    ai.setFit2D(cfg.sdd_m * 1e3, *cfg.beam_center) # also sets ai.dist
+    assert isclose(ai.dist, cfg.sdd_m)
 probe = ai.integrate1d(ones(SHAPE, f32), cfg.npt, method=("full","csc","cython"), unit="q_nm^-1")
 assert resolved(probe.method) == ("full","csc","cython")
 eng   = ai.engines[probe.method].engine
@@ -374,8 +393,14 @@ analysis needs no plan object:
 
 | Reducer | Returns |
 |---|---|
-| `writer.pooled_per_train(file)` | `intensity`, `sigma` (trainId, q) and `n_frames` (trainId) |
-| `writer.per_pulse(file)` | `intensity` (trainId, pulseId, q) and `n_frames` (trainId, pulseId) |
+| `writer.pooled_per_train(file)` | a Dataset: `intensity`, `sigma` (trainId, q) and `n_frames` (trainId) |
+| `writer.per_pulse(file)` | a **DataArray** `intensity` (trainId, pulseId, q), with `n_frames` (trainId, pulseId) as a non-dimension coordinate |
+
+`per_pulse` returns a DataArray, not a Dataset, for two reasons that both come from DAMNIT: it is
+what `analysis_helpers.integrate_run` returned, and DAMNIT renders a 3-D DataArray in the table as
+`float32: (3000, 155, 500)` while a Dataset shows only `Dataset (930.49MB)`. Carrying `n_frames`
+as a coordinate keeps the companion array without turning it into a Dataset; it survives the
+netCDF round trip DAMNIT stores it through.
 
 `per_pulse` places each frame by its *stored* trainId and pulseId, never by its row position, so a
 dropped or short train cannot slide frames onto the wrong train (CLAUDE.md pitfall 4). Only `OK`
@@ -492,14 +517,15 @@ nominal photon energy disagrees with the configured one — see CLAUDE.md open t
 - Cluster variable on r0423 and r0426 via `context_python`.
 - Returns (trainId, q) pooled I(q); fails loudly if incomplete.
 
-*Implemented.* The stored variable is the **(trainId, pulseId, q)** grid rather than the pooled
-per-train view: per-pulse I(q) is what the old `agipd_saxs` provided and what the overview and any
+*Implemented.* The stored variable is the **(trainId, pulseId, q)** DataArray rather than the
+pooled per-train view: per-pulse I(q) is what the old `agipd_saxs` provided and what the overview and any
 per-pulse analysis need, it costs 0.93 GB against that variable's 3.7 GB, and the pooled view is
 one call away from the same file. Failing loudly needs no code of its own — `run_agipd_saxs`
 raises `IncompleteRun` unless `allow_incomplete`, and the wrapper does not catch it.
 
 `analysis/saxs/damnit.py` holds `config_for`, `agipd_saxs`, the two file readers and
-`overview_figure`; `src/amore/context.py` holds only the two decorated functions of §9.
+`overview_figure`, which draws the two maps with `extra.utils.imshow2` — the helper the old
+overview used, so the colour bars and the coordinate-labelled axes match it; `src/amore/context.py` holds only the two decorated functions of §9.
 `agipd_saxs` and `agipd_iq_overview` keep their names and their DAMNIT columns — this supersedes
 the old implementation rather than sitting beside it, so nothing downstream has to be repointed.
 What the column *holds* does change: I(q) in nm⁻¹ and undivided, where `analysis_helpers.

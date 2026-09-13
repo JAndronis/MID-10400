@@ -40,6 +40,12 @@ def cfg() -> AgipdSaxsConfig:
     The real defaults are GPFS paths, so every input file is set to ``None``
     here: the tests build their geometry and masks in-process, and
     ``config_hash`` must not try to sha256 a file that is not mounted.
+
+    The beam centre goes the same way. It was refined against the beamtime's
+    own geometry, and these quad positions are EXtra-geom's test ones, whose
+    central hole sits elsewhere — applying it here would put the beam
+    0.0008 nm⁻¹ from a pixel rather than in the hole. The beam-centre path has
+    its own tests in ``test_operator.py``.
     """
     return AgipdSaxsConfig(
         proposal=10400,
@@ -47,6 +53,8 @@ def cfg() -> AgipdSaxsConfig:
         npt=500,
         geometry_file=None,
         pixel_mask_file=None,
+        beam_center_px=None,
+        beam_center_py=None,
     )
 
 

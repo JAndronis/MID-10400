@@ -239,12 +239,20 @@ statistics (open task 6). Integer data cannot carry NaN, so bad pixels must come
 
 ### Geometry and static masks
 
-- **Geometry source of truth is unresolved.** `geom_latest.geom` + 7.531 m (PONI = 0 on
-  `to_pyfai_detector()`) gives a sensible q range. The quadrant-motor encoder source is absent in
-  r0500.
-- **Beam centre `(607.46, 672.08)`** was derived with the beamline scientist for the old stacked
-  detector + `setFit2D` construction. Do not reuse it with `to_pyfai_detector()`. Agreed
-  alternative: `geom.offset()`.
+- **Geometry source of truth is unresolved.** `geom_latest.geom` + 7.531 m gives a sensible q
+  range. The quadrant-motor encoder source is absent in r0500.
+- **Beam centre `(607.46, 672.08)`** was derived with the beamline scientist. It is expressed in
+  the `geom.to_distortion_array()` frame (origin at the corner of the assembled bounding box, all
+  coordinates positive), **not** the `to_pyfai_detector()` frame where PONI = 0 is the beam; the
+  two origins are 138.4 mm / 121.6 mm apart. Using it therefore means replacing the corner array
+  *and* calling `setFit2D`, together — `analysis.saxs.config.DEFAULT_BEAM_CENTER_PX/PY`, applied by
+  `operator.build_operator`, cross-checked against `extra_speckle`'s `ConfigSAXS`.
+- **The two conventions disagree by 19.9 px (4.0 mm), almost entirely in y** (x agrees to 0.5 px)
+  on `geom_latest.geom`. Measured on r488 train 2637950809: q range 0.0772–1.0668 → 0.0827–1.0556
+  nm⁻¹, and the fcc Bragg peaks at 0.584 and 0.633 nm⁻¹ **merge into one at 0.610**. This is not a
+  settled question — see open task 4 — so the `beam_center` fields carry whichever convention is
+  configured and both are reachable. Anything comparing against the old pipeline or against
+  extra-speckle must state which one it used.
 - **Seams and pixel mask.** ASIC seams (`agipd_asic_seams()`) and the one pixel mask are both
   needed in addition to `image.mask`. There is deliberately a single mask file: two overlapping
   ones would have to be kept in step with each other.
@@ -316,6 +324,22 @@ statistics (open task 6). Integer data cannot carry NaN, so bad pixels must come
     attribute inside the block.
 13. **Silent failures in the old pipeline.** pasha forks from a non-main thread; `ThreadPoolExecutor`
     futures are never checked; `mp.Queue.empty()` is racy. Failures end as NaN rows.
+14. **A beam centre only means something in its own corner-array frame.**
+    `geom.to_pyfai_detector()` and `geom.to_distortion_array()` place the same pixels at different
+    coordinates — origins 138.4 mm / 121.6 mm apart — and `setFit2D` interprets its `centerX` /
+    `centerY` in whichever array the detector currently holds. So `setFit2D(sdd, px, py)` on a bare
+    `to_pyfai_detector()` silently puts the beam somewhere neither convention intends (1.0 nm⁻¹
+    off, measured). Replace the corners and set the centre together, or do neither. Nothing raises
+    either way: both give a plausible q range and a plausible-looking I(q).
+15. **`extra_speckle.Setup(geom=None)` builds geometry from motor encoders.**
+    `DetectorAGIPD1M._init_geom` falls through to `geometry_from_encoders(run)`, whose three
+    nested bare `except:` clauses end in `"Encoder positions not found, setting all values to 0"`
+    and hardcoded quad positions. A `Setup` that looks configured can be running nominal geometry.
+    Read its printed output; pass `geom=` to mean a specific file.
+16. **`extra_speckle.saxs.get` hard-wires npt and the split scheme.** `_apply_pyfai` passes
+    `npt=300`, so `get(..., npt=500)` raises on the duplicate keyword rather than rebinning; and
+    `get` consumes `method` for its own `"1d"`/`"2d"` switch, so pyFAI's method can never be passed
+    through and it always runs the default `("bbox","csr","cython")`. Its default unit is `q_A^-1`.
 
 ---
 
@@ -323,10 +347,10 @@ statistics (open task 6). Integer data cannot carry NaN, so bad pixels must come
 
 | # | Task | Next step / gate |
 |---|---|---|
-| 1 | AGIPD SAXS integrator (`agipd_saxs`) | **P1–P4 done.** P4 accepted on r0423 2026-09-11: 465 000/465 000 frames OK, pooled I(q) within 4.9e-8 of a dense pyFAI reference, 6.29 min on 36 workers against > 1 h for `analysis_helpers.integrate_run`. **P5 implemented**: `agipd_saxs` / `agipd_iq_overview` in `src/amore/context.py` keep their names and columns, now backed by `analysis.saxs.damnit` instead of `analysis_helpers.integrate_run` — the column's contents change from Å⁻¹ I0-divided to nm⁻¹ undivided, so clear it for runs processed before this. Next: run it on r0423 and r0426, then P6 (36 vs 72 workers) |
+| 1 | AGIPD SAXS integrator (`agipd_saxs`) | **P1–P4 done.** P4 accepted on r0423 2026-09-11: 465 000/465 000 frames OK, pooled I(q) within 4.9e-8 of a dense pyFAI reference, 6.29 min on 36 workers against > 1 h for `analysis_helpers.integrate_run`. **P5 implemented**: `agipd_saxs` / `agipd_iq_overview` in `src/amore/context.py` keep their names and columns, now backed by `analysis.saxs.damnit` instead of `analysis_helpers.integrate_run` — the column's contents change from Å⁻¹ I0-divided to nm⁻¹ undivided, so clear it for runs processed before this. **The beam centre moved on 2026-09-13** (open task 4), which moves the q axis again and changes every stored operator hash — anything integrated before that date must be reprocessed, not merged. Next: run it on r0423 and r0426, then P6 (36 vs 72 workers) |
 | 2 | WAXS JUNGFRAU inspection → integrator extension | Adapt benchmark stages 1 and 7 to JUNGFRAU; then gain-aware handling and spec |
 | 3 | Lit-frame selection | LITFRM source/keys from `lsxfel`; compare with `XrayPulses` counts per train |
-| 4 | AGIPD geometry source of truth | Resolve encoder/motor source (absent in r0500) and decide CrystFEL file vs `geom.offset()` |
+| 4 | AGIPD geometry source of truth | **Beam centre wired, not settled.** `agipd_saxs` now applies the agreed `(607.46, 672.08)` via `set_pixel_corners(to_distortion_array())` + `setFit2D`, paired with `geom_latest.geom`. That pairing merges the r488 fcc doublet (0.584 + 0.633 → 0.610 nm⁻¹), so it is the pairing that needs confirming, not the code. Note the old pipeline and `extra_speckle.Setup` agree with each other because they share this construction — and `Setup` with `geom=None` silently builds from motor encoders (`geometry_from_encoders`, bare `except:`, falls back to hardcoded quad positions), so it may not be the same geometry at all. Decisive test: `integrate2d` and check whether I(q,χ) on the 0.633 nm⁻¹ ring is flat in χ or sinusoidal — amplitude and phase give the displacement and its direction. Then resolve the encoder source (absent in r0500) and CrystFEL file vs `geom.offset()` |
 | 5 | Polarisation correction | Confirm detector-frame ↔ lab-horizontal orientation and factor with MID; ≤ 5.4e-4 effect at q_max |
 | 6 | Correction settings | Photon threshold / recast settings for r0423, r0426 from the correction reports |
 | 7 | XGM normalisation recipe | Pulse-index alignment (LITFRM `data.xgmPulseId`), applied post hoc to stored sums |
