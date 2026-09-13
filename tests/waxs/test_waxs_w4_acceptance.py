@@ -331,3 +331,55 @@ def test_the_budgets_bracket_the_measured_cost(w4):
         # Tight enough to be a canary: a 5x regression must trip it.
         assert value * 5 > w4.BUDGET_MS[stage], stage
     assert w4.WALL_TARGET_S > 17.5 * 10
+
+
+def test_the_ledger_checks_that_pooling_rescues_the_variance(w4, finished):
+    """D3's actual claim: negatives cancel once a bin pools many frames."""
+    result = w4.stage_ledger(finished.cfg, finished.output)
+    assert result["passed"]
+    assert result["pooled_occupied_bins"] > 0
+    assert result["pooled_negative_variance_bins"] == 0
+    assert result["pooled_negative_fraction"] == 0.0
+    assert 0.0 <= result["fraction_of_frames_with_negative_variance_bins"] <= 1.0
+
+
+def test_the_pooled_check_can_be_skipped(w4, finished):
+    """It reads the whole frame table, so it is opt-out for a quick look."""
+    result = w4.stage_ledger(finished.cfg, finished.output, pool=False)
+    assert "pooled_negative_variance_bins" not in result
+    assert result["passed"]
+
+
+def test_pooling_really_does_cancel_per_frame_negatives(w4, finished):
+    """Not a mock: force per-frame negatives and watch the pooled sum survive.
+
+    The guard matters because "store it unclamped, pooling fixes it" is a claim
+    about cancellation, and a test that only ever sees positive frames would
+    pass whether or not that were true.
+    """
+    from analysis.waxs.writer import pooled_per_train
+
+    with h5py.File(finished.output, "r+") as handle:
+        variance = handle["frames/variance"][:]
+        count = int(handle["trains/count"][0])
+        first = int(handle["trains/first"][0])
+        # Half the train's frames driven negative in one bin, the rest positive
+        # by more, exactly as noise around a small true variance behaves.
+        variance[first : first + count // 2, 0] = -1.0
+        variance[first + count // 2 : first + count, 0] = 3.0
+        handle["frames/variance"][:] = variance
+
+    per_train = pooled_per_train(finished.output)
+    # Every individual frame in that bin was negative or positive; the pooled
+    # sum is positive, so sigma is defined there.
+    assert per_train["sigma"].values[0, 0] > 0
+    assert int(per_train.attrs["negative_variance_bins"]) == 0
+
+    # ...and when they do not cancel, the reducer says so instead of rooting it.
+    with h5py.File(finished.output, "r+") as handle:
+        variance = handle["frames/variance"][:]
+        variance[first : first + count, 0] = -1.0
+        handle["frames/variance"][:] = variance
+    per_train = pooled_per_train(finished.output)
+    assert per_train["sigma"].values[0, 0] == 0.0
+    assert int(per_train.attrs["negative_variance_bins"]) >= 1

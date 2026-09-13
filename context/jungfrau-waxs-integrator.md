@@ -412,22 +412,29 @@ operator; `tests/waxs/test_waxs_operator.py` now pins both. The scripts recorded
 and no traceback, which is what made this cost a round trip — they capture and print the traceback
 now.
 
-**W4 — on-node acceptance, r0423 jf1: ACCEPTED 2026-09-13** (max-exfl484, 36 workers, full run).
+**W4 — on-node acceptance, r0423: ACCEPTED on BOTH detectors 2026-09-13** (max-exfl484, 36
+workers, full runs).
 
-| Gate | Verdict | |
+| Gate | jf1 | jf2 |
 |---|---|---|
-| 0 configuration | pass | 3001 trains, 24 000 frames, 36 workers, config hash matches, lit cells `{0…6,15}` as configured |
-| A self-test | pass | 8 real frames; max rel S, N and V **exactly 0.0** against the per-frame-mask reference |
-| B reference | pass | **6.5e-08** over 3 trains, all 500 bins populated on each, empty-bin sets equal |
-| C timing | **17.5 s** | against a 600 s target; parallel efficiency 0.748, serial fraction 0.235 |
-| D ledger | pass | 24 000/24 000 OK, bits exactly `{0,1,21,22}`, one train owning no rows (3000 of 3001 carry data) |
+| 0 configuration | pass | pass — 3001 trains, 24 000 frames, 36 workers, config hash matches, lit cells `{0…6,15}` |
+| A self-test | **exactly 0.0** | **exactly 0.0** — max rel S, N and V against the per-frame-mask reference |
+| B reference | **6.5e-08** | **8.0e-08** — 3 trains each, all 500 bins populated, empty-bin sets equal |
+| C timing | **17.5 s** | **20.1 s** — against a 600 s target; efficiency 0.748 / 0.655 |
+| D ledger | pass | pass — 24 000/24 000 OK, bits exactly `{0,1,21,22}`, 3000 of 3001 trains own rows |
+
+The one train owning no rows is **2637698397**, the last of the run, on both detectors — named by
+the ledger's train-level reporting, which was added because jf1's frame ledger reconciled perfectly
+without ever mentioning it.
 
 **D5′ holds at full scale.** The NaN path and the per-frame-mask reference agree to *exactly* zero
 on real frames — the same result as the one-train W2 gate, now over a whole run integrated by 36
 spawned workers.
 
-**Per frame per core: read_data 11.6, read_mask 5.0, integrate 3.0 ms, total 19.7.** Two things
-worth keeping:
+**Per frame per core: read_data 11.6 / 11.9, read_mask 5.0 / 5.2, integrate 3.0 / 2.7 ms, total
+19.7 / 19.8** (jf1 / jf2). The two detectors agree to within 4 % on every stage, which is itself
+worth having: the cost is set by the read, not by anything detector-specific. Two things worth
+keeping:
 
 - **`integrate` did not degrade under load.** 3.0 ms against 2.3–2.9 ms measured on one idle core,
   where the AGIPD pass found every stage 1.3–1.6× worse with 36 workers competing for memory
@@ -441,11 +448,21 @@ worth keeping:
   integrating a stale mask. **Not worth taking.** The train-invariance measurement stands as a
   recorded fact, not as a pending optimisation.
 
-*Also settled:* 493 of 24 000 frames (2.1 %) carry at least one bin with non-positive variance, at
-most 2 bins in any one frame — D3's unclamped estimator behaving exactly as designed, counted in
-the ledger and failing nothing.
+**The unclamped variance, and why jf2 is fifteen times worse.** Frames carrying at least one
+non-positive variance bin: **493 of 24 000 (2.1 %) on jf1, 9162 (38.2 %) on jf2**, at most 2 and 6
+bins respectively in any one frame. The difference is not the negative-pixel fraction — jf1 has
+*more* of those (45 % against 33 %) — it is pixels per bin: jf2's `.edf` masks 84.4 % against
+75.9 %, leaving 81 767 kept pixels against 126 125, so roughly 164 per bin against 252. Thinner
+bins scatter further, and a thin bin at the edge of the q range scatters furthest.
 
-*Remaining:* the same run on jf2.
+This is D3 working, not failing, but it does mean **per-frame σ is unusable on a third of jf2's
+frames** and anyone wanting per-frame errors must select on the count. The pooled σ is unaffected,
+which is the claim the design rests on — so the W4 ledger now pools the run the way §9 pools it and
+reports how many bins are *still* non-positive afterwards, rather than leaving "pooling fixes it"
+as an assertion. `tests/waxs/test_waxs_w4_acceptance.py` forces per-frame negatives and checks both
+that they cancel and that the reducer says so when they do not.
+
+*Remaining:* nothing on W4. Both detectors are accepted.
 
 **Script.**
 `scripts/w4_acceptance.py`, one detector at a time, verdict as JSON beside itself:

@@ -331,7 +331,15 @@ def stage_timing(output: Path, wall_s: float | None) -> dict[str, Any]:
 
 
 # ── gate D: the ledger ───────────────────────────────────────────────────────
-def stage_ledger(cfg: Any, output: Path) -> dict[str, Any]:
+def stage_ledger(cfg: Any, output: Path, pool: bool = True) -> dict[str, Any]:
+    """The ledger, plus the one number that tests D3's actual claim.
+
+    ``frames_with_negative_variance_bins`` says how often the unclamped
+    estimator went non-positive on a *single* frame. That is expected and
+    designed for. What matters is whether it survives pooling, which is the
+    whole justification for storing it unclamped — so this pools the run the way
+    §9 pools it and reports how many bins are still non-positive afterwards.
+    """
     with h5py.File(output, "r") as handle:
         status = handle["frames/status"][:]
         count = handle["trains/count"][:]
@@ -371,6 +379,21 @@ def stage_ledger(cfg: Any, output: Path) -> dict[str, Any]:
             "trains": bad_trains[:20],
         }
 
+    # Does the unclamped variance survive pooling? That is D3's claim, and it is
+    # cheap to check off the file that was just written.
+    pooled: dict[str, Any] = {}
+    if pool:
+        from analysis.waxs.writer import pooled_per_train
+
+        per_train = pooled_per_train(output)
+        remaining = int(per_train.attrs.get("negative_variance_bins", 0))
+        occupied = int((per_train["intensity"].values != 0).sum())
+        pooled = {
+            "pooled_negative_variance_bins": remaining,
+            "pooled_occupied_bins": occupied,
+            "pooled_negative_fraction": (remaining / occupied) if occupied else 0.0,
+        }
+
     present = {b for b in range(32) if bits >> b & 1}
     unexpected = present - set(EXPECTED_BITS)
     reconciles = int(count.sum()) == status.size
@@ -396,9 +419,13 @@ def stage_ledger(cfg: Any, output: Path) -> dict[str, Any]:
         # The unclamped variance of D3: how often a per-frame bin came out
         # non-positive. Reported, never failed - it is expected behaviour.
         "frames_with_negative_variance_bins": int((negative > 0).sum()),
+        "fraction_of_frames_with_negative_variance_bins": (
+            float((negative > 0).mean()) if negative.size else 0.0
+        ),
         "max_negative_variance_bins_in_a_frame": int(negative.max())
         if negative.size
         else 0,
+        **pooled,
     }
 
 
@@ -544,9 +571,16 @@ def main(argv=None) -> int:
         f"  ledger trains {ledger.get('train_status_counts')} "
         f"({ledger.get('n_trains_with_rows')} of {ledger.get('n_trains')} own rows)"
     )
+    negative_fraction = ledger.get("fraction_of_frames_with_negative_variance_bins", 0)
     print(
         f"  frames with a negative-variance bin: "
-        f"{report['gates']['D_ledger'].get('frames_with_negative_variance_bins')}"
+        f"{ledger.get('frames_with_negative_variance_bins')} "
+        f"({100 * negative_fraction:.1f} %)"
+    )
+    print(
+        f"  ...still negative after pooling per train: "
+        f"{ledger.get('pooled_negative_variance_bins')} of "
+        f"{ledger.get('pooled_occupied_bins')} occupied bins"
     )
 
     _write(report, args)
