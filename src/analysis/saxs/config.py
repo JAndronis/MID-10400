@@ -16,6 +16,8 @@ from pathlib import Path
 from pyFAI.units import hc  # keV·Å, derived from scipy CODATA (pyFAI/units.py:66)
 
 __all__ = [
+    "DEFAULT_BEAM_CENTER_PX",
+    "DEFAULT_BEAM_CENTER_PY",
     "DEFAULT_GEOMETRY_FILE",
     "DEFAULT_PIXEL_MASK_FILE",
     "EXPECTED_BITS",
@@ -49,6 +51,25 @@ DEFAULT_PIXEL_MASK_FILE = f"{_PROPOSAL_ROOT}/usr/masks/mask_2026-09-08_AGIPD_SAX
 
 #: Where the per-run output file is written.
 DEFAULT_OUTPUT_ROOT = f"{_PROPOSAL_ROOT}/scratch/agipd_saxs"
+
+#: Beam centre in Fit2D pixel coordinates, agreed with the beamline scientist.
+#:
+#: These are **not** in the frame ``AGIPD_1MGeometry.to_pyfai_detector()``
+#: produces, which puts the origin at the geometry origin so that PONI = 0 is
+#: the beam. They are in the frame of ``geom.to_distortion_array()``, whose
+#: origin is the corner of the assembled bounding box and whose coordinates are
+#: therefore all positive. ``operator.build_operator`` installs that corner
+#: array before calling ``setFit2D``, which is what ``extra_speckle``'s
+#: ``setup.configuration.ConfigSAXS`` does and what these numbers were derived
+#: against. Applying them to the ``to_pyfai_detector()`` frame instead moves the
+#: beam by the offset between the two origins, so the two steps belong
+#: together.
+#:
+#: ``DEFAULT_BEAM_CENTER_PX`` is the fast-scan (pyFAI ``poni2``) coordinate and
+#: ``DEFAULT_BEAM_CENTER_PY`` the slow-scan (``poni1``) one, matching Fit2D's
+#: ``centerX`` / ``centerY``.
+DEFAULT_BEAM_CENTER_PX: float = 607.4598195630211
+DEFAULT_BEAM_CENTER_PY: float = 672.076693118667
 
 #: ``BadPixels`` bits seen in r0423 and r0426 (CLAUDE.md, image.mask). Any
 #: other bit present in a run is a provenance flag and a warning, not a
@@ -105,6 +126,11 @@ class AgipdSaxsConfig:
     geometry_file: str | None = DEFAULT_GEOMETRY_FILE
     sdd_m: float = 7.531
     photon_energy_kev: float = 9.04
+    #: Beam centre, or ``None`` for PONI = 0 at the geometry origin. Set
+    #: together or not at all; see :data:`DEFAULT_BEAM_CENTER_PX` for the frame
+    #: they are expressed in, which is not the one PONI = 0 lives in.
+    beam_center_px: float | None = DEFAULT_BEAM_CENTER_PX
+    beam_center_py: float | None = DEFAULT_BEAM_CENTER_PY
     npt: int = 500
     method: tuple[str, str, str] = METHOD
     unit: str = "q_nm^-1"
@@ -132,6 +158,13 @@ class AgipdSaxsConfig:
         if self.photon_energy_kev <= 0:
             raise ValueError(
                 f"photon_energy_kev must be positive, got {self.photon_energy_kev}"
+            )
+        if (self.beam_center_px is None) != (self.beam_center_py is None):
+            raise ValueError(
+                "beam_center_px and beam_center_py must be set together or "
+                f"both left None, got {self.beam_center_px!r} and "
+                f"{self.beam_center_py!r}; half a beam centre would silently "
+                "fall back to PONI = 0 in the other axis"
             )
         if tuple(self.method) != METHOD:
             raise ValueError(
@@ -189,6 +222,13 @@ class AgipdSaxsConfig:
             "geometry_file": self.geometry_file,
             "pixel_mask_file": self.pixel_mask_file,
         }
+
+    @property
+    def beam_center(self) -> tuple[float, float] | None:
+        """``(px, py)`` in Fit2D order, or ``None`` for PONI = 0."""
+        if self.beam_center_px is None or self.beam_center_py is None:
+            return None
+        return (self.beam_center_px, self.beam_center_py)
 
     @property
     def wavelength_m(self) -> float:

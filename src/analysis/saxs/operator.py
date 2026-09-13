@@ -57,6 +57,7 @@ class SparseOperator:
     method: tuple[str, str, str]
     sdd_m: float
     wavelength_m: float
+    beam_center: tuple[float, float] | None
     sha256: str
 
 
@@ -85,11 +86,13 @@ def operator_sha256(
     method: tuple[str, str, str],
     sdd_m: float,
     wavelength_m: float,
+    beam_center: tuple[float, float] | None = None,
 ) -> str:
     """sha256 over the operator arrays and the geometry scalars that set them.
 
     Stable across rebuilds of the same geometry; any change to the geometry,
-    the distance, the wavelength, ``npt`` or the method changes it.
+    the distance, the wavelength, the beam centre, ``npt`` or the method
+    changes it.
     """
     header = json.dumps(
         {
@@ -98,6 +101,7 @@ def operator_sha256(
             "method": list(method),
             "sdd_m": sdd_m,
             "wavelength_m": wavelength_m,
+            "beam_center": list(beam_center) if beam_center else None,
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -123,18 +127,46 @@ def build_operator(
 ) -> tuple[SparseOperator, AzimuthalIntegrator]:
     """Build the sparse operator from a geometry object.
 
-    The geometry object is the single source of detector positions: PONI is 0
-    at the geometry origin, and there is no ``setFit2D``, no second
-    ``set_pixel_corners`` and no PONI file (context file §3 rule 4).
+    The geometry object is the single source of detector *positions*. Where the
+    beam sits on it depends on ``cfg.beam_center``:
+
+    ``None``
+        PONI = 0 at the geometry origin, straight off ``to_pyfai_detector()``.
+
+    ``(px, py)``
+        The corner array is replaced by ``geom.to_distortion_array()`` and the
+        centre installed with ``setFit2D``. Both steps are required and belong
+        together: the two corner arrays have different origins — the distortion
+        array's is the corner of the assembled bounding box, ``to_pyfai_detector``'s
+        is the geometry origin — so a ``setFit2D`` on the unreplaced array would
+        place the beam somewhere neither convention means. This is the
+        construction ``extra_speckle.setup.configuration.ConfigSAXS`` uses, and
+        the one ``cfg.beam_center`` was derived against.
+
+    ``setFit2D`` also sets ``ai.dist`` from its first argument, so ``cfg.sdd_m``
+    is passed through it in millimetres rather than set twice.
 
     The integrator is returned alongside the operator because the self-test
     needs the live compiled engine, which the saved ``.npz`` cannot provide.
     """
-    ai = AzimuthalIntegrator(
-        detector=geom.to_pyfai_detector(),
-        dist=cfg.sdd_m,
-        wavelength=cfg.wavelength_m,
-    )
+    detector = geom.to_pyfai_detector()
+    center = cfg.beam_center
+    if center is None:
+        ai = AzimuthalIntegrator(
+            detector=detector,
+            dist=cfg.sdd_m,
+            wavelength=cfg.wavelength_m,
+        )
+    else:
+        px, py = center
+        detector.set_pixel_corners(geom.to_distortion_array())
+        ai = AzimuthalIntegrator(detector=detector, wavelength=cfg.wavelength_m)
+        ai.setFit2D(cfg.sdd_m * 1e3, px, py)
+        if not np.isclose(ai.dist, cfg.sdd_m, rtol=1e-9, atol=0.0):
+            raise RuntimeError(
+                f"setFit2D left dist at {ai.dist} m, expected cfg.sdd_m "
+                f"{cfg.sdd_m} m; the Fit2D distance is not in millimetres"
+            )
     probe = ai.integrate1d(
         np.ones(SHAPE, dtype=np.float32),
         cfg.npt,
@@ -194,6 +226,7 @@ def build_operator(
         method=tuple(cfg.method),
         sdd_m=cfg.sdd_m,
         wavelength_m=cfg.wavelength_m,
+        beam_center=center,
         sha256=operator_sha256(
             coef,
             bins,
@@ -205,6 +238,7 @@ def build_operator(
             method=tuple(cfg.method),
             sdd_m=cfg.sdd_m,
             wavelength_m=cfg.wavelength_m,
+            beam_center=center,
         ),
     )
     return operator, ai
@@ -222,6 +256,7 @@ def save_operator(op: SparseOperator, path: str | Path) -> Path:
             "method": list(op.method),
             "sdd_m": op.sdd_m,
             "wavelength_m": op.wavelength_m,
+            "beam_center": list(op.beam_center) if op.beam_center else None,
             "sha256": op.sha256,
         },
         sort_keys=True,
@@ -261,6 +296,13 @@ def load_operator(path: str | Path) -> SparseOperator:
         method=(meta["method"][0], meta["method"][1], meta["method"][2]),
         sdd_m=float(meta["sdd_m"]),
         wavelength_m=float(meta["wavelength_m"]),
+        # .get, because an operator written before the beam centre existed has
+        # no such key and is a PONI = 0 operator by construction.
+        beam_center=(
+            (float(stored[0]), float(stored[1]))
+            if (stored := meta.get("beam_center"))
+            else None
+        ),
         sha256=str(meta["sha256"]),
     )
     recomputed = operator_sha256(
@@ -274,6 +316,7 @@ def load_operator(path: str | Path) -> SparseOperator:
         method=op.method,
         sdd_m=op.sdd_m,
         wavelength_m=op.wavelength_m,
+        beam_center=op.beam_center,
     )
     if recomputed != op.sha256:
         raise ValueError(
