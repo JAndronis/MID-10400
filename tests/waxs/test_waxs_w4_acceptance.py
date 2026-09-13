@@ -287,3 +287,47 @@ def test_the_wall_target_is_above_the_measured_cost():
     # under an hour even without any parallelism.
     assert module.WALL_TARGET_S >= 24_000 * 0.003 * 4
     assert all(v > 0 for v in module.BUDGET_MS.values())
+
+
+def test_the_ledger_surfaces_trains_that_own_no_rows(
+    w4, cfg, mock_run_factory, tmp_path
+):
+    """A skipped train leaves no mark in the frame ledger; the gate must show it.
+
+    r0423 has 3001 trains of which 3000 carry data, and the frame ledger
+    reconciles perfectly either way — so "24000/24000 OK" alone cannot
+    distinguish a complete run from one that quietly dropped a train.
+    """
+    import dataclasses
+
+    from analysis.waxs.run import run_jungfrau_waxs
+
+    mock, dc = mock_run_factory(zero_entry_trains=(10002,))
+    output = tmp_path / "gap.h5"
+    run_jungfrau_waxs(
+        dataclasses.replace(cfg, n_workers=1),
+        dc=dc,
+        run_dir=mock.path,
+        output_path=output,
+        reduce="none",
+    )
+    result = w4.stage_ledger(cfg, output)
+
+    assert result["status_counts"] == {"OK": mock.n_frames}
+    assert result["frames_reconcile"]
+    # ...and yet a train is missing, which the train-level counts say plainly.
+    assert result["n_trains"] == len(mock.train_ids)
+    assert result["n_trains_with_rows"] == len(mock.train_ids) - 1
+    assert result["train_status_counts"]["NO_FRAMES"] == 1
+    assert 10002 in result["offending_trains"]["NO_FRAMES"]["trains"]
+    assert result["offending_trains"]["NO_FRAMES"]["n_frames"] == 0
+
+
+def test_the_budgets_bracket_the_measured_cost(w4):
+    """Measured on r0423 jf1: 11.6 / 5.0 / 3.0 ms per frame per core."""
+    measured = {"read_data": 11.6, "read_mask": 5.0, "integrate": 3.0}
+    for stage, value in measured.items():
+        assert value < w4.BUDGET_MS[stage], stage
+        # Tight enough to be a canary: a 5x regression must trip it.
+        assert value * 5 > w4.BUDGET_MS[stage], stage
+    assert w4.WALL_TARGET_S > 17.5 * 10

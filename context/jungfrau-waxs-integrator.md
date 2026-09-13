@@ -412,7 +412,42 @@ operator; `tests/waxs/test_waxs_operator.py` now pins both. The scripts recorded
 and no traceback, which is what made this cost a round trip — they capture and print the traceback
 now.
 
-**W4 — on-node acceptance, r0423. Script written; the run needs Maxwell.**
+**W4 — on-node acceptance, r0423 jf1: ACCEPTED 2026-09-13** (max-exfl484, 36 workers, full run).
+
+| Gate | Verdict | |
+|---|---|---|
+| 0 configuration | pass | 3001 trains, 24 000 frames, 36 workers, config hash matches, lit cells `{0…6,15}` as configured |
+| A self-test | pass | 8 real frames; max rel S, N and V **exactly 0.0** against the per-frame-mask reference |
+| B reference | pass | **6.5e-08** over 3 trains, all 500 bins populated on each, empty-bin sets equal |
+| C timing | **17.5 s** | against a 600 s target; parallel efficiency 0.748, serial fraction 0.235 |
+| D ledger | pass | 24 000/24 000 OK, bits exactly `{0,1,21,22}`, one train owning no rows (3000 of 3001 carry data) |
+
+**D5′ holds at full scale.** The NaN path and the per-frame-mask reference agree to *exactly* zero
+on real frames — the same result as the one-train W2 gate, now over a whole run integrated by 36
+spawned workers.
+
+**Per frame per core: read_data 11.6, read_mask 5.0, integrate 3.0 ms, total 19.7.** Two things
+worth keeping:
+
+- **`integrate` did not degrade under load.** 3.0 ms against 2.3–2.9 ms measured on one idle core,
+  where the AGIPD pass found every stage 1.3–1.6× worse with 36 workers competing for memory
+  bandwidth. Dense pyFAI over 24 000 frames is not bandwidth-bound the way a sparse kernel over
+  465 000 frames is. The AGIPD warning does not transfer, and now there is a number for that.
+- **The read dominates, and it is `data.adc`, not `data.mask`.** 11.6 against 5.0 ms, because
+  `data.adc` is stored uncompressed (33.5 MB/train) while `data.mask` is gzip-compressed and mostly
+  zeros. This **corrects the W1 estimate**: reading the mask once per run would save 5.0/19.7 = 25 %
+  of worker time, about 26 % of the wall — not the "nearly half" guessed from the two datasets
+  having the same logical size. At 17.5 s for a whole run that is 4 s, against the risk of silently
+  integrating a stale mask. **Not worth taking.** The train-invariance measurement stands as a
+  recorded fact, not as a pending optimisation.
+
+*Also settled:* 493 of 24 000 frames (2.1 %) carry at least one bin with non-positive variance, at
+most 2 bins in any one frame — D3's unclamped estimator behaving exactly as designed, counted in
+the ledger and failing nothing.
+
+*Remaining:* the same run on jf2.
+
+**Script.**
 `scripts/w4_acceptance.py`, one detector at a time, verdict as JSON beside itself:
 
     python scripts/w4_acceptance.py --run 423 --detector jf1 --workers 36

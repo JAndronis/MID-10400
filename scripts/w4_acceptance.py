@@ -62,15 +62,21 @@ from analysis.waxs.operator import build_operator  # noqa: E402
 from analysis.waxs.plan import open_detector  # noqa: E402
 from analysis.waxs.selftest import SelfTestFailed, reference_frame  # noqa: E402
 
-#: Above the 2.3-2.9 ms/frame measured on one idle core, because 36 workers
-#: competing for memory bandwidth cost the AGIPD pass 1.3-1.6x. A regression
-#: canary, not a budget: exceeding it is reported, only the wall time fails.
-BUDGET_MS = {"read_data": 40.0, "read_mask": 40.0, "integrate": 8.0}
+#: Measured on r0423 jf1, 36 workers, whole run: read_data 11.6, read_mask 5.0,
+#: integrate 3.0 ms/frame/core. Set at roughly 1.5x each, so a real regression
+#: fires - reverting the D5' NaN path would take integrate from 3.0 to ~17 ms -
+#: without tripping on a merely busy node. A canary, not a verdict: exceeding
+#: one is reported, only the wall time fails.
+#:
+#: ``integrate`` came in at 3.0 ms under full load against 2.3-2.9 ms on one idle
+#: core, where the AGIPD pass found its stages 1.3-1.6x worse under load. Dense
+#: pyFAI on 24 000 frames is simply not memory-bandwidth bound the way the AGIPD
+#: sparse kernel on 465 000 frames is.
+BUDGET_MS = {"read_data": 18.0, "read_mask": 8.0, "integrate": 5.0}
 
-#: A JUNGFRAU run is ~24 000 frames per detector against AGIPD's 465 000, but
-#: the reads are dense float32. Well above any plausible real time, so that a
-#: breach means something changed rather than that the node was busy.
-WALL_TARGET_S = 1800.0
+#: The whole r0423 jf1 pass took 17.5 s. 600 s is 34x that: loose enough to
+#: survive a contended node, tight enough that something structural shows.
+WALL_TARGET_S = 600.0
 
 
 def _git_commit() -> str:
@@ -340,17 +346,28 @@ def stage_ledger(cfg: Any, output: Path) -> dict[str, Any]:
         for code in FrameStatus
         if (status == code).any()
     }
+    # Trains too, not only frames. A train that owns no rows - one the detector
+    # never wrote - leaves no mark at all in the frame ledger, so a run can
+    # reconcile perfectly while quietly having skipped a train.
+    train_counts = {
+        code.name: int((train_status == code).sum())
+        for code in FrameStatus
+        if (train_status == code).any()
+    }
     offenders = {}
     for code in FrameStatus:
-        if code is FrameStatus.OK or not (status == code).any():
+        if code is FrameStatus.OK:
             continue
         bad_trains = [
             int(train_ids[i])
             for i in range(train_ids.size)
             if int(train_status[i]) == int(code)
         ]
+        if not bad_trains and not (status == code).any():
+            continue
         offenders[code.name] = {
-            "n_frames": counts[code.name],
+            "n_frames": counts.get(code.name, 0),
+            "n_trains": len(bad_trains),
             "trains": bad_trains[:20],
         }
 
@@ -365,9 +382,12 @@ def stage_ledger(cfg: Any, output: Path) -> dict[str, Any]:
             and lit == list(cfg.expected_lit_cells)
         ),
         "status_counts": counts,
+        "train_status_counts": train_counts,
         "offending_trains": offenders,
         "frames_reconcile": reconciles,
         "n_frames": int(status.size),
+        "n_trains": int(train_ids.size),
+        "n_trains_with_rows": int((count > 0).sum()),
         "sum_train_counts": int(count.sum()),
         "bits_present": sorted(present),
         "bits_named": describe_bits(bits),
@@ -518,7 +538,12 @@ def main(argv=None) -> int:
         )
     reference = report["gates"]["B_reference"]
     print(f"  gate B max rel intensity {reference.get('max_rel_intensity')}")
-    print(f"  ledger {report['gates']['D_ledger'].get('status_counts')}")
+    ledger = report["gates"]["D_ledger"]
+    print(f"  ledger frames {ledger.get('status_counts')}")
+    print(
+        f"  ledger trains {ledger.get('train_status_counts')} "
+        f"({ledger.get('n_trains_with_rows')} of {ledger.get('n_trains')} own rows)"
+    )
     print(
         f"  frames with a negative-variance bin: "
         f"{report['gates']['D_ledger'].get('frames_with_negative_variance_bins')}"
