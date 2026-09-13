@@ -40,6 +40,7 @@ import json  # noqa: E402
 import platform  # noqa: E402
 import socket  # noqa: E402
 import time  # noqa: E402
+import traceback  # noqa: E402
 from datetime import UTC, datetime  # noqa: E402
 from pathlib import Path  # noqa: E402
 from typing import Any  # noqa: E402
@@ -328,12 +329,17 @@ def main(argv=None) -> int:
             try:
                 result = inspect(args.proposal, run, detector, args)
             except Exception as error:  # noqa: BLE001 - recorded, not swallowed
-                print(f"  FAILED: {error!r}")
+                # The traceback, not just the repr: a bare
+                # "ValueError('buffer source array is read-only')" names the
+                # symptom and hides every frame that would say where.
+                formatted = traceback.format_exc()
+                print(f"  FAILED: {error!r}\n{formatted}", flush=True)
                 result = {
                     "run": run,
                     "detector": detector,
                     "passed": False,
                     "error": repr(error),
+                    "traceback": formatted,
                 }
             report["results"].append(result)
             _print(result)

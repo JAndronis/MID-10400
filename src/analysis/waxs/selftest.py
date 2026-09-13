@@ -80,7 +80,9 @@ def reference_frame(
         op.npt,
         method=op.method,
         unit=op.unit,
-        mask=bad.reshape(MODULE_SHAPE),
+        # A fresh writable array: ``frame_bad`` builds one per frame, so this
+        # is never a read-only view of the operator's static mask.
+        mask=np.ascontiguousarray(bad.reshape(MODULE_SHAPE)),
         variance=model.variance(flat).reshape(MODULE_SHAPE),
     )
     return (

@@ -32,6 +32,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from pyFAI.integrator.azimuthal import AzimuthalIntegrator
@@ -47,6 +48,24 @@ __all__ = [
     "operator_sha256",
     "resolved_method",
 ]
+
+
+def _frozen(array: np.ndarray, dtype: Any) -> np.ndarray:
+    """A contiguous, read-only **copy**.
+
+    The copy is the point. ``np.ascontiguousarray(x, dtype)`` returns ``x``
+    itself when it is already contiguous and of that dtype, so freezing the
+    result would freeze an array pyFAI still owns — its ``_dssa`` solid-angle
+    cache, or an engine's ``bin_centers``. pyFAI's Cython kernels acquire
+    writable buffers and reject a read-only one with
+    ``ValueError: buffer source array is read-only``, so that reaches the user
+    as a failure in an unrelated later call. ``analysis.saxs.operator._readonly``
+    has always copied for this reason; this module did not, which is the bug
+    this function exists to close.
+    """
+    out = np.array(array, dtype=dtype, copy=True, order="C")
+    out.flags.writeable = False
+    return out
 
 
 class WavelengthMismatch(ValueError):
@@ -65,7 +84,11 @@ class WaxsOperator:
     """
 
     q: np.ndarray  # float64 (npt,)   bin centres, cfg.unit
-    static_bad: np.ndarray  # bool    (npix,)  non-zero = excluded
+    static_bad: np.ndarray  # bool    (npix,)  non-zero = excluded, read-only
+    #: The same mask as ``static_bad``, 2-D and **writable**, for handing to
+    #: pyFAI. Built once and reused, so the hot loop neither copies per frame
+    #: nor passes pyFAI a read-only buffer.
+    static_mask_2d: np.ndarray
     omega: np.ndarray  # float64 (npix,)  relative solid angle
     poni_text: str
     shape: tuple[int, int]
@@ -163,18 +186,20 @@ def build_operator(
         )
 
     static = build_static_bad(cfg)
-    mask_2d = static.bad.reshape(MODULE_SHAPE)
+    # Writable and C-contiguous, because it is handed to pyFAI on every frame.
+    mask_2d = np.array(static.bad.reshape(MODULE_SHAPE), dtype=bool, order="C")
 
-    # A zero frame with a zero variance: this call exists only to build and
-    # cache the sparse matrix and to read the bin centres off it.
-    zeros = np.zeros(MODULE_SHAPE, dtype=np.float32)
+    # A zero frame and a zero variance: this call exists only to build and
+    # cache the sparse matrix and to read the bin centres off it. Two separate
+    # buffers, not one aliased twice, so pyFAI is never handed the same array
+    # as both signal and variance.
     probe = ai.integrate1d(
-        zeros,
+        np.zeros(MODULE_SHAPE, dtype=np.float32),
         cfg.npt,
         method=cfg.method,
         unit=cfg.unit,
         mask=mask_2d,
-        variance=zeros,
+        variance=np.zeros(MODULE_SHAPE, dtype=np.float32),
     )
     resolved = resolved_method(probe)
     if resolved != tuple(cfg.method):
@@ -184,17 +209,17 @@ def build_operator(
             "another integrator (CLAUDE.md pitfall 1)"
         )
 
-    q = np.ascontiguousarray(probe.radial, dtype=np.float64)
+    q = _frozen(probe.radial, np.float64)
     if q.size != cfg.npt:
         raise RuntimeError(f"pyFAI returned {q.size} bin centres, expected {cfg.npt}")
-    omega = np.ascontiguousarray(ai.solidAngleArray(MODULE_SHAPE), dtype=np.float64)
-    omega = omega.reshape(-1)
-    for array in (q, omega):
-        array.flags.writeable = False
+    omega = _frozen(
+        np.asarray(ai.solidAngleArray(MODULE_SHAPE)).reshape(-1), np.float64
+    )
 
     operator = WaxsOperator(
         q=q,
         static_bad=static.bad,
+        static_mask_2d=mask_2d,
         omega=omega,
         poni_text=path.read_text(),
         shape=MODULE_SHAPE,

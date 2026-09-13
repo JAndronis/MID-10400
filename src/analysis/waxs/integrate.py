@@ -172,7 +172,7 @@ def integrate_frame(
         op.npt,
         method=op.method,
         unit=op.unit,
-        mask=op.static_bad.reshape(MODULE_SHAPE),
+        mask=op.static_mask_2d,
         variance=variance.reshape(MODULE_SHAPE),
     )
     sum_signal = np.asarray(result.sum_signal, dtype=np.float64)

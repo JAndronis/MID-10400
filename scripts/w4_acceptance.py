@@ -45,6 +45,7 @@ import platform  # noqa: E402
 import socket  # noqa: E402
 import subprocess  # noqa: E402
 import time  # noqa: E402
+import traceback  # noqa: E402
 from datetime import UTC, datetime  # noqa: E402
 from pathlib import Path  # noqa: E402
 from typing import Any  # noqa: E402
@@ -100,14 +101,29 @@ def stage_run(cfg: Any, output: Path, workers: int) -> dict[str, Any]:
             reduce="none",
         )
     except SelfTestFailed as error:
-        return {"passed": False, "reason": "self-test", "error": repr(error)}
+        return {
+            "passed": False,
+            "reason": "self-test",
+            "error": repr(error),
+            "traceback": traceback.format_exc(),
+        }
     except UnexpectedLitCells as error:
-        return {"passed": False, "reason": "lit cells", "error": repr(error)}
+        return {
+            "passed": False,
+            "reason": "lit cells",
+            "error": repr(error),
+            "traceback": traceback.format_exc(),
+        }
     except Exception as error:  # noqa: BLE001 - the ledger explains it
+        # The traceback, not just the repr. A gate that fails without saying
+        # where costs a whole cluster round trip to read.
+        formatted = traceback.format_exc()
+        print(formatted, flush=True)
         return {
             "passed": False,
             "reason": "run raised",
             "error": repr(error),
+            "traceback": formatted,
             "wall_s": time.perf_counter() - started,
         }
     return {"passed": True, "wall_s": time.perf_counter() - started}

@@ -351,7 +351,17 @@ statistics (open task 6). Integer data cannot carry NaN, so bad pixels must come
     from the numerator *and* the normalisation, giving bit-identical sums (measured 0.0e+00 max
     relative difference on all three sums, both detectors, all 500 bins). Integer data cannot carry
     NaN, which is why AGIPD needs its sparse denominator correction instead.
-17. **`extra_speckle.saxs.get` hard-wires npt and the split scheme.** `_apply_pyfai` passes
+17. **Never freeze an array pyFAI might own, and never hand it a read-only one.**
+    `np.ascontiguousarray(x, dtype)` returns `x` *itself* when it is already contiguous and of
+    that dtype, so `arr = np.ascontiguousarray(ai.solidAngleArray(shape), np.float64);
+    arr.flags.writeable = False` freezes pyFAI's own `_dssa` cache. Separately, pyFAI's Cython
+    kernels acquire *writable* buffers: passing a read-only `mask`, `data` or `variance` raises
+    `ValueError: buffer source array is read-only`. **Whether the mask is tolerated is
+    platform-dependent** — the macOS wheels accept a read-only mask and the Linux ones on Maxwell
+    do not, so this passes every local test and fails on the cluster. Copy before freezing
+    (`analysis.saxs.operator._readonly`, `analysis.waxs.operator._frozen`) and keep one writable
+    mask on the operator for the hot loop.
+18. **`extra_speckle.saxs.get` hard-wires npt and the split scheme.** `_apply_pyfai` passes
     `npt=300`, so `get(..., npt=500)` raises on the duplicate keyword rather than rebinning; and
     `get` consumes `method` for its own `"1d"`/`"2d"` switch, so pyFAI's method can never be passed
     through and it always runs the default `("bbox","csr","cython")`. Its default unit is `q_A^-1`.

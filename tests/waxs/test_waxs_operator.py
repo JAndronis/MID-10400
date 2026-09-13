@@ -135,3 +135,77 @@ def test_masking_reduces_the_denominator(cfg, operator):
     )
     ratio = masked.sum_normalization.sum() / unmasked.sum_normalization.sum()
     assert 0.4 < ratio < 0.6
+
+
+# ── nothing we hand pyFAI, or freeze, may be an array pyFAI owns ─────────────
+def test_building_the_operator_leaves_pyfais_own_arrays_writable(operator):
+    """The bug behind ``ValueError: buffer source array is read-only``.
+
+    ``np.ascontiguousarray(x, dtype)`` returns ``x`` itself when it is already
+    contiguous and of that dtype, so freezing the result freezes an array pyFAI
+    still owns — its ``_dssa`` solid-angle cache, or an engine's bin centres.
+    pyFAI's Cython kernels acquire writable buffers, so the damage surfaces
+    later, in an unrelated call, with a message that names neither.
+    """
+    op, ai = operator
+
+    assert ai._dssa.flags.writeable
+    for engine in ai.engines.values():
+        for attribute in ("bin_centers", "bin_centers0", "bin_centers1"):
+            array = getattr(engine.engine, attribute, None)
+            if isinstance(array, np.ndarray):
+                assert array.flags.writeable, attribute
+                assert array is not op.q
+
+
+def test_the_frozen_outputs_are_copies_not_views(operator):
+    op, ai = operator
+    assert not op.q.flags.writeable
+    assert not op.omega.flags.writeable
+    # A copy owns its memory, so it has no base to have been carved from.
+    assert op.q.base is None
+    assert op.omega.base is None
+
+
+def test_the_mask_handed_to_pyfai_is_writable(operator):
+    """pyFAI tolerates a read-only mask today; relying on that is not a plan."""
+    op, ai = operator
+    assert op.static_mask_2d.flags.writeable
+    assert op.static_mask_2d.flags.c_contiguous
+    assert op.static_mask_2d.shape == MODULE_SHAPE
+    assert np.array_equal(op.static_mask_2d.reshape(-1), op.static_bad)
+    # ...while the flat one stays frozen, because the pass treats it as a fact.
+    assert not op.static_bad.flags.writeable
+
+
+def test_the_operator_survives_repeated_use(operator, cfg):
+    """A second integration on the same integrator must still work."""
+    op, ai = operator
+    frame = np.ones(MODULE_SHAPE, dtype=np.float32)
+    for _ in range(3):
+        result = ai.integrate1d(
+            frame.copy(),
+            cfg.npt,
+            method=op.method,
+            unit=op.unit,
+            mask=op.static_mask_2d,
+            variance=frame.copy(),
+        )
+        assert np.isfinite(result.sum_signal).all()
+    assert len(ai.engines) == 1
+
+
+def test_a_read_only_signal_is_what_pyfai_actually_rejects(operator, cfg):
+    """Pins the failure mode, so the guard above has a stated reason."""
+    op, ai = operator
+    frozen = np.zeros(MODULE_SHAPE, dtype=np.float32)
+    frozen.flags.writeable = False
+    with pytest.raises(ValueError, match="read-only"):
+        ai.integrate1d(
+            frozen,
+            cfg.npt,
+            method=op.method,
+            unit=op.unit,
+            mask=op.static_mask_2d,
+            variance=np.zeros(MODULE_SHAPE, dtype=np.float32),
+        )

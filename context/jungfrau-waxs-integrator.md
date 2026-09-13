@@ -369,6 +369,15 @@ multi-entry refusal, block never straddling a gap, repeated `memoryCell` → `LA
 real spawned pool, the D4 loud failure end to end, and `ReadNoiseUnavailable` when a run has no
 dark cell. Invariants: rows written by label, no NaN anywhere in the file.
 
+*First cluster run, 2026-09-13:* both scripts failed immediately on max-exfl484 with
+`ValueError: buffer source array is read-only`, in `build_operator`, for every run and detector.
+The cause is CLAUDE.md pitfall 17 — the static mask was frozen read-only and handed straight to
+`integrate1d(mask=)`, which the Linux pyFAI wheels reject and the macOS ones accept, so the whole
+local suite passed. Fixed by copying before freezing and keeping a writable `static_mask_2d` on the
+operator; `tests/waxs/test_waxs_operator.py` now pins both. The scripts recorded only `repr(error)`
+and no traceback, which is what made this cost a round trip — they capture and print the traceback
+now.
+
 **W4 — on-node acceptance, r0423. Script written; the run needs Maxwell.**
 `scripts/w4_acceptance.py`, one detector at a time, verdict as JSON beside itself:
 
