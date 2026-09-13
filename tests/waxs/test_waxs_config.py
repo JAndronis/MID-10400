@@ -39,7 +39,7 @@ def test_config_for_fills_the_per_detector_paths():
 def test_the_defaults_are_the_measured_ones():
     """These came from r0423 and belong in one place (CLAUDE.md rule 2)."""
     assert EXPECTED_BITS == frozenset({0, 1, 21, 22})
-    assert EXPECTED_LIT_CELLS == tuple(range(8))
+    assert EXPECTED_LIT_CELLS == (0, 1, 2, 3, 4, 5, 6, 15)
     cfg = JungfrauWaxsConfig(proposal=10400, run=423, detector="jf1")
     assert cfg.photon_energy_kev == 9.04
     assert cfg.method == ("full", "csc", "cython")

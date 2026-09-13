@@ -6,12 +6,17 @@ photon, and the readout noise is the spread of the *dark* cells, which by
 definition hold none.
 
 Unlike AGIPD's open task 3, the lit-cell split does not wait on LITFRM: it is
-unambiguous in the frames themselves. On r0423 both detectors put 42–53 % of
-kept pixels above half a photon in cells 0–7 against ≤ 0.08 % in cells 8–15 — a
-factor of 500 — so the threshold has a wide margin on either side. Integrating
-all 16 cells would halve I(q) and add a dark-frame background, which is why the
-selection is mandatory and why a change in the pattern between runs must fail
-loudly rather than pass.
+unambiguous in the frames themselves. Measured over r0423 and r0426 on both
+detectors, cells **0–6 and 15** hold 33–40 % of kept pixels above half a photon
+while every other cell sits at 1e-6 — five orders of magnitude, so the threshold
+has an enormous margin on either side. Integrating all 16 cells would halve I(q)
+and add a dark-frame background, which is why the selection is mandatory and why
+a change in the pattern between runs must fail loudly rather than pass.
+
+Note what the set is **not**: 0–7. The lit *array positions* are 0–7, but the
+``data.memoryCell`` values they carry are 0–6 and 15. Reading the split off
+positions rather than off the reader is the inference CLAUDE.md pitfall 4
+forbids, and it is how the wrong set was first recorded.
 """
 
 from __future__ import annotations

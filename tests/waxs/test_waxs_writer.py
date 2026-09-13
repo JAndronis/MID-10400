@@ -11,6 +11,8 @@ import pytest
 
 pytest.importorskip("extra_data")
 
+from waxs_mockrun import LIT_CELLS  # noqa: E402
+
 from analysis.common.status import FrameStatus  # noqa: E402
 from analysis.waxs import worker  # noqa: E402
 from analysis.waxs.writer import (  # noqa: E402
@@ -66,8 +68,8 @@ def test_a_repeated_memory_cell_is_a_label_mismatch(
     run, dc = mock_run_factory(shuffled_cells_train=10001)
     op, ai = operator
     det = open_detector(cfg, dc)
-    plan = build_plan(cfg, tuple(range(8)), dc=dc, control_dc=dc, det=det)
-    worker.init_from_detector(cfg, op, ai, model, tuple(range(8)), det)
+    plan = build_plan(cfg, LIT_CELLS, dc=dc, control_dc=dc, det=det)
+    worker.init_from_detector(cfg, op, ai, model, LIT_CELLS, det)
     try:
         statuses = {}
         for block in plan.blocks:
@@ -90,8 +92,8 @@ def test_a_frame_failing_the_data_check_is_recorded_not_raised(
     run, dc = mock_run_factory(extreme_train=10002)
     op, ai = operator
     det = open_detector(cfg, dc)
-    plan = build_plan(cfg, tuple(range(8)), dc=dc, control_dc=dc, det=det)
-    worker.init_from_detector(cfg, op, ai, model, tuple(range(8)), det)
+    plan = build_plan(cfg, LIT_CELLS, dc=dc, control_dc=dc, det=det)
+    worker.init_from_detector(cfg, op, ai, model, LIT_CELLS, det)
     try:
         failed = 0
         for block in plan.blocks:
@@ -244,8 +246,8 @@ def test_per_cell_leaves_a_missing_train_as_zeros(
     run, dc = mock_run_factory(zero_entry_trains=(10002,))
     op, ai = operator
     det = open_detector(cfg, dc)
-    plan = build_plan(cfg, tuple(range(8)), dc=dc, control_dc=dc, det=det)
-    worker.init_from_detector(cfg, op, ai, model, tuple(range(8)), det)
+    plan = build_plan(cfg, LIT_CELLS, dc=dc, control_dc=dc, det=det)
+    worker.init_from_detector(cfg, op, ai, model, LIT_CELLS, det)
     try:
         path = tmp_path / "gap.h5"
         with JungfrauWaxsWriter.open_or_create(cfg, plan, path) as out:

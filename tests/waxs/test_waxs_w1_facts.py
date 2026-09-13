@@ -15,6 +15,8 @@ import pytest
 
 pytest.importorskip("extra_data")
 
+from waxs_mockrun import LIT_CELLS  # noqa: E402
+
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "w1_facts.py"
 
 
@@ -61,7 +63,7 @@ def test_stage_sources_records_the_layout_and_the_legacy_alias(w1, pipeline):
 def test_stage_cells_answers_o4(w1, pipeline):
     result = w1.stage_cells(pipeline.cfg, pipeline.det, pipeline.op, 2)
     assert result["passed"]
-    assert result["lit"] == list(range(8))
+    assert result["lit"] == list(LIT_CELLS)
     assert result["lit_matches_expected"]
     assert result["read_noise_kev"] == pytest.approx(0.32, rel=0.05)
     assert result["unexpected_bits"] == []

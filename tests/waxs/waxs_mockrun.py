@@ -37,7 +37,10 @@ from extra_data.tests.mockdata.jungfrau import JUNGFRAUModule
 MODULE_SHAPE = (512, 1024)
 N_MODULE_PX = MODULE_SHAPE[0] * MODULE_SHAPE[1]
 CELLS = 16
-LIT_CELLS = (0, 1, 2, 3, 4, 5, 6, 7)
+#: The real pattern, measured on the cluster: 0-6 and 15, which is deliberately
+#: **not** contiguous. A mock lighting 0-7 would never exercise the code paths
+#: that care - the ROI window, and any assumption that the lit set is a range.
+LIT_CELLS = (0, 1, 2, 3, 4, 5, 6, 15)
 STATIC_BIT = np.uint32(1 << 0)  # OFFSET_OUT_OF_THRESHOLD
 DYNAMIC_BIT = np.uint32(1 << 21)  # WRONG_GAIN_VALUE
 SEAM_BIT = np.uint32(1 << 22)  # NON_STANDARD_SIZE — set here, unlike AGIPD

@@ -75,11 +75,23 @@ _PROPOSAL_ROOT = "/gpfs/exfel/exp/MID/202601/p010400"
 #: (§3 D5).
 EXPECTED_BITS: frozenset[int] = frozenset({0, 1, 21, 22})
 
-#: The memory cells that carry photons, measured on r0423 for both detectors:
-#: 42–53 % of pixels above half a photon against ≤ 0.08 % in cells 8–15. The
-#: pass detects the set from the data and **fails** if it is not this (§3 D4);
-#: the constant is the expectation, never the selection.
-EXPECTED_LIT_CELLS: tuple[int, ...] = (0, 1, 2, 3, 4, 5, 6, 7)
+#: The memory cells that carry photons: **0–6 and 15**, not 0–7.
+#:
+#: Measured on the cluster over r0423 and r0426, both detectors, eight sampled
+#: trains each — the set is identical in all four. Cells 0–6 and 15 sit at
+#: 33–40 % of kept pixels above half a photon; cell 7 is dark at 1e-6, alongside
+#: 8–14. Cell 15 runs a little lower than 0–6 (0.333 against 0.352 on jf2
+#: r0423), which is the usual JUNGFRAU first-storage-cell behaviour and a reason
+#: to look at it separately before pooling it with the rest.
+#:
+#: An earlier reading of ``(0…7)`` came from indexing an exported train by array
+#: *position*: positions 0–7 are the lit ones, and the ``data.memoryCell`` values
+#: they carry are 0–6 and 15. That is precisely the inference CLAUDE.md pitfall 4
+#: forbids, and §3 D4's loud failure is what caught it.
+#:
+#: The pass detects the set from the data and **fails** if it is not this; the
+#: constant is the expectation, never the selection.
+EXPECTED_LIT_CELLS: tuple[int, ...] = (0, 1, 2, 3, 4, 5, 6, 15)
 
 #: Where the per-run output files are written.
 DEFAULT_OUTPUT_ROOT = f"{_PROPOSAL_ROOT}/scratch/jungfrau_waxs"

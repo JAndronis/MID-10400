@@ -7,6 +7,8 @@ import pytest
 
 pytest.importorskip("extra_data")
 
+from waxs_mockrun import LIT_CELLS  # noqa: E402
+
 from analysis.common.status import FrameStatus  # noqa: E402
 from analysis.waxs.plan import (  # noqa: E402
     InconsistentEntries,
@@ -53,11 +55,11 @@ def test_a_train_with_no_entry_is_no_frames(cfg, mock_run_factory, operator):
     run, dc = mock_run_factory(zero_entry_trains=(10002,))
     op, _ = operator
     det = open_detector(cfg, dc)
-    plan = build_plan(cfg, (0, 1, 2, 3, 4, 5, 6, 7), dc=dc, control_dc=dc, det=det)
+    plan = build_plan(cfg, LIT_CELLS, dc=dc, control_dc=dc, det=det)
 
     assert status_of(plan, 10002) is FrameStatus.NO_FRAMES
     assert plan.record(10002).n_frames == 0
-    assert plan.n_frames == (len(run.train_ids) - 1) * 8
+    assert plan.n_frames == (len(run.train_ids) - 1) * len(LIT_CELLS)
 
 
 def test_a_dropped_train_does_not_shift_rows(cfg, mock_run_factory, operator):
@@ -65,7 +67,7 @@ def test_a_dropped_train_does_not_shift_rows(cfg, mock_run_factory, operator):
     run, dc = mock_run_factory(train_ids=(10000, 10001, 10003, 10004))
     op, _ = operator
     det = open_detector(cfg, dc)
-    plan = build_plan(cfg, (0, 1, 2, 3, 4, 5, 6, 7), dc=dc, control_dc=dc, det=det)
+    plan = build_plan(cfg, LIT_CELLS, dc=dc, control_dc=dc, det=det)
 
     assert [t.train_id for t in plan.trains] == [10000, 10001, 10003, 10004]
     assert [t.first_row for t in plan.trains] == [0, 8, 16, 24]
@@ -74,7 +76,7 @@ def test_a_dropped_train_does_not_shift_rows(cfg, mock_run_factory, operator):
 def test_a_block_never_straddles_a_gap(cfg, mock_run_factory, operator):
     run, dc = mock_run_factory(zero_entry_trains=(10001,))
     det = open_detector(cfg, dc)
-    plan = build_plan(cfg, (0, 1, 2, 3, 4, 5, 6, 7), dc=dc, control_dc=dc, det=det)
+    plan = build_plan(cfg, LIT_CELLS, dc=dc, control_dc=dc, det=det)
 
     for block in plan.blocks:
         rows = block.rows()

@@ -17,6 +17,8 @@ import pytest
 
 pytest.importorskip("extra_data")
 
+from waxs_mockrun import LIT_CELLS  # noqa: E402
+
 from analysis.common.status import FrameStatus  # noqa: E402
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "w4_acceptance.py"
@@ -186,7 +188,7 @@ def test_the_ledger_reconciles_on_a_clean_run(w4, finished):
     assert result["status_counts"] == {"OK": finished.mock.n_frames}
     assert result["frames_reconcile"]
     assert result["unexpected_bits"] == []
-    assert result["lit_cells"] == list(range(8))
+    assert result["lit_cells"] == list(LIT_CELLS)
     assert result["offending_trains"] == {}
 
 

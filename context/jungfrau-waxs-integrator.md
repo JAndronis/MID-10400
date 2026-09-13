@@ -137,7 +137,20 @@ gate, which would be dense-vs-dense here and prove nothing (§4).
 A NaN already present in `data.adc` would be indistinguishable from that sentinel, which is why
 D6's check rejects a non-finite value on any pixel the static mask keeps.
 
-**D6 — A value-range data check, because `data.mask` is not sufficient.** jf2 carries 15 pixels
+**D6 — A value-range data check. NB: its stated motivation was wrong.**
+
+*Corrected 2026-09-13.* On the cluster, with each detector's own `data.mask`, **every** extreme
+pixel is flagged: 130 on jf1 and 204 on jf2 above 1000 keV, none unflagged, none reaching the
+integrator. The claim below — that jf2 carries pixels `data.mask` misses — came from comparing
+jf2's data against **jf1's mask**: `data/proc_mask_jf2_r423.nc` is a byte-identical copy of the jf1
+export (`module=1`), the same mix-up as §6 O3, which was fixed for the data file and not for the
+mask. Re-export it before trusting anything else measured from it.
+
+The check stays, on the weaker and still-sufficient grounds that it is nearly free and that the
+`.edf` is what currently keeps those pixels out of the integrator — an arrangement worth verifying
+per frame rather than assuming. What follows is kept for the record, struck through:
+
+~~jf2 carries 15 pixels
 reaching ±1.8e5 keV — some 20 000 photons where the lit-cell mean is 5.3 — in **every** memory
 cell, and **none of them is flagged in `data.mask`**. jf1 has 10 such pixels and all 10 are
 flagged, so this is not a property of the detector type but of the individual module's
@@ -145,10 +158,12 @@ calibration. One such pixel dominates its q bin outright.
 
 The `.edf` static mask happens to cover all 25 (§6 O2), so under convention A they never reach the
 integrator — but relying on that silently is exactly the failure mode the AGIPD status ledger
-exists to prevent. v1 therefore checks the value range per frame and routes a frame carrying a
-pixel outside a configured bound to `DATA_CHECK_FAILED` with the count in the ledger, rather than
-trusting either mask to have caught it. Note the AGIPD check itself — integer dtype, no negative
-counts — is wrong here in both halves (§2), so this replaces it rather than adding to it.
+exists to prevent.~~
+
+v1 checks the value range per frame and routes a frame carrying a pixel outside a configured bound
+to `DATA_CHECK_FAILED` with the count in the ledger, rather than trusting either mask to have
+caught it. Note the AGIPD check itself — integer dtype, no negative counts — is wrong here in both
+halves (§2), so this replaces it rather than adding to it.
 
 ---
 
@@ -275,10 +290,21 @@ path. The parent still pins `EXTRA_NUM_THREADS=1` before the pool exists.
   nonsense. Do not reach for that test on the next mask question.
 - **O3 — Resolved 2026-09-13.** The `jf2` export was a copy of `jf1`; re-exported and verified
   distinct (`module=2`, different sha256). §2 now carries both detectors.
-- **O4 — Is the lit-cell split run-invariant?** Measured on one train of one run. If it varies,
-  D4's "fail loudly" becomes the mechanism that catches it, but the config needs to express the
-  expected set per run rather than globally. **`scripts/w1_facts.py` answers this**: run it over
-  r0423 and r0426 and read `o4_lit_cells_by_run` and `o4_lit_cells_invariant` out of its JSON.
+- **O4 — Resolved 2026-09-13 on the cluster: invariant, and the set is `{0,1,2,3,4,5,6,15}`.**
+  `scripts/w1_facts.py` over r0423 and r0426, both detectors, eight sampled trains each: the lit
+  set is identical in all four. Cells 0–6 and 15 hold 33–40 % of kept pixels above half a photon;
+  cells 7–14 sit at 1e-6 to 4e-5 — five orders of magnitude of margin, so the threshold is in no
+  danger. A single global `expected_lit_cells` is therefore right; no per-run expression is needed.
+
+  **Cell 7 is dark and cell 15 is lit**, which is not what §2 recorded. The earlier `(0…7)` came
+  from indexing an exported train by array *position*: positions 0–7 are the lit ones, and the
+  `data.memoryCell` values they carry are 0–6 and 15. That is exactly the inference CLAUDE.md
+  pitfall 4 forbids — and D4's loud failure is what caught it, on the first cluster run, before a
+  single frame was integrated. The design worked; the constant was wrong.
+
+  Cell 15 runs consistently a little below 0–6 (0.333 against 0.352 on jf2 r0423, 0.363 against
+  0.385 on jf1 r0423). That is the usual JUNGFRAU first-storage-cell behaviour and a reason to look
+  at cell 15 separately before pooling it with the others.
 - **O5 — Resolved 2026-09-13: fit a scale factor over the overlap.** After masking the two populate
   11.5–23.7 (jf1) and 9.8–18.5 (jf2), so they overlap over ~11.5–18.5 nm⁻¹. `analysis.waxs.combine`
   fits a single multiplicative factor for jf2 against jf1 over that range and merges them into one
@@ -319,31 +345,39 @@ path. The parent still pins `EXTRA_NUM_THREADS=1` before the pool exists.
 `AgipdSaxsConfig(proposal=10400, run=423).config_hash()` is byte-identical
 (`5f589d2a8090d075…`), so no stored `agipd_saxs.h5` is invalidated.
 
-**W1 — data and geometry facts. Partly done; the rest needs Maxwell.**
-
-- **O1 — done 2026-09-13.** Source names, module numbers, file naming and the legacy-alias
-  behaviour are settled and wired into `config.DETECTOR_NAMES` / `DETECTOR_MODNOS`; the mock run now
-  reproduces the real `/CORR/` layout including the soft-linked `/DET/` alias.
-
-Remaining, all needing the cluster. **`scripts/w1_facts.py` answers every one of them in a single
-pass** and writes its findings as JSON beside itself:
+**W1 — data and geometry facts. Done 2026-09-13 on max-exfl484**, over r0423 and r0426, both
+detectors, eight sampled trains each (`scripts/w1_facts.py`, JSON beside itself):
 
     python scripts/w1_facts.py --runs 423 426 --detectors jf1 jf2
 
-- Confirm `usr/geometry/jf{1,2}.poni` and `usr/masks/jf{1,2}.edf` exist and that the `.edf` sha256s
-  match the `data/jf{1,2}_mask.edf` copies used here (those carry a `_mask` suffix the cluster ones
-  do not).
-- **O4**, re-check the lit-cell set and the bit set on a crystallised run (r0426). D4's loud failure
-  is the mechanism that catches a change, but the config has to be able to express a per-run set.
-- **Is `data.mask` train-invariant?** It is uint32 and the same size as the data, so reading it
-  doubles the I/O (≈ 200 GB per detector per run). If the dynamic bits never change between trains,
-  one read per run replaces 3000. Measure; do not assume.
-- **Does `roi` save I/O?** `MultimodKeyData.ndarray(roi=(np.s_[0:8],))` would read only the lit
-  cells — note the *tuple*, because EXtra-data concatenates it onto an index expression and a bare
-  slice raises `TypeError` — but it slices the *array* axis while the lit set is defined by
-  `data.memoryCell` values, and whether it saves anything depends on the proc chunk layout. v1
-  reads all sixteen and selects in memory (worker docstring), which is correct and twice the I/O.
-  `scripts/w1_facts.py` times both.
+| Question | Answer |
+|---|---|
+| **O1**, sources | `MID_EXP_JF500K{1,2}/CORR/JNGFR0{1,2}:daqOutput`, one module each, 16 cells/entry, 1 entry/train, **3000 trains** per run. The legacy `/DET/` alias is present and correctly ignored. Wired into `config.DETECTOR_NAMES` / `DETECTOR_MODNOS`; the mock reproduces the `/CORR/` layout including the soft link |
+| Files present? | Yes. `usr/geometry/jf{1,2}.poni` (430 / 432 B) and `usr/masks/jf{1,2}_mask.edf` (524 800 B), sha256 recorded |
+| q populated | jf1 **11.53–23.68**, jf2 **9.80–18.46** nm⁻¹ — the §2 figures, now from the real PONIs. Overlap 11.53–18.46 |
+| Static mask | 75.92 % / 84.39 % — as recorded |
+| Bits | `{0, 1, 21, 22}` on all four, none unexpected |
+| **O4**, lit cells | `{0,1,2,3,4,5,6,15}`, identical across both runs and both detectors — see O4 above. **Not** `{0…7}` |
+| Readout noise | jf1 0.359 (r0423) / 0.337 (r0426); jf2 0.318 / 0.318. jf1's moves 6 % between runs, which is why D3 measures it per run instead of hardcoding |
+| **Is `data.mask` train-invariant?** | **Yes** over the sampled trains: zero differing pixels, all four combinations |
+| **Does `roi` save I/O?** | **No, and it cannot** |
+| Extreme pixels | 130 (jf1) / 204 (jf2) above 1000 keV, **all flagged** by `data.mask`, none reaching the integrator — which corrects §3 D6 |
+
+**`roi` is a dead end, for two independent reasons.** `data.adc` and `data.mask` are both chunked
+`(1, 16, 512, 1024)` — one chunk per train spanning *all sixteen cells* — and `data.mask` is
+gzip-compressed, so a partial read still costs a whole chunk fetch and decompress. And the lit set
+`{0…6, 15}` is not contiguous, so there is no single window to ask for anyway. The worker's
+read-everything-and-select-in-memory is not a compromise; it is the only sensible shape. (`data.adc`
+is uncompressed, `data.mask` is not.)
+
+**`data.mask` being train-invariant is a real optimisation, not yet taken.** Zero pixels differ
+across the sampled trains on either detector in either run. The mask read is half the pass's I/O,
+so reading it once per run would nearly halve the wall time. But eight trains out of 3000 is not
+proof, and being wrong means silently integrating against a stale mask — so this needs a whole-run
+check first, and the gain should be measured against W4's timing rather than assumed.
+
+**Gate: met.** The §2 table is confirmed run-to-run, amended where it was wrong (the lit set, D6),
+and both I/O questions have numeric answers.
 
 **W2 — operator and error model. Done 2026-09-13**, on the real r0423 train of **both** detectors.
 
