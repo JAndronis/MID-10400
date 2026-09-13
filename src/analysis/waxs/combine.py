@@ -74,6 +74,20 @@ class OverlapScaling:
     reduced_chi2: float
     #: Fractional RMS residual, which is readable without trusting the errors.
     residual_rms: float
+    #: Slope of the *fractional* residual against q, per nm⁻¹, from an
+    #: unweighted straight-line fit. This is what separates the two things a
+    #: bad χ² can mean. A leftover **normalisation** difference is flat in q and
+    #: the factor absorbs it, leaving slope ≈ 0. Anything **q-dependent** — a
+    #: relative error between the two q axes, or a correction applied to neither
+    #: detector that varies with scattering angle — tilts the residual, and no
+    #: single factor can take that out. Unweighted on purpose: when χ² is this
+    #: far above 1 the errors are no longer what limits the comparison, so
+    #: weighting by them would just re-import the assumption under test.
+    residual_slope_per_nm: float
+    #: The fitted fractional residual at each end of the overlap, which is the
+    #: slope in units anyone can act on.
+    residual_at_q_low: float
+    residual_at_q_high: float
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -85,7 +99,24 @@ class OverlapScaling:
             "method": self.method,
             "reduced_chi2": self.reduced_chi2,
             "residual_rms": self.residual_rms,
+            "residual_slope_per_nm": self.residual_slope_per_nm,
+            "residual_at_q_low": self.residual_at_q_low,
+            "residual_at_q_high": self.residual_at_q_high,
         }
+
+    @property
+    def sigma_over_intensity(self) -> float:
+        """Roughly what fractional error the χ² implies the inputs claimed.
+
+        ``residual_rms / sqrt(reduced_chi2)``. Useful for telling "the curves
+        disagree" from "the error bars are too small": on r0423 the residual is
+        0.74 % against a claimed 0.10 %, so the disagreement is real and
+        systematic but sub-percent, and χ² alone would have made it sound
+        catastrophic.
+        """
+        if not np.isfinite(self.reduced_chi2) or self.reduced_chi2 <= 0:
+            return float("nan")
+        return self.residual_rms / np.sqrt(self.reduced_chi2)
 
 
 def mean_curve(source: Any) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -262,6 +293,14 @@ def scale_to_overlap(
         if np.all(variance > 0)
         else float("nan")
     )
+
+    fractional = residual / np.where(reference != 0, reference, np.nan)
+    usable = np.isfinite(fractional)
+    if usable.sum() >= 2:
+        slope, intercept = np.polyfit(q[usable], fractional[usable], 1)
+    else:
+        slope = intercept = float("nan")
+
     return OverlapScaling(
         factor=factor,
         factor_error=factor_error,
@@ -271,6 +310,9 @@ def scale_to_overlap(
         method=method,
         reduced_chi2=reduced_chi2,
         residual_rms=float(np.sqrt((residual**2).mean()) / np.abs(reference).mean()),
+        residual_slope_per_nm=float(slope),
+        residual_at_q_low=float(slope * q.min() + intercept),
+        residual_at_q_high=float(slope * q.max() + intercept),
     )
 
 

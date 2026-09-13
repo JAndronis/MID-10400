@@ -328,6 +328,45 @@ path. The parent still pins `EXTRA_NUM_THREADS=1` before the pool exists.
   q axis); the fit is weighted least squares through the origin, with a `median`-of-ratios
   alternative for outlier-heavy data; `combine_files` works off the stored sums, which is the path
   that gives a meaningful χ² because the per-cell grid carries no errors.
+
+  **First real run, r0423, 2026-09-13** — both detectors with their own PONIs and masks:
+
+      factor 0.98823 ± 0.00005   over 11.53–18.44 nm⁻¹, 285 bins
+      reduced χ² 54.1            residual rms 0.74 %
+
+  **The factor is the headline: 0.988, within 1.2 % of unity.** Two independent PONIs, two
+  independent masks, different solid-angle coverage and different q ranges, and the two detectors
+  agree on *absolute* I(q) to a bit over one percent with nothing tuned. That is a real
+  cross-validation of the whole normalisation chain — the Σc·Ω denominator, the masks, the
+  geometry — and it was not guaranteed. O5's original worry, that the two `N` arrays might not be
+  on the same absolute scale, is answered: they nearly are.
+
+  **The χ² of 54 means the error bars are small, not that the curves disagree.** `residual_rms /
+  sqrt(χ²ᵣ)` puts the claimed per-bin error at **0.10 %** against an actual shape difference of
+  **0.74 %** — so a real, systematic, 7σ disagreement that is nonetheless sub-percent. Read χ²
+  alone and it sounds catastrophic; it is not. The 0.10 % is itself a check on D3: pooling ~2.3e6
+  photons per bin gives a Poisson floor of 0.066 %, so the error model is producing errors of the
+  right size, which is the first independent evidence that it is calibrated and not just
+  self-consistent. (`OverlapScaling.sigma_over_intensity` is this number.)
+
+  **What the 0.74 % is, is not yet settled, and r0423 cannot settle it.** Two candidates:
+
+  1. **The polarisation correction, applied to neither detector.** pyFAI's azimuthal modulation
+     amplitude is `sin²(2θ)/2`, which across this overlap runs from **3.1 % at q = 11.5 to 7.8 % at
+     q = 18.4**. The two detectors sit at different azimuths, so each averages a different part of
+     that modulation, and the difference grows with q. Note what this does to CLAUDE.md open task 5:
+     the "≤ 5.4e-4 at q_max" recorded there is the **AGIPD** number and does not transfer — at WAXS
+     angles polarisation is two orders of magnitude larger and is the leading systematic here.
+  2. **A small relative error between the two q axes.** On a featureless curve this is largely
+     degenerate with the scale factor, but only largely: the measured 5 % q-shift test left a
+     0.69 % rms residual, which is the same size as what is seen here.
+
+  `OverlapScaling.residual_slope_per_nm` exists to separate them from a leftover normalisation
+  offset — flat in q means the factor already absorbed it, a tilt means something angle-dependent
+  that no factor can. It does **not** separate candidate 1 from candidate 2, both of which tilt.
+  What does: **r0426**, where Bragg peaks make a q-axis error shift peak positions while
+  polarisation does not (§6 O5's featureless blind spot, in the one case where it lifts); and
+  applying the polarisation correction to see whether χ² falls.
 - **O6 — Closed 2026-09-13 by decision, not by measurement.** AGIPD covers 0.077–1.067 nm⁻¹ and
   JUNGFRAU populates 9.8–23.7, so the gap is 1.07–9.8 nm⁻¹ with no overlap to cross-normalise
   against. No combined SAXS+WAXS curve is planned at any point, so the question does not arise and

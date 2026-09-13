@@ -227,3 +227,74 @@ def test_combine_files_reads_two_finished_runs(
     assert scaling.factor > 0
     assert scaling.n_bins >= 4
     assert np.isfinite(combined["intensity"].values).all()
+
+
+# ── telling a normalisation offset from a q-dependent one ────────────────────
+def test_a_pure_normalisation_offset_leaves_a_flat_residual():
+    """The factor absorbs it, so there is nothing left to trend."""
+    i_ref, s_ref, i_other, s_other = curves(factor=3.7)
+    scaling = scale_to_overlap(
+        Q_REF, i_ref, Q_OTHER, i_other, sigma_ref=s_ref, sigma_other=s_other
+    )
+    assert scaling.factor == pytest.approx(3.7, rel=1e-5)
+    assert abs(scaling.residual_slope_per_nm) < 1e-6
+    assert abs(scaling.residual_at_q_low) < 1e-5
+    assert abs(scaling.residual_at_q_high) < 1e-5
+
+
+def test_a_q_dependent_difference_tilts_the_residual():
+    """A correction applied to neither detector, growing with scattering angle.
+
+    Modelled on the polarisation factor, whose azimuthal amplitude goes as
+    sin^2(2theta) and so grows through the overlap. No single factor can remove
+    it, and the slope is what says so.
+    """
+    i_ref, s_ref, i_other, s_other = curves()
+    tilt = 1.0 + 0.01 * (Q_OTHER - Q_OTHER.min()) / np.ptp(Q_OTHER)
+    scaling = scale_to_overlap(
+        Q_REF,
+        i_ref,
+        Q_OTHER,
+        i_other * tilt,
+        sigma_ref=s_ref,
+        sigma_other=s_other,
+    )
+    assert abs(scaling.residual_slope_per_nm) > 1e-4
+    # ...and the two ends of the overlap straddle zero, because the factor fits
+    # the middle: that shape is the signature, not the magnitude.
+    assert scaling.residual_at_q_low * scaling.residual_at_q_high < 0
+
+
+def test_sigma_over_intensity_separates_disagreement_from_tight_errors():
+    """chi2 alone cannot say whether curves differ or errors are understated."""
+    i_ref, s_ref, i_other, s_other = curves(shape=featureless, q_shift=1.02)
+
+    generous = scale_to_overlap(
+        Q_REF, i_ref, Q_OTHER, i_other, sigma_ref=s_ref, sigma_other=s_other
+    )
+    tight = scale_to_overlap(
+        Q_REF,
+        i_ref,
+        Q_OTHER,
+        i_other,
+        sigma_ref=s_ref / 10,
+        sigma_other=s_other / 10,
+    )
+    # The same curves, so the same physical disagreement...
+    assert tight.residual_rms == pytest.approx(generous.residual_rms, rel=1e-6)
+    # ...but a hundredfold worse chi2 purely from the error bars.
+    assert tight.reduced_chi2 == pytest.approx(100 * generous.reduced_chi2, rel=0.01)
+    # sigma_over_intensity recovers what was claimed, in both cases.
+    assert tight.sigma_over_intensity == pytest.approx(
+        generous.sigma_over_intensity / 10, rel=0.01
+    )
+
+
+def test_the_trend_is_reported_on_the_combined_dataset():
+    i_ref, s_ref, i_other, s_other = curves()
+    combined, scaling = combine_curves(
+        Q_REF, i_ref, Q_OTHER, i_other, sigma_ref=s_ref, sigma_other=s_other
+    )
+    assert combined.attrs["scaling_residual_slope_per_nm"] == pytest.approx(
+        scaling.residual_slope_per_nm
+    )
