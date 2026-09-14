@@ -57,19 +57,14 @@ Not unit-tested (CLAUDE.md working rule 7): run it on a node.
 
 from __future__ import annotations
 
-import os
-
 # Before numpy, pyFAI or EXtra-data import anything that builds a thread pool.
-for _name in (
-    "EXTRA_NUM_THREADS",
-    "OMP_NUM_THREADS",
-    "MKL_NUM_THREADS",
-    "OPENBLAS_NUM_THREADS",
-):
-    os.environ[_name] = "1"
+from _common import write_report  # noqa: E402
+
+from analysis.threadenv import set_thread_env
+
+set_thread_env()
 
 import argparse  # noqa: E402
-import json  # noqa: E402
 import platform  # noqa: E402
 import socket  # noqa: E402
 import time  # noqa: E402
@@ -693,12 +688,7 @@ def main() -> int:
         if "implies" in report["verdict"]:
             print(f"  -> {report['verdict']['implies']}")
 
-    path = args.json or Path(__file__).with_name(
-        f"w6_data_check_r{args.run:04d}_{args.detector}_"
-        f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.json"
-    )
-    path.write_text(json.dumps(report, indent=2, default=str))
-    print(f"\nwrote {path}")
+    write_report(report, args.json, f"w6_data_check_r{args.run:04d}_{args.detector}")
     return 0 if report["passed"] else 1
 
 

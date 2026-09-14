@@ -23,9 +23,10 @@ matplotlib.use("Agg")
 import h5py  # noqa: E402
 from test_run import InlinePool  # noqa: E402  (tests/saxs is on sys.path)
 
+from analysis.common.status import FrameStatus  # noqa: E402
+from analysis.common.writer import pooled_per_train  # noqa: E402
 from analysis.saxs import damnit  # noqa: E402
-from analysis.saxs.status import FrameStatus  # noqa: E402
-from analysis.saxs.writer import per_pulse, pooled_per_train  # noqa: E402
+from analysis.saxs.writer import per_pulse  # noqa: E402
 
 
 @pytest.fixture
@@ -199,8 +200,8 @@ def test_config_for_applies_overrides():
 
 
 def test_agipd_saxs_does_not_swallow_an_incomplete_run(monkeypatch, tmp_path):
-    """P5: fail loudly. A partial I(q) must never look like a whole one."""
-    from analysis.saxs.writer import IncompleteRun
+    """Fail loudly: a partial I(q) must never look like a whole one."""
+    from analysis.common.writer import IncompleteRun
 
     def boom(cfg, **kwargs):
         raise IncompleteRun("not every frame reached OK: {'WORKER_ERROR': 3}")

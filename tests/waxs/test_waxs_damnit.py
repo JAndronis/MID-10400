@@ -65,7 +65,7 @@ def test_the_grid_survives_damnits_netcdf_round_trip(grid, tmp_path):
 
 def test_jungfrau_waxs_does_not_swallow_an_incomplete_run(monkeypatch):
     """Failing loudly needs no code here — only that nothing catches it."""
-    from analysis.waxs.writer import IncompleteRun
+    from analysis.common.writer import IncompleteRun
 
     def boom(cfg, **kwargs):
         assert kwargs["reduce"] == "per_cell"

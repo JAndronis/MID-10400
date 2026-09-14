@@ -15,14 +15,13 @@ pytest.importorskip("extra_data")
 from waxs_mockrun import LIT_CELLS  # noqa: E402
 
 from analysis.common.status import FrameStatus  # noqa: E402
-from analysis.waxs import worker  # noqa: E402
-from analysis.waxs.writer import (  # noqa: E402
+from analysis.common.writer import (  # noqa: E402
     ConfigHashMismatch,
-    JungfrauWaxsWriter,
     SchemaMismatch,
-    per_cell,
     pooled_per_train,
 )
+from analysis.waxs import worker  # noqa: E402
+from analysis.waxs.writer import JungfrauWaxsWriter, per_cell  # noqa: E402
 
 
 def process_all(pipeline):

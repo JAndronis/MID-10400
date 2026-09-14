@@ -1,4 +1,4 @@
-"""Putting the two detectors on one scale (WAXS context file §6 O5).
+"""Putting the two detectors on one scale.
 
 After masking, jf1 populates ~11.5–23.7 nm⁻¹ and jf2 ~9.8–18.5, so they share a
 wide overlap. This module fits a single multiplicative factor for one detector
@@ -27,7 +27,7 @@ reflections) a good χ² here says the two detectors are mutually consistent in
 *shape*, not that either q axis is right. Do not read more into it than that.
 
 Everything here works on stored sums or on pooled curves — nothing reprocesses
-frames — so it is post hoc in the sense of the AGIPD §9 contract.
+frames — so it is post hoc, applied to stored sums rather than during the pass.
 """
 
 from __future__ import annotations
@@ -108,11 +108,8 @@ class OverlapScaling:
     def sigma_over_intensity(self) -> float:
         """Roughly what fractional error the χ² implies the inputs claimed.
 
-        ``residual_rms / sqrt(reduced_chi2)``. Useful for telling "the curves
-        disagree" from "the error bars are too small": on r0423 the residual is
-        0.74 % against a claimed 0.10 %, so the disagreement is real and
-        systematic but sub-percent, and χ² alone would have made it sound
-        catastrophic.
+        ``residual_rms / sqrt(reduced_chi2)``, which separates "the curves
+        disagree" from "the error bars are too small" — a large χ² alone cannot.
         """
         if not np.isfinite(self.reduced_chi2) or self.reduced_chi2 <= 0:
             return float("nan")
@@ -131,7 +128,7 @@ def mean_curve(source: Any) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
       with σ propagated from the stored per-train σ.
 
     Slots with no frame are stored as zeros, never NaN, so they are selected out
-    by ``n_frames`` rather than by ``isnan`` (AGIPD context file §3 rule 7).
+    by ``n_frames`` rather than by ``isnan``.
     """
     import xarray as xr
 
@@ -445,7 +442,7 @@ def combine_files(
     The stored sums carry real per-bin errors, which the per-cell grid does not,
     so this is the path that gives a meaningful ``reduced_chi2``.
     """
-    from analysis.waxs.writer import pooled_per_train
+    from analysis.common.writer import pooled_per_train
 
     q_ref, i_ref, s_ref = mean_curve(pooled_per_train(Path(reference_file)))
     q_other, i_other, s_other = mean_curve(pooled_per_train(Path(other_file)))

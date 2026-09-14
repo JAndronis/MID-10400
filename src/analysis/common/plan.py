@@ -2,8 +2,7 @@
 
 A run plan is its identity table. Every row of an output file is addressed by
 the train it belongs to, never by its position in an array: a dropped train
-would otherwise shift every later frame onto the wrong trainId (CLAUDE.md
-pitfall 4).
+would otherwise shift every later frame onto the wrong trainId.
 
 Nothing here knows which detector it is describing. Each pass builds its own
 :class:`RunPlan` — how many rows a train owns, and which run checks apply, are

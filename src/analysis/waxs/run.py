@@ -1,4 +1,4 @@
-"""Orchestration for one run and one detector (WAXS context file §3 D2).
+"""Orchestration for one run and one detector.
 
 The parent builds the geometry, measures the cell pattern and the readout
 noise, gates on the self-test, then fans blocks out to spawned single-threaded
@@ -6,33 +6,30 @@ workers and writes their results itself. Nothing in the hot loop depends on the
 XGM, transmission or background.
 
 The two detectors never meet here: each gets its own config, its own pass and
-its own file, and they are combined only at the plot (§6 O5).
+its own file, and they are combined only at the plot.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import platform
-import socket
 import time
 from collections.abc import Callable
-from concurrent.futures import BrokenExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
 from analysis.common.cpu import (
-    default_pool,
     file_sha256,
-    package_versions,
     phase,
     set_thread_env,
 )
 from analysis.common.masks import frame_bad
 from analysis.common.plan import evenly_spaced
+from analysis.common.run import base_provenance, fan_out
 from analysis.common.status import FrameStatus
+from analysis.common.writer import IncompleteRun
 from analysis.waxs import worker as worker_module
 from analysis.waxs.cells import CellAccumulator, CellClassification
 from analysis.waxs.config import CELLS_PER_TRAIN, JungfrauWaxsConfig
@@ -40,7 +37,7 @@ from analysis.waxs.integrate import ErrorModel
 from analysis.waxs.operator import WaxsOperator, build_operator
 from analysis.waxs.plan import build_plan, open_detector
 from analysis.waxs.selftest import run_selftest
-from analysis.waxs.writer import IncompleteRun, JungfrauWaxsWriter
+from analysis.waxs.writer import JungfrauWaxsWriter
 
 __all__ = ["REDUCERS", "run_jungfrau_waxs"]
 
@@ -107,9 +104,9 @@ def run_jungfrau_waxs(
     :returns: the reduction named by ``reduce``, or ``None`` when the run has no
         lit memory cell at all — see :func:`_no_lit_cells`.
     :raises analysis.waxs.cells.ImplausibleLitCells: the measured cell pattern
-        is not a storage-cell sequence, so the classification is wrong (§3 D4).
+        is not a storage-cell sequence, so the classification is wrong.
     :raises analysis.waxs.cells.UnexpectedLitCells: ``cfg.expected_lit_cells``
-        is pinned and the measured pattern is not it (§3 D4).
+        is pinned and the measured pattern is not it.
     :raises analysis.waxs.selftest.SelfTestFailed: the NaN path and the
         per-frame-mask reference disagree.
     :raises IncompleteRun: some frame carries a *blocking* status and
@@ -121,7 +118,7 @@ def run_jungfrau_waxs(
     if reduce not in REDUCERS:
         raise ValueError(f"reduce must be one of {REDUCERS}, got {reduce!r}")
 
-    # Before any pool exists, so spawned children inherit it (§3 rule 3).
+    # Before any pool exists, so spawned children inherit it.
     set_thread_env()
     started_at = time.time()
     started = time.perf_counter()
@@ -162,69 +159,43 @@ def run_jungfrau_waxs(
         todo = [b for b in plan.blocks if not out.block_complete(b)]
         log.info("%d of %d blocks to process", len(todo), len(plan.blocks))
 
-        timings: dict[str, float] = {}
-        write_s = 0.0
-        bits_present = 0
-
-        if todo:
-            factory = pool_factory or default_pool
-            initargs = (
+        totals = fan_out(
+            out,
+            todo,
+            process=worker_module.process_block,
+            n_workers=cfg.workers,
+            initializer=worker_module.init,
+            initargs=(
                 cfg,
                 op.sha256,
                 model,
                 classification.lit,
                 str(run_dir) if run_dir else None,
-            )
-            try:
-                with factory(
-                    cfg.workers,
-                    initializer=worker_module.init,
-                    initargs=initargs,
-                ) as pool:
-                    futures = {
-                        pool.submit(worker_module.process_block, block): block
-                        for block in todo
-                    }
-                    for future in as_completed(futures):
-                        block = futures[future]
-                        try:
-                            block_result = future.result()
-                        except BrokenExecutor:
-                            out.mark_remaining(FrameStatus.NOT_PROCESSED)
-                            raise
-                        except Exception as error:  # noqa: BLE001 - into the ledger
-                            log.exception("block %d failed", block.index)
-                            out.mark(block, FrameStatus.WORKER_ERROR, repr(error))
-                            continue
-                        write_started = time.perf_counter()
-                        out.write_block(block, block_result)
-                        write_s += time.perf_counter() - write_started
-                        bits_present |= block_result.bits_present
-                        for key, value in block_result.timings.items():
-                            timings[key] = timings.get(key, 0.0) + value
-            except BrokenExecutor:
-                out.mark_remaining(FrameStatus.NOT_PROCESSED)
-                raise
+            ),
+            pool_factory=pool_factory,
+        )
 
         out.finalise(
-            {
-                "detector": cfg.detector,
-                "host": socket.gethostname(),
-                "platform": platform.platform(),
-                "n_workers": cfg.workers,
-                "n_blocks": len(plan.blocks),
-                "started_at": started_at,
-                "wall_s": time.perf_counter() - started,
-                "package_versions": package_versions(),
-                "operator_sha256": op.sha256,
-                "poni_sha256": op.poni_sha256 or "",
-                "static_mask_sha256": op.static_sha256,
-                "q_range": list(op.q_populated),
-                "input_file_sha256": {
+            base_provenance(
+                cfg,
+                plan,
+                out,
+                started_at=started_at,
+                started=started,
+                totals=totals,
+                setup_timings=setup,
+                operator_sha256=op.sha256,
+                input_file_sha256={
                     name: (file_sha256(path) if path else None)
                     for name, path in cfg.input_files.items()
                 },
-                "bits_present": int(bits_present),
+                run_checks=plan.checks,
+            )
+            | {
+                "detector": cfg.detector,
+                "poni_sha256": op.poni_sha256 or "",
+                "static_mask_sha256": op.static_sha256,
+                "q_range": list(op.q_populated),
                 "error_model": {
                     "read_noise_kev": model.read_noise_kev,
                     "photon_energy_kev": model.photon_energy_kev,
@@ -245,11 +216,7 @@ def run_jungfrau_waxs(
                     "max_rel_variance": report.max_rel_variance,
                     "tolerance": report.tolerance,
                 },
-                "timings": timings,
-                "setup_timings": {**setup, "write_blocks": write_s},
-                "status_summary": out.status_summary(),
                 "data_check": out.data_check_summary(),
-                "run_checks": plan.checks,
             }
         )
         summary = out.status_summary()
@@ -263,7 +230,7 @@ def run_jungfrau_waxs(
 
     if data_check:
         # Never silent, whether or not it raises: a tolerated loss is still a
-        # loss, and under §3 D6's unresolved question it could be a biased one.
+        # loss, and it is not necessarily an unbiased one.
         log.warning(
             "r%d %s: the value check excluded %d pixels across %d frames and "
             "refused %d outright (%s)",
@@ -285,10 +252,8 @@ def run_jungfrau_waxs(
 def _blocking(cfg: JungfrauWaxsConfig, summary: dict[str, int]) -> dict[str, int]:
     """The non-``OK`` statuses that stop the run finishing.
 
-    ``DATA_CHECK_FAILED`` is a property of the data rather than a failure of the
-    pass — the frame was read, classified and recorded — so by default it is
-    counted and not raised on; see ``cfg.allow_data_check_failures``. Everything
-    else still blocks.
+    ``DATA_CHECK_FAILED`` is a property of the data, not a failure of the pass,
+    so ``cfg.allow_data_check_failures`` decides. Everything else blocks.
     """
     tolerated = {FrameStatus.OK.name}
     if cfg.allow_data_check_failures:
@@ -326,26 +291,18 @@ def _error_model(
     """sigma_read, in order of precedence: configured, measured, fallback.
 
     An explicit ``cfg.read_noise_kev`` wins outright. Otherwise the run's own
-    dark cells are measured, which is what §3 D3 asks for. A run that reads
-    every storage cell has no dark cell — 213 of the proposal's do — and falls
-    back to ``cfg.read_noise_fallback_kev``, the per-detector median over the
-    runs that do. ``ErrorModel.source`` records which of the three it was, so a
-    stored file never has to be guessed at.
+    dark cells are measured, which is the preferred source. A run that reads
+    every storage cell has no dark cell and falls back to
+    ``cfg.read_noise_fallback_kev``, the per-detector median over the runs that
+    do. ``ErrorModel.source`` records which of the three it was, so a stored file
+    never has to be guessed at and can be selected against.
 
-    **There is deliberately no fourth branch that raises.** An earlier draft had
-    one, for "no measurement and no fallback" — but `JungfrauWaxsConfig` resolves
-    ``read_noise_fallback_kev`` from
-    :data:`~analysis.waxs.config.DEFAULT_READ_NOISE_KEV` in ``__post_init__``, so
-    it is never ``None`` by the time a config exists and that branch could not
-    fire. Resolving it there rather than here is what keeps
-    the *used* number inside ``config_hash`` (CLAUDE.md pitfall 12): were the
-    field left ``None`` and filled in at this point, a change to the constant
-    would silently let resume merge blocks computed at two different sigma_read.
-
-    The guarantee CLAUDE.md working rule 2 asks for — never a number without a
-    traceable source — is met by ``ErrorModel.source`` instead of by an
-    exception: every stored file says which of the three it used, so selecting
-    against ``"fallback"`` is a question the provenance can answer.
+    There is no fourth branch that raises: ``JungfrauWaxsConfig`` resolves
+    ``read_noise_fallback_kev`` in ``__post_init__``, so it is never ``None`` by
+    the time a config exists. Resolving it there rather than here is what keeps
+    the number actually used inside ``config_hash`` — filled in at this point, a
+    change to the constant would let resume merge blocks computed at two
+    different sigma_read.
     """
     if cfg.read_noise_kev is not None:
         return ErrorModel(

@@ -24,19 +24,14 @@ Needs Maxwell: the proc data, and the real PONI and ``.edf`` files.
 
 from __future__ import annotations
 
-import os
-
 # Before numpy, pyFAI or EXtra-data import anything that builds a thread pool.
-for _name in (
-    "EXTRA_NUM_THREADS",
-    "OMP_NUM_THREADS",
-    "MKL_NUM_THREADS",
-    "OPENBLAS_NUM_THREADS",
-):
-    os.environ[_name] = "1"
+from _common import write_report  # noqa: E402
+
+from analysis.threadenv import set_thread_env
+
+set_thread_env()
 
 import argparse  # noqa: E402
-import json  # noqa: E402
 import platform  # noqa: E402
 import socket  # noqa: E402
 import time  # noqa: E402
@@ -392,11 +387,7 @@ def main(argv=None) -> int:
         f"{report['o4_lit_cells_invariant']}"
     )
 
-    path = args.json or Path(__file__).with_name(
-        f"w1_facts_{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.json"
-    )
-    path.write_text(json.dumps(report, indent=2, default=str))
-    print(f"\nwrote {path}")
+    write_report(report, args.json, "w1_facts")
     return 0 if report["passed"] else 1
 
 

@@ -1,10 +1,10 @@
-"""Per-block read and frame loop (context file §6.5).
+"""Per-block read and frame loop.
 
 One single-threaded worker per core, spawned. The worker owns nothing but its
 own reads: the operator and the masks come from files written by the parent,
 and the results go back as plain arrays. Only the parent writes the output file.
 
-Thread limits are inherited from the parent's environment (§3 rule 3) — a
+Thread limits are inherited from the parent's environment — a
 spawned child has already imported numpy by the time an initializer runs, so
 setting them here would be too late for pools that already exist. They are
 re-asserted anyway, which helps only libraries imported lazily.
@@ -19,22 +19,20 @@ from typing import Any
 
 import numpy as np
 
-# Re-exported: ``run.py`` and the tests reach these through this module.
-from analysis.common.cpu import THREAD_ENV, set_thread_env
+from analysis.common.cpu import set_thread_env
+from analysis.common.masks import frame_bad
+from analysis.common.plan import Block
+from analysis.common.status import DataCheckFailed, FrameStatus
 from analysis.saxs.config import AgipdSaxsConfig
-from analysis.saxs.masks import BaseMasks, frame_bad, load_masks
+from analysis.saxs.masks import BaseMasks, load_masks
 from analysis.saxs.operator import SparseOperator, load_operator
-from analysis.saxs.plan import Block
 from analysis.saxs.sparse import integrate_frame
-from analysis.saxs.status import DataCheckFailed, FrameStatus
 
 __all__ = [
-    "THREAD_ENV",
     "BlockResult",
     "WorkerPaths",
     "init",
     "process_block",
-    "set_thread_env",
 ]
 
 
@@ -139,10 +137,10 @@ def _empty_result(block: Block, npt: int) -> BlockResult:
 
 
 def process_block(block: Block) -> BlockResult:
-    """Read and integrate one block (context file §6.5).
+    """Read and integrate one block.
 
     Every frame's identity comes from the reader's coordinates, never from its
-    position in the array (CLAUDE.md pitfall 4). A train whose labels or frame
+    position in the array. A train whose labels or frame
     count disagree with the plan is marked ``LABEL_MISMATCH`` and none of its
     frames are integrated.
     """

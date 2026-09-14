@@ -1,4 +1,4 @@
-"""The static mask, and the per-frame union (WAXS context file §3 D5).
+"""The static mask, and the per-frame union.
 
 Much simpler than the AGIPD side, for two measured reasons:
 
@@ -13,7 +13,7 @@ Much simpler than the AGIPD side, for two measured reasons:
    left for a base mask to precompute.
 
 So ``static_bad`` is the ``.edf`` file alone. It is a native pyFAI mask written
-from silx view (§6 O2), so it already carries pyFAI's polarity — non-zero =
+from silx view, so it already carries pyFAI's polarity — non-zero =
 excluded — and is used as-is, with no inversion anywhere.
 """
 
@@ -25,10 +25,13 @@ from pathlib import Path
 import numpy as np
 
 from analysis.common.cpu import file_sha256
-from analysis.common.masks import MaskSource, StaticMask, frame_bad
+from analysis.common.masks import MaskSource, StaticMask
 from analysis.waxs.config import MODULE_SHAPE, NPIX, JungfrauWaxsConfig
 
-__all__ = ["build_static_bad", "frame_bad", "load_static_mask"]
+__all__ = [
+    "build_static_bad",
+    "load_static_mask",
+]
 
 
 def load_static_mask(path: str | Path) -> np.ndarray:
@@ -59,7 +62,7 @@ def load_static_mask(path: str | Path) -> np.ndarray:
 
 
 def build_static_bad(cfg: JungfrauWaxsConfig) -> StaticMask:
-    """The run's static mask: the ``.edf`` file, and nothing else (§3 D5)."""
+    """The run's static mask: the ``.edf`` file, and nothing else."""
     bad = np.zeros(NPIX, dtype=bool)
     sources: list[MaskSource] = []
 

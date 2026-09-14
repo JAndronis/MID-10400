@@ -1,39 +1,42 @@
-"""Orchestration for one run (context file §6.7).
+"""Orchestration for one run.
 
 The parent builds everything the workers need, gates on the self-test, then
 fans blocks out to spawned single-threaded workers and writes their results
 itself. Nothing in the hot loop depends on XGM, transmission or background
-(§3 rule 9).
+corrections: those are applied afterwards, to the stored sums.
 """
 
 from __future__ import annotations
 
 import logging
-import platform
-import socket
 import time
 from collections.abc import Callable
-from concurrent.futures import BrokenExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-# Re-exported: ``default_pool`` is part of this module's documented surface.
-from analysis.common.cpu import default_pool, package_versions, phase
+from analysis.common.cpu import file_sha256, phase, set_thread_env
+from analysis.common.masks import frame_bad
+from analysis.common.plan import RunPlan, evenly_spaced
+from analysis.common.run import base_provenance, fan_out
+from analysis.common.status import FrameStatus
+from analysis.common.writer import IncompleteRun
 from analysis.saxs import masks as masks_module
 from analysis.saxs import operator as operator_module
 from analysis.saxs import worker as worker_module
-from analysis.saxs.config import AgipdSaxsConfig, file_sha256
-from analysis.saxs.plan import RunPlan, build_plan
+from analysis.saxs.config import AgipdSaxsConfig
+from analysis.saxs.plan import build_plan
 from analysis.saxs.selftest import run_selftest
-from analysis.saxs.status import FrameStatus
-from analysis.saxs.writer import AgipdSaxsWriter, IncompleteRun
+from analysis.saxs.writer import AgipdSaxsWriter
 
-__all__ = ["REDUCERS", "default_pool", "run_agipd_saxs"]
+__all__ = [
+    "REDUCERS",
+    "run_agipd_saxs",
+]
 
 #: What ``run_agipd_saxs`` may return. ``pooled`` is the per-train I(q) of
-#: context file §9; ``per_pulse`` is the (trainId, pulseId, q) grid, which is
+#: ``per_pulse`` is the (trainId, pulseId, q) grid, which is
 #: what the DAMNIT variable stores; ``none`` skips the reduction for a caller
 #: that only wants the file written.
 REDUCERS = ("pooled", "per_pulse", "none")
@@ -74,9 +77,9 @@ def run_agipd_saxs(
     if reduce not in REDUCERS:
         raise ValueError(f"reduce must be one of {REDUCERS}, got {reduce!r}")
 
-    # Before any pool exists, so spawned children inherit it (§3 rule 3).
-    worker_module.set_thread_env()
-    # Wall time is an acceptance criterion (context file §10, P4), so it is
+    # Before any pool exists, so spawned children inherit it.
+    set_thread_env()
+    # Wall time is an acceptance criterion, so it is
     # recorded in provenance rather than left to whoever launched the job. It
     # spans the plan, the self-test, the pool and the writer.
     started_at = time.time()
@@ -115,57 +118,34 @@ def run_agipd_saxs(
         todo = [b for b in plan.blocks if not out.block_complete(b)]
         log.info("%d of %d blocks to process", len(todo), len(plan.blocks))
 
-        timings: dict[str, float] = {}
-        write_s = 0.0
-        bits_present = 0
-        unseen_cells = 0
-
-        if todo:
-            factory = pool_factory or default_pool
-            try:
-                with factory(
-                    cfg.workers,
-                    initializer=worker_module.init,
-                    initargs=(paths, cfg),
-                ) as pool:
-                    futures = {
-                        pool.submit(worker_module.process_block, block): block
-                        for block in todo
-                    }
-                    for future in as_completed(futures):
-                        block = futures[future]
-                        try:
-                            block_result = future.result()
-                        except BrokenExecutor:
-                            out.mark_remaining(FrameStatus.NOT_PROCESSED)
-                            raise
-                        except Exception as error:  # noqa: BLE001 - into the ledger
-                            log.exception("block %d failed", block.index)
-                            out.mark(block, FrameStatus.WORKER_ERROR, repr(error))
-                            continue
-                        write_started = time.perf_counter()
-                        out.write_block(block, block_result)
-                        write_s += time.perf_counter() - write_started
-                        bits_present |= block_result.bits_present
-                        unseen_cells += block_result.unseen_cells
-                        for key, value in block_result.timings.items():
-                            timings[key] = timings.get(key, 0.0) + value
-            except BrokenExecutor:
-                out.mark_remaining(FrameStatus.NOT_PROCESSED)
-                raise
+        totals = fan_out(
+            out,
+            todo,
+            process=worker_module.process_block,
+            n_workers=cfg.workers,
+            initializer=worker_module.init,
+            initargs=(paths, cfg),
+            pool_factory=pool_factory,
+            accumulate=("unseen_cells",),
+        )
 
         out.finalise(
-            {
-                "host": socket.gethostname(),
-                "platform": platform.platform(),
-                "n_workers": cfg.workers,
-                # A run with fewer blocks than workers cannot use them all, so
-                # the block count is what any efficiency figure divides by.
-                "n_blocks": len(plan.blocks),
-                "started_at": started_at,
-                "wall_s": time.perf_counter() - started,
-                "package_versions": package_versions(),
-                "operator_sha256": op.sha256,
+            base_provenance(
+                cfg,
+                plan,
+                out,
+                started_at=started_at,
+                started=started,
+                totals=totals,
+                setup_timings=setup,
+                operator_sha256=op.sha256,
+                input_file_sha256={
+                    name: (file_sha256(path) if path else None)
+                    for name, path in cfg.input_files.items()
+                },
+                run_checks=plan.checks,
+            )
+            | {
                 "masks_sha256": base_masks.sha256,
                 "static_mask_sha256": static.sha256,
                 "static_mask_sources": [
@@ -177,16 +157,7 @@ def run_agipd_saxs(
                     }
                     for s in static.sources
                 ],
-                "input_file_sha256": {
-                    name: (file_sha256(path) if path else None)
-                    for name, path in cfg.input_files.items()
-                },
-                "bits_present": int(bits_present),
-                "unseen_cell_frames": int(unseen_cells),
-                "timings": timings,
-                "setup_timings": {**setup, "write_blocks": write_s},
-                "status_summary": out.status_summary(),
-                "run_checks": plan.checks,
+                "unseen_cell_frames": int(totals.extra["unseen_cells"]),
             }
         )
         incomplete = out.any_not_ok()
@@ -212,7 +183,7 @@ def _build_base_masks(
         [t.train_id for t in plan.trains if t.status is FrameStatus.OK],
         dtype=np.uint64,
     )
-    sampled = masks_module.evenly_spaced(ok_trains, cfg.base_mask_trains)
+    sampled = evenly_spaced(ok_trains, cfg.base_mask_trains)
 
     if dc is None:
         from extra_data import open_run
@@ -248,7 +219,7 @@ def _run_selftest(
     ok_trains = [t.train_id for t in plan.trains if t.status is FrameStatus.OK]
     if not ok_trains:
         raise ValueError("no OK trains to self-test on")
-    chosen = masks_module.evenly_spaced(np.array(ok_trains, dtype=np.uint64), 2)
+    chosen = evenly_spaced(np.array(ok_trains, dtype=np.uint64), 2)
 
     engine = ai.engines[next(iter(ai.engines))].engine
     frames = []
@@ -264,9 +235,7 @@ def _run_selftest(
             frames.append(
                 (
                     data[:, frame].reshape(-1),
-                    masks_module.frame_bad(
-                        mask[:, frame], cfg.mask_bits, base_masks.static_bad
-                    ),
+                    frame_bad(mask[:, frame], cfg.mask_bits, base_masks.static_bad),
                     base_bad,
                     base_denominator,
                 )

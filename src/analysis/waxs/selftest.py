@@ -1,9 +1,9 @@
-"""The NaN-equivalence gate (WAXS context file §4, replacing the AGIPD §6.6 gate).
+"""The NaN-equivalence gate.
 
 The AGIPD self-test compares a sparse kernel against pyFAI. Here both sides are
-pyFAI, so that comparison would be an identity check and the context file says
-as much. This gate has content instead: it is the correctness argument for the
-whole design in :mod:`analysis.waxs.operator`.
+pyFAI, so that comparison would be an identity check. This gate has content
+instead: it is the correctness argument for the whole design in
+:mod:`analysis.waxs.operator`.
 
 The **reference** masks each frame the obvious way — ``mask = static | dynamic``
 passed to ``integrate1d`` — which is correct and slow, because pyFAI rebuilds
@@ -27,6 +27,7 @@ from pathlib import Path
 import numpy as np
 from pyFAI.integrator.azimuthal import AzimuthalIntegrator
 
+from analysis.common.arrays import relative_difference
 from analysis.waxs.config import MODULE_SHAPE
 from analysis.waxs.integrate import ErrorModel, extreme_pixels, integrate_frame
 from analysis.waxs.operator import WaxsOperator
@@ -93,7 +94,7 @@ def reference_frame(
 
 
 def _relative(got: np.ndarray, want: np.ndarray) -> float:
-    return float(np.max(np.abs(got - want) / np.maximum(np.abs(want), 1e-12)))
+    return float(np.max(relative_difference(got, want)))
 
 
 def compare_frame(

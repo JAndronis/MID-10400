@@ -1,15 +1,14 @@
-"""Sparse-vs-pyFAI gate (context file §6.6).
+"""Sparse-vs-pyFAI gate.
 
 The sparse path and the dense pyFAI engine must agree to a relative difference
 below ``tolerance`` on every populated bin, and must agree exactly on *which*
-bins are populated. In P1 this runs on synthetic frames; from P4 it runs on
-real frames in the parent process before the worker pool is started, so a
-geometry or masking mistake aborts the job instead of producing a run's worth
-of wrong sums.
+bins are populated. It runs on real frames in the parent process before the
+worker pool is started, so a geometry or masking mistake aborts the job instead
+of producing a run's worth of wrong sums.
 
-The reference is called the way CLAUDE.md pitfall 2 requires: an explicit
-``variance=`` array, never ``ErrorModel.POISSON``, which floors the per-pixel
-variance at 1 and inflates it by ~87x on 1 %-occupancy frames.
+The reference is always called with an explicit ``variance=`` array, never
+``ErrorModel.POISSON``: that floors the per-pixel variance at 1, which on
+frames this sparse inflates it by nearly two orders of magnitude.
 """
 
 from __future__ import annotations
@@ -19,6 +18,7 @@ from dataclasses import asdict, dataclass
 
 import numpy as np
 
+from analysis.common.arrays import relative_difference
 from analysis.saxs.operator import SparseOperator
 from analysis.saxs.sparse import integrate_frame
 
@@ -48,7 +48,7 @@ class SelfTestReport:
     passed: bool
 
     def as_provenance(self) -> dict[str, object]:
-        """A JSON-serialisable record for the provenance group (§7)."""
+        """A JSON-serialisable record for the provenance group."""
         return asdict(self)
 
 
@@ -67,17 +67,11 @@ class SelfTestFailed(AssertionError):
         self.report = report
 
 
-def _rel(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    """Relative difference ``|a - b| / max(|b|, 1e-12)`` (context file §6.6)."""
-    return np.abs(a - b) / np.maximum(np.abs(b), 1e-12)
-
-
 def reference_frame(engine, op: SparseOperator, x: np.ndarray, bad: np.ndarray):
     """Integrate one frame densely with the pyFAI engine.
 
-    Bad pixels are NaN in ``weights``, which is what removes them from both the
-    signal and the normalization; ``variance`` is passed as the raw counts
-    (Poisson, unfloored) and ``solidangle`` as the operator's own Ω, so that
+    Bad pixels are NaN in ``weights``, which removes them from both the signal
+    and the normalization, and ``solidangle`` is the operator's own Ω so that
     both paths normalise by the same quantity.
     """
     frame = np.where(bad, np.nan, x).astype(np.float32).reshape(op.shape)
@@ -109,9 +103,13 @@ def compare_frame(
         return 0.0, 0.0, 0.0, empty_bins_agree
 
     return (
-        float(_rel(result.signal, ref.signal)[populated].max()),
-        float(_rel(result.normalization, ref.normalization)[populated].max()),
-        float(_rel(result.variance, ref.variance)[populated].max()),
+        float(relative_difference(result.signal, ref.signal)[populated].max()),
+        float(
+            relative_difference(result.normalization, ref.normalization)[
+                populated
+            ].max()
+        ),
+        float(relative_difference(result.variance, ref.variance)[populated].max()),
         empty_bins_agree,
     )
 

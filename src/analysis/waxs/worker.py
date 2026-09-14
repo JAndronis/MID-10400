@@ -5,20 +5,15 @@ own reads: it rebuilds the operator from the config — a PONI load plus one
 sparse-matrix build, tens of milliseconds, once per process — and checks the
 result's sha256 against the parent's, so no engine has to be pickled.
 
-Thread limits are inherited from the parent's environment (AGIPD context file
-§3 rule 3). Note that ``MultimodKeyData.ndarray`` takes no ``decompress_threads``
-argument — that is ``XtdfImageMultimodKeyData``'s, i.e. AGIPD's — so CLAUDE.md
-pitfall 3 does not arise on this read path.
+Thread limits are inherited from the parent's environment. Note that
+``MultimodKeyData.ndarray`` takes no ``decompress_threads`` argument — that is
+AGIPD's ``XtdfImageMultimodKeyData`` — so this read path has no threaded
+decompression to disable.
 
 **All sixteen cells are read and the lit ones selected in memory.** EXtra-data's
-``roi=`` would let only the lit cells be read, halving the I/O, but it slices
-the *array* axis while the lit set is defined by ``data.memoryCell`` values, and
-whether it saves anything at all depends on the proc chunk layout. Both are W1
-measurements on the cluster (``scripts/w1_facts.py``); until they exist this
-does the simple correct thing (CLAUDE.md working rule 5: data quality before
-speed). Note the argument is a *tuple* of slices — ``ndarray(roi=(np.s_[0:8],))``
-— because EXtra-data concatenates it onto an index expression; a bare
-``np.s_[0:8]`` raises ``TypeError``.
+``roi=`` would read only the lit cells, but it slices the *array* axis while the
+lit set is defined by ``data.memoryCell`` values, and the proc chunk layout spans
+all sixteen cells per chunk, so it would save no I/O.
 """
 
 from __future__ import annotations
@@ -29,8 +24,7 @@ from typing import Any
 
 import numpy as np
 
-# Re-exported: ``run.py`` and the tests reach these through this module.
-from analysis.common.cpu import THREAD_ENV, set_thread_env
+from analysis.common.cpu import set_thread_env
 from analysis.common.masks import frame_bad
 from analysis.common.plan import Block
 from analysis.common.status import DataCheckFailed, FrameStatus
@@ -39,12 +33,10 @@ from analysis.waxs.integrate import ErrorModel, frame_maxima, integrate_frame
 from analysis.waxs.operator import WaxsOperator, build_operator
 
 __all__ = [
-    "THREAD_ENV",
     "BlockResult",
     "init",
     "init_from_detector",
     "process_block",
-    "set_thread_env",
 ]
 
 
@@ -182,9 +174,9 @@ def process_block(block: Block) -> BlockResult:
 
     Every frame's identity comes from the reader: the train from
     ``train_id_coordinates()`` and the cell from ``data.memoryCell``, never from
-    array position (CLAUDE.md pitfall 4). ``JUNGFRAU.cell_ids()`` is deliberately
+    array position. ``JUNGFRAU.cell_ids()`` is deliberately
     not used — it reads the first train only and asserts the rest match, which
-    is an assumption this pass has not verified for this beamtime (§5 R5).
+    is an assumption this pass has not verified for this beamtime.
 
     A train whose labels disagree with the plan, or which is missing one of the
     lit cells, is marked ``LABEL_MISMATCH`` and none of its frames integrated.
@@ -267,10 +259,10 @@ def process_block(block: Block) -> BlockResult:
                     ai, op, model, values, bad, max_abs_kev=cfg.max_abs_kev
                 )
             except DataCheckFailed:
-                # Since 2026-09-14 this means every pixel was excluded, not that
-                # the frame carried a wild value: those are masked and counted
-                # (§3 D6′). The row is still filled with what evidence there is,
-                # because a status on its own explains nothing.
+                # This means every pixel was excluded, not that the frame
+                # carried a wild value: those are masked and counted. The row is
+                # still filled with what evidence there is, because a status on
+                # its own explains nothing.
                 result.status[row] = FrameStatus.DATA_CHECK_FAILED
                 reaching, checked = frame_maxima(values, bad, op.static_bad)
                 result.max_kev[row] = reaching

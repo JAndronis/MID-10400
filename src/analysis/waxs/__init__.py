@@ -6,11 +6,12 @@ amended by measurement during implementation and the modules that carry them
 say so: the per-frame mask is a NaN rather than an ``integrate1d(mask=)``
 argument (:mod:`analysis.waxs.operator`), and the variance is stored unclamped
 (:mod:`analysis.waxs.integrate`). :mod:`analysis.waxs.combine` puts the two
-detectors on one scale by fitting a factor over their overlap (§6 O5).
+detectors on one scale by fitting a factor over their overlap.
 """
 
 from __future__ import annotations
 
+from analysis.common.masks import frame_bad
 from analysis.waxs.cells import (
     CellAccumulator,
     CellClassification,
@@ -40,7 +41,7 @@ from analysis.waxs.integrate import (
     extreme_pixels,
     integrate_frame,
 )
-from analysis.waxs.masks import build_static_bad, frame_bad, load_static_mask
+from analysis.waxs.masks import build_static_bad, load_static_mask
 from analysis.waxs.operator import (
     WavelengthMismatch,
     WaxsOperator,

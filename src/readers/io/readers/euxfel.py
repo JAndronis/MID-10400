@@ -5,14 +5,12 @@ European XFEL. :class:`EuXFELMIDRawReader` turns a run *directory* into a lazy,
 dask-backed :class:`xarray.Dataset` via EXtra-data (per-module assembly of the
 AGIPD-1M is left on demand to EXtra-geom, outside the reader).
 
-This module is written to drop into pyBeamtime as ``io/readers/euxfel.py``: it
-imports pyBeamtime by absolute path and self-registers with ``ReaderRegistry``
-at import time. Upstreaming is a file move plus a ``from . import euxfel`` line
-in ``pyBeamtime/io/readers/__init__.py`` — no code change to this file.
+Written to drop into pyBeamtime as ``io/readers/euxfel.py``: it imports
+pyBeamtime by absolute path and self-registers with ``ReaderRegistry`` at import
+time, so upstreaming is a file move plus one import line.
 
-Source and key names are verified against run r0500 of p010400 (see the
-module-level constants). EXtra-data / EXtra-geom are imported lazily inside
-:meth:`EuXFELMIDRawReader.load_run` so the pure path helpers, ``can_read``, and
+EXtra-data and EXtra-geom are imported lazily inside
+:meth:`EuXFELMIDRawReader.load_run`, so the pure path helpers, ``can_read`` and
 ``list_runs`` import and unit-test without them installed.
 """
 
@@ -124,20 +122,14 @@ def wavelength_angstrom_from_energy_ev(energy_ev: float) -> float:
 def _isolate_source(array: xr.DataArray, prefix: str) -> xr.DataArray:
     """Prefix every dim/coord of *array* and drop its pandas indexes.
 
-    EXtra-data hands back arrays with generic, colliding names:
-    ``AGIPD1M.get_dask_array`` yields a ``train_pulse`` MultiIndex (levels
-    ``trainId``/``pulseId``) plus ``dim_0``/``dim_1``/…, while
-    ``get_dask_array(labelled=True)`` yields a plain ``trainId`` index plus its
-    own ``dim_0``/…. Dropping these into one Dataset makes xarray try to *align*
-    the shared names — and a ``trainId`` MultiIndex level cannot align with a
-    plain ``trainId`` index, so construction raises ``AlignmentError`` (the
-    repeated unindexed ``dim_0`` of differing sizes would clash next).
+    EXtra-data hands back generic, colliding names, and xarray would try to
+    *align* them: a ``trainId`` MultiIndex level cannot align with a plain
+    ``trainId`` index, so building one Dataset raises ``AlignmentError``.
+    Prefixing removes every shared name, and nothing is materialized.
 
-    Resetting the indexes (their values survive as plain coords) and giving
-    every dim/coord a per-source prefix removes all shared names, so sources sit
-    side by side with no cross-alignment and nothing is materialized. Collapsing
-    to a single unified ``(train, pulse, module, ss, fs)`` schema is a deferred
-    next step.
+    :param array: one source's array, as EXtra-data returned it.
+    :param prefix: per-source prefix, e.g. ``"agipd"``.
+    :returns: the same array with prefixed dims and coords and no indexes.
     """
     indexed = [dim for dim in array.dims if dim in array.indexes]
     if indexed:
@@ -192,21 +184,15 @@ class EuXFELMIDRawReader(BaseRawReader):
     def list_runs(self, root_path: Path) -> list[RunMetadata]:
         """Return one :class:`RunMetadata` per ``r####`` run directory on disk.
 
-        Filesystem only — no run is opened here. Fields that require reading the
-        run with EXtra-data are left at their "unknown" values and are surfaced
-        instead as :meth:`load_run` Dataset attributes:
+        Filesystem only — no run is opened — so every field needing EXtra-data
+        keeps its "unknown" value: ``exposure_time`` 0.0, ``n_frames``,
+        ``start_time`` and ``end_time`` ``None``. :meth:`load_run` surfaces them
+        as Dataset attributes instead.
 
-        - ``exposure_time`` (per-pulse width): ``0.0`` placeholder — the field is
-          non-optional (``float``), and ``0.0`` denotes "unknown" as in the other
-          raw readers.
-        - ``n_frames`` (pulses per train): ``None``.
-        - ``start_time`` / ``end_time``: ``None``.
-        - ``extra["n_trains"]``: not set here.
-
-        Lifting these into ``RunMetadata`` needs a per-run EXtra-data open with
-        as-yet-unverified accessors and is deferred. Runs absent from
-        ``elog.csv`` get ``sample_name=None`` (a first-class state, distinct from
-        an empty string); non-``sample`` elog columns pass through into ``extra``.
+        :param root_path: proposal root holding ``raw/``.
+        :returns: one entry per run. A run absent from ``elog.csv`` gets
+            ``sample_name=None``, distinct from an empty string; other elog
+            columns pass through into ``extra``.
         """
         root_path = Path(root_path)
         elog = load_elog_csv(root_path)
@@ -231,17 +217,15 @@ class EuXFELMIDRawReader(BaseRawReader):
     def get_run_path(self, run_id: int | str, root_path: Path) -> Path:
         """Return the run *directory* ``root_path/raw/r{run_id:04d}``.
 
-        Deliberately deviates from the ABC's "primary HDF5 file" wording: a
-        EuXFEL run is a directory of many per-module files, opened by EXtra-data's
-        ``RunDirectory``.
+        A directory, not the ABC's "primary HDF5 file": a EuXFEL run is many
+        per-module files and any one of them would misrepresent it. So the
+        generic ``Beamtime.enrich_metadata``, which opens the result with h5py,
+        cannot work here — EuXFEL enrichment must go through EXtra-data.
 
-        CONSEQUENCE: the generic ``Beamtime.enrich_metadata`` — which does
-        ``h5py.File(get_run_path(...))`` — does NOT work for EuXFEL; it would try
-        to open a directory. EuXFEL metadata enrichment must go through EXtra-data.
-        Returning the directory is intentional: the run has no single primary
-        HDF5 file, so any individual per-module file would misrepresent it.
-
-        Raises :exc:`FileNotFoundError` if the run directory does not exist.
+        :param run_id: run number.
+        :param root_path: proposal root holding ``raw/``.
+        :returns: the run directory.
+        :raises FileNotFoundError: the run directory does not exist.
         """
         run_dir = Path(root_path) / "raw" / f"r{int(run_id):04d}"
         if not run_dir.is_dir():
@@ -255,34 +239,15 @@ class EuXFELMIDRawReader(BaseRawReader):
     ) -> xr.Dataset:
         """Build the lazy, dask-backed Dataset for one MID run.
 
-        Opens the run directory with EXtra-data and returns a dask-backed
-        :class:`xarray.Dataset`. Detector arrays (AGIPD, Jungfrau) stay lazy —
-        never materialized here. EXtra-data is imported lazily so the rest of this
-        module imports without it.
+        Each source becomes a *separate, isolated* data variable through
+        :func:`_isolate_source`, so this is not yet one unified
+        ``(train, pulse, module, ss, fs)`` schema. Detector arrays stay lazy.
 
-        Parameters
-        ----------
-        trains:
-            Optional positional slice selecting a subset of trains (e.g.
-            ``slice(0, 20)``), forwarded to ``DataCollection.select_trains``.
-            Opening and building the dask graph over a full MHz run (thousands of
-            trains × 352 pulses) is expensive; slice for quick inspection.
-
-        Schema status
-        -------------
-        Source/key names (r0500) and the EXtra-data API here are verified against
-        the installed package. Each source is stored as a *separate, isolated*
-        data variable via :func:`_isolate_source`: dims/coords are
-        per-source–prefixed (``agipd_*``, ``jf500k1_*``, ``xgm_flux_*``,
-        ``litframe_*``) and pandas indexes are reset. This is required because
-        EXtra-data hands back colliding generic names (an ``AGIPD1M``
-        ``train_pulse`` MultiIndex vs. plain ``trainId`` indexes, plus repeated
-        ``dim_0``/…) that xarray would otherwise try — and fail — to align.
-
-        Consequence: this is NOT yet a single unified schema
-        ``(train, pulse, module, ss, fs)``. Splitting the raw AGIPD data/gain
-        axis, aligning sources on a common train axis, and the XGM↔AGIPD pulse
-        mapping remain deferred.
+        :param run_id: run number.
+        :param root_path: proposal root holding ``raw/``.
+        :param trains: positional slice forwarded to ``select_trains``. Building
+            the dask graph over a full run is expensive; slice to inspect.
+        :returns: the Dataset, with per-source prefixed dims and coords.
         """
         import extra_data
         import numpy as np

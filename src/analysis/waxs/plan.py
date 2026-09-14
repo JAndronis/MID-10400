@@ -25,14 +25,11 @@ from typing import Any
 
 import numpy as np
 
-from analysis.common.plan import Block, RunPlan, TrainRecord, build_blocks
+from analysis.common.plan import RunPlan, TrainRecord, build_blocks
 from analysis.common.status import FrameStatus
 from analysis.waxs.config import JungfrauWaxsConfig
 
 __all__ = [
-    "Block",
-    "RunPlan",
-    "TrainRecord",
     "build_plan",
     "open_detector",
     "run_checks",
@@ -50,7 +47,7 @@ def open_detector(cfg: JungfrauWaxsConfig, dc: Any) -> Any:
 
     ``detector_name`` is passed through rather than auto-detected:
     ``JUNGFRAU._det_name_pat`` matches both of this experiment's detectors, so
-    with two in the run the auto-detection is ambiguous (§6 O1).
+    with two in the run the auto-detection is ambiguous.
     """
     from extra_data.components import JUNGFRAU
 
@@ -64,9 +61,9 @@ def open_detector(cfg: JungfrauWaxsConfig, dc: Any) -> Any:
         raise ValueError(
             f"{det.detector_name} selects {len(det.source_to_modno)} modules; "
             "this pass integrates one JUNGFRAU-500K module per run because each "
-            "carries its own PONI, its own static mask and its own q range "
-            "(§3 D2). Point cfg.detector_name at a single detector, or pass "
-            "modules= upstream."
+            "carries its own PONI, its own static mask and its own q range. "
+            "Point cfg.detector_name at a single detector, or pass modules= "
+            "upstream."
         )
     return det
 
@@ -74,9 +71,8 @@ def open_detector(cfg: JungfrauWaxsConfig, dc: Any) -> Any:
 def _open_control(cfg: JungfrauWaxsConfig) -> Any:
     """Open the raw location, which is where the control sources live.
 
-    ``open_run(..., data="proc")`` opens one location and proc holds only the
-    corrected detector files: no timeserver, no XGM. The plan itself stays on
-    proc, so that trains existing only in raw do not enter the ledger.
+    Proc holds only the corrected detector files. The plan itself stays on proc,
+    so trains existing only in raw do not enter the ledger.
     """
     from extra_data import open_run
 
@@ -225,7 +221,7 @@ def run_checks(
     cells where the machine delivers 155 pulses per train, so a difference is
     the expected state of affairs and is recorded as two numbers rather than
     flagged as a mismatch. Which 8 of the 155 pulses those cells sampled is
-    open (§5 R5) and is why no pulse id is stored.
+    open and is why no pulse id is stored.
     """
     checks: dict[str, Any] = {
         "entries_per_train": sorted({int(c) for c in counts}),
@@ -261,8 +257,7 @@ def run_checks(
             "lit_cells_per_train": len(lit_cells),
             "note": (
                 "the JUNGFRAU samples a subset of the train's X-ray pulses; "
-                "which subset is unresolved (WAXS context file §5 R5), so no "
-                "pulse id is stored"
+                "which subset is unresolved, so no pulse id is stored"
             ),
         }
 
@@ -270,7 +265,7 @@ def run_checks(
         """The machine's nominal photon energy, against the configured one.
 
         ``XGM.photon_energy_by_train`` returns **keV** already. No tolerance is
-        invented (CLAUDE.md working rule 2): the two are called equal only
+        invented: the two are called equal only
         within the float32 precision the XGM value carries, and any wider gap
         is reported for a person to settle, because q scales with it.
         """

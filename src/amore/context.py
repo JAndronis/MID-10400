@@ -127,11 +127,6 @@ def total_transmission(
     return xtd1 * xtd6 * opt
 
 
-### clause to pick selected trains from droplet filter, else
-
-selected_trains = None
-
-
 @Variable("Droplet fit", data="proc", cluster=True, tags=["offline"])
 def droplet_fit(
     run,
@@ -234,18 +229,10 @@ def xpcs_pipeline(
         args["geom"] = geom_path
         args["mask"] = MASK_PATH
 
-        if run_type == "XPCS":
-            # args['motor_moving'] = 'MID_EXP_SAM/MDL/DATA_SELECTOR_2'
-            # args['motor_key'] = 'MID_SAE_FSSS/MOTOR/SCANNERX.actualPosition'
-            # args['motor_range'] = (-24, 24)  # should be revisited !
-
-            args["remove_outer_points"] = (
-                False  # change to True after revisiting motor_range
-            )
-        else:
-            args["remove_outer_points"] = (
-                False  # change to True after revisiting motor_range
-            )
+        # Set True once motor_range is settled; the XPCS motor sources
+        # (MID_EXP_SAM/MDL/DATA_SELECTOR_2, MID_SAE_FSSS/MOTOR/SCANNERX) and
+        # their range are still unresolved, so it is False for every run_type.
+        args["remove_outer_points"] = False
 
         args["refine_beamcenter"] = False
         args["px"] = 607.4598
@@ -364,16 +351,10 @@ def xpcs_saxs_plot(run, ds: "var#xpcs_pipeline"):
     return XPCS_RESULTS["figure_saxs"]
 
 
-# ── AGIPD SAXS integration (analysis.saxs; context file §10, P5) ─────────────
-# `agipd_saxs` keeps its name and column: this is the same quantity, computed
-# by `analysis.saxs` instead of `analysis_helpers.integrate_run` — over an hour
-# per run against 6.3 min here, and without dividing by I0 in place, which
-# could not be undone afterwards.
-#
-# What the column holds therefore changes at this commit: I(q) in nm^-1 and not
-# I0-divided, where before it was A^-1 and divided. Runs processed earlier hold
-# the old quantity, so clear the column for them rather than plotting across
-# the boundary.
+# ── AGIPD SAXS integration (analysis.saxs) ───────────────────────────────────
+# The column holds I(q) in nm^-1, undivided. Runs processed before this pass
+# existed hold A^-1 divided by I0, so clear the column for them rather than
+# plotting across the boundary.
 #
 # Both variables are thin on purpose: DAMNIT execs this file into a dict, so a
 # function defined here cannot be pickled to the workers the pass spawns.

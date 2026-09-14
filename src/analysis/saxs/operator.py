@@ -1,19 +1,12 @@
-"""Sparse full-split integration operator (context file §6.1).
+"""Sparse full-split integration operator.
 
 The operator is pyFAI's own ``("full", "csc", "cython")`` sparse matrix, lifted
 out of the engine so that the per-frame integration can run over photon hits
 only (``sparse.integrate_frame``) instead of over the dense detector.
 
-Array names differ from the context file's pseudocode to avoid a collision with
-``image.data`` and to match pyFAI's own attribute names:
-
-===============  ==================  ===========================================
-this module      context file §6.1   pyFAI ``engine.lut``
-===============  ==================  ===========================================
-``coef``         ``data``            ``lut[0]`` — split coefficient per entry
-``bins``         ``rows``            ``lut[1]`` — CSC row index, i.e. the q bin
-``indptr``       ``indptr``          ``lut[2]`` — column starts, one per pixel
-===============  ==================  ===========================================
+The array names match pyFAI's own, and avoid colliding with ``image.data``:
+``coef`` is ``lut[0]``, the split coefficient per entry; ``bins`` is ``lut[1]``,
+the CSC row index, i.e. the q bin; ``indptr`` is ``lut[2]``, the column starts.
 
 The matrix is in CSC layout with one column per flattened pixel, so
 ``len(indptr) == NPIX + 1``; this is asserted at build time.
@@ -30,6 +23,8 @@ import numpy as np
 from extra_geom import AGIPD_1MGeometry
 from pyFAI.integrator.azimuthal import AzimuthalIntegrator
 
+from analysis.common.arrays import frozen_copy
+from analysis.common.pyfai import check_resolved_method
 from analysis.saxs.config import NPIX, SHAPE, AgipdSaxsConfig
 
 __all__ = [
@@ -59,19 +54,6 @@ class SparseOperator:
     wavelength_m: float
     beam_center: tuple[float, float] | None
     sha256: str
-
-
-def _readonly(array: np.ndarray, dtype: np.dtype | type) -> np.ndarray:
-    """Return a contiguous, read-only copy, asserting the dtype is unchanged.
-
-    The dtype is asserted rather than cast: a pyFAI change to the LUT layout
-    must surface loudly instead of being silently converted.
-    """
-    if array.dtype != dtype:
-        raise TypeError(f"expected dtype {np.dtype(dtype)}, got {array.dtype}")
-    out = np.ascontiguousarray(array).copy()
-    out.flags.writeable = False
-    return out
 
 
 def operator_sha256(
@@ -113,11 +95,11 @@ def operator_sha256(
 
 
 def geometry_from_config(cfg: AgipdSaxsConfig) -> AGIPD_1MGeometry:
-    """Load the CrystFEL geometry named by ``cfg`` (context file §3 rule 4)."""
+    """Load the CrystFEL geometry named by ``cfg``."""
     if cfg.geometry_file is None:
         raise ValueError(
             "cfg.geometry_file is None; pass a geometry object to "
-            "build_operator directly (P1 synthetic geometry)"
+            "build_operator directly"
         )
     return AGIPD_1MGeometry.from_crystfel_geom(cfg.geometry_file)
 
@@ -173,23 +155,13 @@ def build_operator(
         method=cfg.method,
         unit=cfg.unit,
     )
-    resolved = (
-        probe.method.split_lower,
-        probe.method.algo_lower,
-        probe.method.impl_lower,
-    )
-    if resolved != tuple(cfg.method):
-        raise RuntimeError(
-            f"pyFAI resolved method {resolved}, requested {tuple(cfg.method)}; "
-            "a method string or an unavailable engine has silently substituted "
-            "another integrator (CLAUDE.md pitfall 1)"
-        )
+    check_resolved_method(probe, cfg.method)
 
     engine = ai.engines[probe.method].engine
     raw_coef, raw_bins, raw_indptr = engine.lut
-    coef = _readonly(raw_coef, np.float32)
-    bins = _readonly(raw_bins, np.int32)
-    indptr = _readonly(raw_indptr, np.int32)
+    coef = frozen_copy(raw_coef, np.float32)
+    bins = frozen_copy(raw_bins, np.int32)
+    indptr = frozen_copy(raw_indptr, np.int32)
 
     if indptr.size != NPIX + 1:
         raise RuntimeError(
@@ -208,7 +180,7 @@ def build_operator(
 
     omega = np.ascontiguousarray(ai.solidAngleArray(SHAPE), dtype=np.float64).ravel()
     omega.flags.writeable = False
-    q = _readonly(
+    q = frozen_copy(
         np.ascontiguousarray(engine.bin_centers, dtype=np.float64), np.float64
     )
     if q.size != cfg.npt:
@@ -278,11 +250,11 @@ def load_operator(path: str | Path) -> SparseOperator:
     """Load an operator written by :func:`save_operator`, verifying its hash."""
     with np.load(path) as handle:
         meta = json.loads(str(handle["meta"]))
-        coef = _readonly(handle["coef"], np.float32)
-        bins = _readonly(handle["bins"], np.int32)
-        indptr = _readonly(handle["indptr"], np.int32)
-        omega = _readonly(handle["omega"], np.float64)
-        q = _readonly(handle["q"], np.float64)
+        coef = frozen_copy(handle["coef"], np.float32)
+        bins = frozen_copy(handle["bins"], np.int32)
+        indptr = frozen_copy(handle["indptr"], np.int32)
+        omega = frozen_copy(handle["omega"], np.float64)
+        q = frozen_copy(handle["q"], np.float64)
 
     op = SparseOperator(
         coef=coef,

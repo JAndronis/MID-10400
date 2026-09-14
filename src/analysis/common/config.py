@@ -1,85 +1,33 @@
-"""What a config hash is for — and what it must not cover.
+"""Config hashing and by-name pickling, shared by both passes.
 
-The hash on an output file answers one question: *were these rows computed from
-the same inputs under the same rules?* It gates resume and it gates reopening a
-file, so anything it covers that does not change a stored number makes two
-identical results look incompatible.
+The hash gates resume and gates reopening a file, so it covers only fields that
+can change a stored number; :data:`OPERATIONAL_FIELDS` is what it excludes, and
+a file records the set it was written under in its own provenance rather than
+relying on this constant.
 
-Six fields do exactly that. ``n_workers`` and ``trains_per_block`` schedule the
-work, ``selftest_frames`` sizes a gate, ``output_root`` chooses where the bytes
-land, ``allow_incomplete`` decides whether to raise at the end, and ``overwrite``
-decides whether an existing file may be replaced. None of them can change a
-single value in ``/frames``.
-
-Leaving them in had two consequences, both found on the first attempt to run the
-DAMNIT variables: a pass run with ``n_workers=36`` wrote a file that the same
-pass with the default worker count refused, and — worse — a file written with
-``overwrite=True`` could never match a later ``overwrite=False`` run, so it was
-refused every single time.
-
-They are still recorded in full in the provenance record, which is where
-"how was this run" belongs. Only the hash narrows.
-
-A pass may exclude *more* than these six, and the JUNGFRAU one does: see
-:data:`analysis.waxs.config.WAXS_OPERATIONAL_FIELDS`. So the set a file was
-written under is asked of the config — ``cfg.operational_fields`` — and stored
-in provenance alongside the hash, rather than being read back off this constant
-by a reader who may have a different version of it to hand.
-
-Why both configs pickle by name
--------------------------------
-
-Every config here is a ``@dataclass(frozen=True, slots=True)`` and every pass
-sends one to a spawned pool. For frozen slots dataclasses, ``dataclasses``
-installs a ``__getstate__`` that returns ``[getattr(self, f.name) for f in
-fields(self)]`` and a ``__setstate__`` that zips that list back onto
-``fields(self)`` — **by position**. So if the pickling class and the unpickling
-class have different field lists, every value after the first difference is
-assigned to the wrong field, silently.
-
-That is not hypothetical. Adding ``lit_gap_ratio`` and ``read_noise_fallback_kev``
-to :class:`analysis.waxs.config.JungfrauWaxsConfig` on 2026-09-14 made a
-26-field state arrive at a 28-field class, and a notebook kernel holding the
-older import shifted every field after index 15 by two:
-
-======================== ==================== =========================
-field                    intended             received
-======================== ==================== =========================
-``read_noise_kev``       ``None`` (measure)   ``1000.0`` keV
-``max_abs_kev``          ``1000.0`` keV       ``8`` keV
-``min_modules``          ``1``                ``None``
-``allow_incomplete``     ``False``            *unset*
-======================== ==================== =========================
-
-Only the last of those raised — ``TypeError: '<=' not supported between
-instances of 'NoneType' and 'int'``, from inside ``extra_data``, naming nothing
-that would lead back here. Had ``min_modules`` landed on an int, the run would
-have finished with a readout noise of 1000 keV and every frame above 8 keV
-routed to ``DATA_CHECK_FAILED``, which is CLAUDE.md pitfall 14 with a new cause.
-Note what did *not* catch it: the worker's ``operator_sha256`` check passed,
-because every field ``build_operator`` reads sits before the insertion point.
-
-So :func:`state_by_name` and :func:`restore_by_name` pickle these configs as
-``{name: value}``, and each config calls them from its own class body — a mixin
-would not do, because ``dataclasses._add_slots`` installs the positional pair
-whenever ``__getstate__`` is absent from the class's *own* ``__dict__``. A state
-whose names are not exactly the class's is refused rather than partly applied:
-filling a missing field from its default is precisely the silent behaviour this
-exists to prevent.
+Both configs are frozen slots dataclasses sent to a spawned pool, where the
+dataclass default pickles state *by position* — so a class whose field list has
+moved assigns every later value to the wrong field, silently.
+:func:`state_by_name` and :func:`restore_by_name` key the state by name instead,
+and each config must call them from its own class body: ``dataclasses._add_slots``
+reinstalls the positional pair unless ``__getstate__`` is in the class's own
+``__dict__``, so a mixin does not work.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import os
 from dataclasses import asdict, fields
 from typing import Any
 
-from analysis.common.cpu import file_sha256
+from analysis.common.cpu import file_sha256, physical_cores
 
 __all__ = [
     "OPERATIONAL_FIELDS",
     "ConfigStateMismatch",
+    "PassConfigMembers",
     "config_sha256",
     "restore_by_name",
     "result_fields",
@@ -87,16 +35,13 @@ __all__ = [
 ]
 
 #: Config fields that change how a pass runs but not what it stores, and which
-#: are therefore excluded from :func:`config_sha256`. Every pass excludes at
-#: least these; a pass with a gate-only field of its own excludes that too, and
-#: :data:`analysis.waxs.config.WAXS_OPERATIONAL_FIELDS` is the one that does.
-#: Read a stored file's set off ``config_operational_fields`` in its provenance,
+#: are therefore excluded from :func:`config_sha256`. A pass may exclude more;
+#: read a stored file's set off ``config_operational_fields`` in its provenance,
 #: never off this constant.
 #:
-#: Note what is deliberately *absent*: ``base_mask_trains`` (AGIPD) and
-#: ``cell_sample_trains`` (JUNGFRAU) choose which trains are sampled, and so
-#: change the masks and the measured readout noise that every row depends on.
-#: They look operational and are not.
+#: Deliberately *absent*: ``base_mask_trains`` and ``cell_sample_trains`` choose
+#: which trains are sampled, so they move the masks and the measured readout
+#: noise that every row depends on. They look operational and are not.
 OPERATIONAL_FIELDS: frozenset[str] = frozenset(
     {
         "n_workers",
@@ -173,9 +118,9 @@ def restore_by_name(cfg: Any, state: Any) -> None:
         size = len(state) if isinstance(state, list | tuple) else "?"
         raise ConfigStateMismatch(
             f"{name} arrived as {size} values pickled by position, which is "
-            "what a process running a version of this module from before "
-            "2026-09-14 sends. Nothing in that state says which value is which, "
-            f"so none of it can be trusted. {_SKEW_HINT}"
+            "what a process running an older version of this module sends. "
+            "Nothing in that state says which value is which, so none of it "
+            f"can be trusted. {_SKEW_HINT}"
         )
     names = [field.name for field in fields(cfg)]
     missing = [key for key in names if key not in state]
@@ -187,10 +132,56 @@ def restore_by_name(cfg: Any, state: Any) -> None:
         )
     for key in names:
         object.__setattr__(cfg, key, state[key])
-    # ``__setstate__`` bypasses ``__init__``, so nothing has run ``__post_init__``
-    # on these values. Re-running it is what makes a worker refuse a config its
-    # own rules reject, in the config's own words, rather than at whatever line
-    # first happens to use the offending field.
+    # ``__setstate__`` bypasses ``__init__``, so nothing has validated these
+    # values. Re-running ``__post_init__`` makes a worker refuse a bad config in
+    # the config's own words, not at whatever line first uses the bad field.
     post_init = getattr(cfg, "__post_init__", None)
     if post_init is not None:
         post_init()
+
+
+class PassConfigMembers:
+    """The config members both passes compute the same way.
+
+    A plain mixin, never a dataclass: it declares no field, so inheriting it
+    cannot move either config's field list. ``__getstate__``/``__setstate__``
+    deliberately stay in each config's own class body — ``dataclasses`` installs
+    its positional pair unless they are in the class's own ``__dict__``, so a
+    mixin could not hold them.
+
+    A subclass supplies ``input_files`` and ``operational_fields``, which differ
+    per detector, and the fields the members below read.
+    """
+
+    @property
+    def workers(self) -> int:
+        """Worker count: ``n_workers``, else one per *physical* core.
+
+        Whether hyperthreading helps is an open question, so the default must
+        not answer it: ``sched_getaffinity`` counts logical CPUs, and using it
+        would silently run the hyperthreaded configuration while claiming one
+        worker per core.
+        """
+        if self.n_workers is not None:  # type: ignore[attr-defined]
+            return int(self.n_workers)  # type: ignore[attr-defined]
+        physical = physical_cores()
+        if physical:
+            return physical
+        if hasattr(os, "sched_getaffinity"):
+            return len(os.sched_getaffinity(0))
+        return os.cpu_count() or 1
+
+    @property
+    def wavelength_m(self) -> float:
+        """Photon wavelength in metres, from the configured photon energy."""
+        from pyFAI.units import hc  # keV·Å
+
+        return hc / self.photon_energy_kev * 1e-10  # type: ignore[attr-defined]
+
+    def config_hash(self) -> str:
+        """sha256 over the result-affecting fields plus each input file's sha256.
+
+        Operational fields are excluded — see this module's docstring — and
+        recorded in full in provenance instead.
+        """
+        return config_sha256(self, self.input_files, self.operational_fields)  # type: ignore[attr-defined]
