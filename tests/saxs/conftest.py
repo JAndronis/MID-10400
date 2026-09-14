@@ -193,31 +193,11 @@ def run_cfg(cfg) -> AgipdSaxsConfig:
 
 
 @pytest.fixture(scope="session")
-def mock_run_factory(tmp_path_factory):
-    """Build (and cache) mock runs by keyword signature.
-
-    Writing sixteen gzip+shuffle module files is the slowest thing in this
-    suite, so runs are memoised: most tests ask for the same default run.
-    """
-    from extra_data import RunDirectory
+def mock_run_factory(memoised_run_factory):
+    """Mock AGIPD runs, cached by resolved signature."""
     from mockrun import write_mock_run
 
-    cache: dict[tuple, tuple] = {}
-
-    def factory(**kwargs):
-        key = tuple(
-            sorted(
-                (k, tuple(v) if isinstance(v, (list, tuple)) else v)
-                for k, v in kwargs.items()
-            )
-        )
-        if key not in cache:
-            root = tmp_path_factory.mktemp("mockrun")
-            run = write_mock_run(root, **kwargs)
-            cache[key] = (run, RunDirectory(str(root)))
-        return cache[key]
-
-    return factory
+    return memoised_run_factory(write_mock_run, "mockrun")
 
 
 @pytest.fixture(scope="session")

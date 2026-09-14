@@ -13,7 +13,6 @@ from analysis.saxs.plan import build_plan
 pytest.importorskip("extra_data")
 
 from extra_data import RunDirectory  # noqa: E402
-from helpers import status_of  # noqa: E402
 
 
 def test_plan_over_a_clean_run(run_cfg, mock_run_factory):
@@ -39,7 +38,7 @@ def test_dropped_train_leaves_a_gap_in_the_run(run_cfg, mock_run_factory):
     assert [t.first_row for t in plan.trains] == [0, 3, 6, 9]
 
 
-def test_train_with_too_few_modules(run_cfg, mock_run_factory):
+def test_train_with_too_few_modules(run_cfg, mock_run_factory, status_of):
     run, dc = mock_run_factory(short_module_trains=(10002,))
     plan = build_plan(run_cfg, dc=dc)
 
@@ -50,7 +49,7 @@ def test_train_with_too_few_modules(run_cfg, mock_run_factory):
     assert plan.n_frames == run.n_frames
 
 
-def test_zero_frame_train(run_cfg, mock_run_factory):
+def test_zero_frame_train(run_cfg, mock_run_factory, status_of):
     """No module wrote a frame — distinct from too few modules."""
     _, dc = mock_run_factory(zero_frame_trains=(10002,))
     plan = build_plan(run_cfg, dc=dc)

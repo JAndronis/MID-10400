@@ -8,7 +8,6 @@ fixtures use a synthetic ``AGIPD_1MGeometry``. The real-data gate that needs
 
 from __future__ import annotations
 
-import inspect
 from types import SimpleNamespace
 
 import numpy as np
@@ -102,33 +101,13 @@ def cfg(geometry_files, tmp_path):
 
 
 @pytest.fixture(scope="session")
-def mock_run_factory(tmp_path_factory):
-    """Write a mock run, memoised by its *resolved* keyword signature.
+def mock_run_factory(memoised_run_factory):
+    """Mock JUNGFRAU runs, cached by resolved signature.
 
-    Writing 16 cells of 512x1024 is the slowest thing in this suite and each
-    run is 135 MB that lives until the session ends, so runs asking for the
-    same bytes must share one directory. The key is therefore normalised
-    against ``write_mock_run``'s own defaults: asking for
-    ``detector_name="MID_EXP_JF500K1", module=1`` explicitly is asking for the
-    default run, and against a raw ``kwargs`` key it silently wrote a second
-    identical copy.
+    Each is 135 MB of dense float32 that lives until the session ends, so the
+    caching is what keeps the suite's disk use bounded.
     """
-    signature = inspect.signature(write_mock_run)
-    cache: dict[tuple, tuple] = {}
-
-    def factory(**kwargs):
-        from extra_data import RunDirectory
-
-        bound = signature.bind_partial(**kwargs)
-        bound.apply_defaults()
-        key = tuple(sorted(bound.arguments.items()))
-        if key not in cache:
-            root = tmp_path_factory.mktemp("waxs-mockrun")
-            run = write_mock_run(root, **kwargs)
-            cache[key] = (run, RunDirectory(str(root)))
-        return cache[key]
-
-    return factory
+    return memoised_run_factory(write_mock_run, "waxs-mockrun")
 
 
 @pytest.fixture

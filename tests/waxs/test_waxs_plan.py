@@ -17,10 +17,6 @@ from analysis.waxs.plan import (  # noqa: E402
 )
 
 
-def status_of(plan, train_id):
-    return plan.record(train_id).status
-
-
 def test_rows_are_the_lit_cells_not_the_entry_count(pipeline):
     """The trap: JUNGFRAU frame_counts counts entries (1/train), not frames."""
     plan, run = pipeline.plan, pipeline.run
@@ -31,7 +27,7 @@ def test_rows_are_the_lit_cells_not_the_entry_count(pipeline):
     assert set(int(c) for c in pipeline.det.frame_counts) == {1}
 
 
-def test_every_train_of_the_run_is_in_the_ledger(pipeline):
+def test_every_train_of_the_run_is_in_the_ledger(pipeline, status_of):
     plan, run = pipeline.plan, pipeline.run
     assert [t.train_id for t in plan.trains] == list(run.train_ids)
     assert all(status_of(plan, t) is FrameStatus.OK for t in run.detector_trains)
@@ -51,7 +47,7 @@ def test_blocks_cover_every_row_exactly_once(pipeline):
     )
 
 
-def test_a_train_with_no_entry_is_no_frames(cfg, mock_run_factory, operator):
+def test_a_train_with_no_entry_is_no_frames(cfg, mock_run_factory, operator, status_of):
     run, dc = mock_run_factory(zero_entry_trains=(10002,))
     op, _ = operator
     det = open_detector(cfg, dc)

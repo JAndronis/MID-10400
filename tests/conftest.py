@@ -143,3 +143,65 @@ def _h5_digest(path: Path, skip_attrs: frozenset[str] = VOLATILE_ATTRS) -> str:
 def h5_digest() -> Callable[..., str]:
     """A canonical content digest of a pass output file — see :func:`_h5_digest`."""
     return _h5_digest
+
+
+@pytest.fixture(scope="session")
+def memoised_run_factory(tmp_path_factory):
+    """Build a session-cached mock-run factory for one pass.
+
+    Writing a mock run is the slowest thing in either suite and each one lives
+    until the session ends, so two requests for the same bytes must share a
+    directory. The key is the *resolved* signature, not the raw keywords:
+    passing a default explicitly is asking for the default run, and keying on
+    keywords alone silently writes a second identical copy of it.
+
+    :param write_mock_run: the pass's writer, called as ``write(root, **kwargs)``.
+    :param prefix: ``mktemp`` prefix, so the two suites' runs stay tellable apart.
+    :param open_run: how to open what was written; injected by the tests that
+        cover the caching itself, which have no HDF5 to open.
+    :returns: a factory returning ``(mock, DataCollection)``.
+    """
+    import inspect
+
+    def make(
+        write_mock_run: Callable[..., object],
+        prefix: str,
+        open_run: Callable[[str], object] | None = None,
+    ):
+        signature = inspect.signature(write_mock_run)
+        cache: dict[tuple, tuple] = {}
+
+        def factory(**kwargs):
+            opener = open_run
+            if opener is None:
+                from extra_data import RunDirectory
+
+                opener = RunDirectory
+
+            bound = signature.bind_partial(**kwargs)
+            bound.apply_defaults()
+            key = tuple(
+                sorted(
+                    (name, tuple(value) if isinstance(value, list) else value)
+                    for name, value in bound.arguments.items()
+                )
+            )
+            if key not in cache:
+                root = tmp_path_factory.mktemp(prefix)
+                run = write_mock_run(root, **kwargs)
+                cache[key] = (run, opener(str(root)))
+            return cache[key]
+
+        return factory
+
+    return make
+
+
+@pytest.fixture
+def status_of():
+    """``plan.record(train_id).status`` — the assertion both plan suites make."""
+
+    def of(plan, train_id: int):
+        return plan.record(train_id).status
+
+    return of
