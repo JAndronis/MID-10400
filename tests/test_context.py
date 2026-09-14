@@ -90,14 +90,9 @@ def test_the_saxs_variables_keep_their_names(variables):
     """
     assert {"agipd_saxs", "agipd_iq_overview"} <= set(variables)
 
-    # Comments are stripped, not searched: the block above these variables
-    # names the old pipeline in order to explain what replaced it.
     source = (CONTEXT_DIR / "context.py").read_text()
-    code = "\n".join(
-        line for line in source.splitlines() if not line.lstrip().startswith("#")
-    )
-    assert "integrate_run" not in code
-    assert "geometry_from_encoders" not in code
+    assert "integrate_run" not in source
+    assert "geometry_from_encoders" not in source
 
 
 INTEGRATION_VARIABLES = (

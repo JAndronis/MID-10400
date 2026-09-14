@@ -127,11 +127,6 @@ def total_transmission(
     return xtd1 * xtd6 * opt
 
 
-### clause to pick selected trains from droplet filter, else
-
-selected_trains = None
-
-
 @Variable("Droplet fit", data="proc", cluster=True, tags=["offline"])
 def droplet_fit(
     run,
@@ -234,18 +229,10 @@ def xpcs_pipeline(
         args["geom"] = geom_path
         args["mask"] = MASK_PATH
 
-        if run_type == "XPCS":
-            # args['motor_moving'] = 'MID_EXP_SAM/MDL/DATA_SELECTOR_2'
-            # args['motor_key'] = 'MID_SAE_FSSS/MOTOR/SCANNERX.actualPosition'
-            # args['motor_range'] = (-24, 24)  # should be revisited !
-
-            args["remove_outer_points"] = (
-                False  # change to True after revisiting motor_range
-            )
-        else:
-            args["remove_outer_points"] = (
-                False  # change to True after revisiting motor_range
-            )
+        # Set True once motor_range is settled; the XPCS motor sources
+        # (MID_EXP_SAM/MDL/DATA_SELECTOR_2, MID_SAE_FSSS/MOTOR/SCANNERX) and
+        # their range are still unresolved, so it is False for every run_type.
+        args["remove_outer_points"] = False
 
         args["refine_beamcenter"] = False
         args["px"] = 607.4598

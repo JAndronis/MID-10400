@@ -107,8 +107,7 @@ class AgipdSaxsWriter(FrameTableWriter):
 def per_pulse(source: Any, *, dtype: Any = np.float32, chunk_rows: int = 20_000) -> Any:
     """Per-frame ``I(q)`` as a ``(trainId, pulseId, q)`` DataArray.
 
-    A ``DataArray`` rather than a ``Dataset``, matching what
-    ``analysis_helpers.integrate_run`` returned, with ``n_frames`` carried as a
+    A ``DataArray`` rather than a ``Dataset``, with ``n_frames`` carried as a
     non-dimension coordinate.
 
     Every frame placed on the grid is placed by its *stored* trainId and
@@ -192,9 +191,7 @@ def per_pulse(source: Any, *, dtype: Any = np.float32, chunk_rows: int = 20_000)
             "q": q,
             # A non-dimension coordinate rather than a second data variable,
             # which would make this a Dataset. DAMNIT renders a 3-D DataArray
-            # in the table as "float32: (n, m, npt)" — the cell
-            # ``analysis_helpers.integrate_run`` produced — but a Dataset only
-            # as "Dataset (930.49MB)".
+            # in the table as its shape, but a Dataset only as a total size.
             "n_frames": (("trainId", "pulseId"), n_frames),
         },
         name="intensity",
