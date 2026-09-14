@@ -176,11 +176,10 @@ EXPECTED_ALL: dict[str, tuple[str, ...]] = {
         "Block", "RunPlan", "TrainRecord", "build_blocks", "evenly_spaced",
     ),
     "analysis.common.status": ("DataCheckFailed", "FrameStatus"),
-    # Omits as_handle and q_centers, which saxs.writer, waxs.writer and
-    # common.__init__ all import from here by name.
     "analysis.common.writer": (
         "ConfigHashMismatch", "FrameTableWriter", "IncompleteRun",
-        "SchemaMismatch", "PassConfig", "config_payload", "pooled_per_train",
+        "SchemaMismatch", "PassConfig", "as_handle", "config_payload",
+        "per_label", "pooled_per_train", "q_centers", "status_counts",
     ),
     # Omits METHOD, NPIX, SHAPE and DEFAULT_OUTPUT_ROOT, which saxs.__init__,
     # saxs.masks and saxs.operator import from here by name.

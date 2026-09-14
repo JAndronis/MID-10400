@@ -9,18 +9,17 @@ corrections: those are applied afterwards, to the stored sums.
 from __future__ import annotations
 
 import logging
-import platform
-import socket
 import time
 from collections.abc import Callable
-from concurrent.futures import BrokenExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
+from analysis.common.cpu import default_pool, phase
+
 # Re-exported: ``default_pool`` is part of this module's documented surface.
-from analysis.common.cpu import default_pool, package_versions, phase
+from analysis.common.run import base_provenance, fan_out
 from analysis.saxs import masks as masks_module
 from analysis.saxs import operator as operator_module
 from analysis.saxs import worker as worker_module
@@ -115,57 +114,34 @@ def run_agipd_saxs(
         todo = [b for b in plan.blocks if not out.block_complete(b)]
         log.info("%d of %d blocks to process", len(todo), len(plan.blocks))
 
-        timings: dict[str, float] = {}
-        write_s = 0.0
-        bits_present = 0
-        unseen_cells = 0
-
-        if todo:
-            factory = pool_factory or default_pool
-            try:
-                with factory(
-                    cfg.workers,
-                    initializer=worker_module.init,
-                    initargs=(paths, cfg),
-                ) as pool:
-                    futures = {
-                        pool.submit(worker_module.process_block, block): block
-                        for block in todo
-                    }
-                    for future in as_completed(futures):
-                        block = futures[future]
-                        try:
-                            block_result = future.result()
-                        except BrokenExecutor:
-                            out.mark_remaining(FrameStatus.NOT_PROCESSED)
-                            raise
-                        except Exception as error:  # noqa: BLE001 - into the ledger
-                            log.exception("block %d failed", block.index)
-                            out.mark(block, FrameStatus.WORKER_ERROR, repr(error))
-                            continue
-                        write_started = time.perf_counter()
-                        out.write_block(block, block_result)
-                        write_s += time.perf_counter() - write_started
-                        bits_present |= block_result.bits_present
-                        unseen_cells += block_result.unseen_cells
-                        for key, value in block_result.timings.items():
-                            timings[key] = timings.get(key, 0.0) + value
-            except BrokenExecutor:
-                out.mark_remaining(FrameStatus.NOT_PROCESSED)
-                raise
+        totals = fan_out(
+            out,
+            todo,
+            process=worker_module.process_block,
+            n_workers=cfg.workers,
+            initializer=worker_module.init,
+            initargs=(paths, cfg),
+            pool_factory=pool_factory,
+            accumulate=("unseen_cells",),
+        )
 
         out.finalise(
-            {
-                "host": socket.gethostname(),
-                "platform": platform.platform(),
-                "n_workers": cfg.workers,
-                # A run with fewer blocks than workers cannot use them all, so
-                # the block count is what any efficiency figure divides by.
-                "n_blocks": len(plan.blocks),
-                "started_at": started_at,
-                "wall_s": time.perf_counter() - started,
-                "package_versions": package_versions(),
-                "operator_sha256": op.sha256,
+            base_provenance(
+                cfg,
+                plan,
+                out,
+                started_at=started_at,
+                started=started,
+                totals=totals,
+                setup_timings=setup,
+                operator_sha256=op.sha256,
+                input_file_sha256={
+                    name: (file_sha256(path) if path else None)
+                    for name, path in cfg.input_files.items()
+                },
+                run_checks=plan.checks,
+            )
+            | {
                 "masks_sha256": base_masks.sha256,
                 "static_mask_sha256": static.sha256,
                 "static_mask_sources": [
@@ -177,16 +153,7 @@ def run_agipd_saxs(
                     }
                     for s in static.sources
                 ],
-                "input_file_sha256": {
-                    name: (file_sha256(path) if path else None)
-                    for name, path in cfg.input_files.items()
-                },
-                "bits_present": int(bits_present),
-                "unseen_cell_frames": int(unseen_cells),
-                "timings": timings,
-                "setup_timings": {**setup, "write_blocks": write_s},
-                "status_summary": out.status_summary(),
-                "run_checks": plan.checks,
+                "unseen_cell_frames": int(totals.extra["unseen_cells"]),
             }
         )
         incomplete = out.any_not_ok()

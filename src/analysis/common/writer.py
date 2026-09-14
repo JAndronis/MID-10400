@@ -37,8 +37,12 @@ __all__ = [
     "IncompleteRun",
     "SchemaMismatch",
     "PassConfig",
+    "as_handle",
     "config_payload",
+    "per_label",
     "pooled_per_train",
+    "q_centers",
+    "status_counts",
 ]
 
 log = logging.getLogger(__name__)
@@ -367,6 +371,28 @@ class FrameTableWriter:
 # unprocessed block has rows carrying trainId 0.
 
 
+def status_counts(
+    status: np.ndarray,
+    *,
+    exclude: FrameStatus | None = None,
+    nonzero_only: bool = False,
+) -> dict[str, int]:
+    """Count a status array by code name.
+
+    :param status: the ledger column, or any slice of it.
+    :param exclude: a code to leave out, e.g. ``OK`` when reporting failures.
+    :param nonzero_only: drop codes that do not occur, so a clean run reports
+        an empty dict rather than a row of zeros.
+    :returns: ``{code name: count}``.
+    """
+    return {
+        code.name: int(total)
+        for code in FrameStatus
+        if code is not exclude
+        and ((total := (status == code).sum()) or not nonzero_only)
+    }
+
+
 @contextmanager
 def as_handle(source: Any) -> Any:
     """Accept an open file or a path, and yield an open file either way."""
@@ -441,4 +467,110 @@ def pooled_per_train(source: Any) -> Any:
         coords={"trainId": train_ids, "q": q},
     )
     result.attrs["negative_variance_bins"] = negative_variance
+    return result
+
+
+def per_label(
+    source: Any,
+    *,
+    label_column: str,
+    label_dim: str,
+    dtype: Any = np.float32,
+    chunk_rows: int = 20_000,
+    carry_attrs: tuple[str, ...] = (),
+) -> Any:
+    """Per-frame ``I(q)`` as a ``(trainId, <label>, q)`` DataArray.
+
+    Every frame is placed by its *stored* trainId and label, never by its row
+    position, so a dropped or short train cannot slide frames onto the wrong
+    train. Only ``OK`` frames carry trustworthy labels, so anything else is
+    counted into ``attrs["unplaced"]`` rather than guessed onto a slot; empty
+    slots are zeros with ``n_frames == 0``, never NaN.
+
+    :param source: an open handle or a path to a finished output file.
+    :param label_column: the ``/frames`` column holding the second axis's label,
+        e.g. ``"reader_pulseId"`` or ``"cellId"``.
+    :param label_dim: name of that axis on the result, e.g. ``"pulseId"``.
+    :param dtype: storage for the intensity grid. f4 on a 3000-train,
+        155-pulse run at ``npt`` 500 costs ~0.9 GB; f8 doubles it.
+    :param chunk_rows: rows read per pass, to bound peak memory on the large
+        AGIPD grids.
+    :param carry_attrs: provenance attributes copied onto the result, for
+        things a DAMNIT user needs on the object rather than only in the file.
+    :returns: the grid, with ``n_frames`` as a non-dimension coordinate — which
+        keeps it a DataArray, rendered by DAMNIT as its shape rather than as a
+        total size.
+    """
+    import xarray as xr
+
+    noun = label_dim.removesuffix("Id")
+    with as_handle(source) as handle:
+        frames = handle["frames"]
+        status = frames["status"][:]
+        row_train = frames["trainId"][:]
+        row_label = frames[label_column][:]
+        npt = int(frames["signal"].shape[1])
+        q = q_centers(handle, npt)
+        train_ids = handle["trains/trainId"][:]
+        if not np.all(np.diff(train_ids.astype(np.int64)) > 0):
+            raise ValueError("the train table is not strictly increasing")
+        # Read inside the ``with``: an AttributeManager kept past it returns
+        # the default rather than raising.
+        carried = {
+            name: handle["provenance"].attrs.get(name, "") for name in carry_attrs
+        }
+
+        placeable = status == FrameStatus.OK
+        labels = np.unique(row_label[placeable])
+        unplaced = status_counts(status, exclude=FrameStatus.OK, nonzero_only=True)
+
+        intensity = np.zeros((train_ids.size, labels.size, npt), dtype=dtype)
+        n_frames = np.zeros((train_ids.size, labels.size), dtype=np.uint8)
+
+        for start in range(0, status.size, chunk_rows):
+            stop = min(start + chunk_rows, status.size)
+            keep = placeable[start:stop]
+            if not keep.any():
+                continue
+            trains = row_train[start:stop][keep]
+            # searchsorted returns size for anything past the last train, so
+            # the result is clamped before it is used as an index: an unknown
+            # trainId must reach the check below, not raise IndexError first.
+            train_index = np.clip(
+                np.searchsorted(train_ids, trains), 0, train_ids.size - 1
+            )
+            if not np.array_equal(train_ids[train_index], trains):
+                raise ValueError(
+                    "a frame carries a trainId that is not in the train table"
+                )
+            label_index = np.searchsorted(labels, row_label[start:stop][keep])
+
+            signal = frames["signal"][start:stop][keep]
+            normalization = frames["normalization"][start:stop][keep]
+            value = np.zeros_like(signal)
+            np.divide(signal, normalization, out=value, where=normalization > 0)
+            intensity[train_index, label_index] = value
+            n_frames[train_index, label_index] = 1
+
+    placed = int(n_frames.sum())
+    if placed != int(placeable.sum()):
+        raise ValueError(
+            f"{int(placeable.sum()) - placed} frame(s) shared a (train, {noun}) "
+            f"slot with another; the {noun} ids do not identify frames uniquely"
+        )
+
+    result = xr.DataArray(
+        intensity,
+        dims=("trainId", label_dim, "q"),
+        coords={
+            "trainId": train_ids,
+            label_dim: labels,
+            "q": q,
+            "n_frames": (("trainId", label_dim), n_frames),
+        },
+        name="intensity",
+    )
+    result.attrs["unplaced"] = json.dumps(unplaced, sort_keys=True)
+    result.attrs["n_placed"] = placed
+    result.attrs.update(carried)
     return result

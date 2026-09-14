@@ -33,9 +33,8 @@ from analysis.common.writer import (
     FrameTableWriter,
     IncompleteRun,
     SchemaMismatch,
-    as_handle,
+    per_label,
     pooled_per_train,
-    q_centers,
 )
 
 __all__ = [
@@ -175,92 +174,18 @@ class JungfrauWaxsWriter(FrameTableWriter):
 def per_cell(source: Any, *, dtype: Any = np.float32) -> Any:
     """Per-frame ``I(q)`` as a ``(trainId, cellId, q)`` DataArray.
 
-    The JUNGFRAU counterpart of ``analysis.saxs.writer.per_pulse``, and the same
-    discipline: every frame is placed by its *stored* trainId and cellId, never
-    by its row position, so a dropped or short train cannot slide frames onto
-    the wrong train. Only ``OK`` frames carry trustworthy
-    labels, so anything else is counted in ``attrs["unplaced"]`` rather than
-    guessed onto a slot. Empty slots are zeros with ``n_frames == 0``, never
-    NaN.
+    The grid is small — 3000 trains x 8 lit cells at ``npt`` 500 is 48 MB as f4,
+    against 0.93 GB for the AGIPD per-pulse grid — so it is returned whole.
 
-    ``n_frames`` is a non-dimension coordinate rather than a second variable,
-    which keeps this a DataArray: DAMNIT renders a 3-D DataArray in the table
-    as ``float32: (n, m, npt)`` but a Dataset only as ``Dataset (48MB)``.
-
-    The grid is small — 3000 trains × 8 lit cells × npt 500 is 48 MB as f4,
-    against 0.93 GB for the AGIPD per-pulse grid — so there is no reason to
-    return anything coarser.
+    :param source: an open handle or a path to a finished output file.
+    :param dtype: storage for the intensity grid.
+    :returns: the grid, carrying ``data_check`` so a DAMNIT user can see why a
+        slot is empty — see :func:`analysis.common.writer.per_label`.
     """
-    import xarray as xr
-
-    with as_handle(source) as handle:
-        frames = handle["frames"]
-        status = frames["status"][:]
-        row_train = frames["trainId"][:]
-        row_cell = frames["cellId"][:]
-        npt = int(frames["signal"].shape[1])
-        q = q_centers(handle, npt)
-        train_ids = handle["trains/trainId"][:]
-        if not np.all(np.diff(train_ids.astype(np.int64)) > 0):
-            raise ValueError("the train table is not strictly increasing")
-        # Inside the ``with``: an AttributeManager kept past it returns the
-        # default rather than raising.
-        data_check = handle["provenance"].attrs.get("data_check", "")
-
-        placeable = status == FrameStatus.OK
-        cell_ids = np.unique(row_cell[placeable])
-        unplaced = {
-            code.name: int(((status == code) & ~placeable).sum())
-            for code in FrameStatus
-            if code is not FrameStatus.OK and (status == code).any()
-        }
-
-        intensity = np.zeros((train_ids.size, cell_ids.size, npt), dtype=dtype)
-        n_frames = np.zeros((train_ids.size, cell_ids.size), dtype=np.uint8)
-
-        if placeable.any():
-            trains = row_train[placeable]
-            cells = row_cell[placeable]
-            # searchsorted returns size for anything past the last train, so
-            # the result is clamped before it is used as an index: an unknown
-            # trainId must reach the check below, not raise IndexError first.
-            train_index = np.clip(
-                np.searchsorted(train_ids, trains), 0, train_ids.size - 1
-            )
-            if not np.array_equal(train_ids[train_index], trains):
-                raise ValueError(
-                    "a frame carries a trainId that is not in the train table"
-                )
-            cell_index = np.searchsorted(cell_ids, cells)
-
-            signal = frames["signal"][:][placeable]
-            normalization = frames["normalization"][:][placeable]
-            value = np.zeros_like(signal)
-            np.divide(signal, normalization, out=value, where=normalization > 0)
-            intensity[train_index, cell_index] = value
-            n_frames[train_index, cell_index] = 1
-
-    placed = int(n_frames.sum())
-    if placed != int(placeable.sum()):
-        raise ValueError(
-            f"{int(placeable.sum()) - placed} frame(s) shared a (train, cell) "
-            "slot with another; the cell ids do not identify frames uniquely"
-        )
-
-    result = xr.DataArray(
-        intensity,
-        dims=("trainId", "cellId", "q"),
-        coords={
-            "trainId": train_ids,
-            "cellId": cell_ids,
-            "q": q,
-            "n_frames": (("trainId", "cellId"), n_frames),
-        },
-        name="intensity",
+    return per_label(
+        source,
+        label_column="cellId",
+        label_dim="cellId",
+        dtype=dtype,
+        carry_attrs=("data_check",),
     )
-    result.attrs["unplaced"] = json.dumps(unplaced, sort_keys=True)
-    result.attrs["n_placed"] = placed
-    # Why the DATA_CHECK_FAILED slots are empty, on the object a DAMNIT user
-    # actually has in front of them rather than only in the file.
-    result.attrs["data_check"] = data_check
-    return result
