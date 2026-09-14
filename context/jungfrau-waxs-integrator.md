@@ -255,6 +255,47 @@ to `DATA_CHECK_FAILED` with the count in the ledger, rather than trusting either
 caught it. Note the AGIPD check itself — integer dtype, no negative counts — is wrong here in both
 halves (§2), so this replaces it rather than adding to it.
 
+**D6′ (2026-09-14) — what r0480 showed, and what the check now stores.** r0480/jf1 finished
+23 519 `OK` and **473 `DATA_CHECK_FAILED`** (1.97 % of 23 992 = 2999 trains × 8 cells, scattered:
+473 is not a multiple of 8). r0423 had passed 24 000/24 000, so this is the first run where the
+`.edf` does *not* cover every pixel above the bound. Three things follow, two settled and one not.
+
+*Settled — the check and the integrator do not test the same set.* `frame_data_status` tests the
+pixels `static_bad` keeps; the integration excludes the union `((data.mask & mask_bits) != 0) |
+static_bad`. A wild pixel that `data.mask` flags therefore fails the frame without being able to
+change a stored number. That asymmetry is deliberate — the check is a tripwire on the arrangement,
+not a correctness check — but nothing recorded which side of it a failure fell on.
+
+*Settled — the ledger now says.* Every row stores **two** maxima: `max_kev` over the union mask
+(what reaches the integrator) and `max_kev_static` over the static mask (the set D6 tests), from
+`integrate.frame_maxima`. A `DATA_CHECK_FAILED` row fills both, so the pair is the evidence: large
+in the second and ordinary in the first means the frame failed over a pixel `data.mask` had already
+removed; large in both means it did reach the integrator, and the magnitude then says whether it is
+artifact-scale or within reach of real scattering. A NaN propagates into both, so no separate
+column is needed to distinguish the two clauses. `writer.data_check_summary` aggregates them into
+`provenance/data_check`, and `per_cell` carries that onto the returned grid's `attrs`.
+
+*Not settled — which of three causes r0480 has.* The bound is `1.0e3` keV, a round number with no
+derivation: it sits between the 74 keV kept-region maximum measured on r0423 and the 1.8e5 keV
+artifact population, 13.5× above the one and 180× below the other. In photons at 9.04 keV it is
+**110**. So a failing frame can mean (a) the pixel is flagged and merely outside the `.edf` —
+which is what r0423 predicts, where all 130 jf1 / 204 jf2 pixels above 1000 keV were flagged;
+(b) it is unflagged and artifact-scale, a real gap in the `.edf`; or (c) it is unflagged and
+modest, and the bound is cutting the signal distribution — jf1 covers q = 11.5–23.7 nm⁻¹, where a
+grainy NaCl powder ring (200 at ≈ 22.3 nm⁻¹, and the droplet's 150 mM concentrates as it
+evaporates) puts far more than 110 photons in a pixel. Under (c) the check preferentially deletes
+the frames with the strongest crystalline scattering. `scripts/w6_data_check.py` measures the
+distinction; the decisive number is how many failing frames carry an extreme or non-finite value on
+a pixel the *union* mask keeps. Until that is answered, nothing here should be read as the bound
+being right.
+
+*The gate, meanwhile.* `DATA_CHECK_FAILED` no longer takes the run down on its own
+(`cfg.allow_data_check_failures`, default True, operational so it stays out of the hash): the frame
+was read, classified and recorded, and raising took the whole run's DAMNIT variable with it — the
+outcome `_no_lit_cells` and `combined_curve` already decided against. `WORKER_ERROR`,
+`NOT_PROCESSED` and `LABEL_MISMATCH` still raise. It is never silent: a WARNING, the provenance
+record and the grid's `attrs` all carry the count.
+
 ---
 
 ## 4. The shared layer, and what is JUNGFRAU's own

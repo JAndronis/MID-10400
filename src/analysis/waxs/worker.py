@@ -35,7 +35,7 @@ from analysis.common.masks import frame_bad
 from analysis.common.plan import Block
 from analysis.common.status import DataCheckFailed, FrameStatus
 from analysis.waxs.config import CELLS_PER_TRAIN, MODULE_SHAPE, JungfrauWaxsConfig
-from analysis.waxs.integrate import ErrorModel, integrate_frame
+from analysis.waxs.integrate import ErrorModel, frame_maxima, integrate_frame
 from analysis.waxs.operator import WaxsOperator, build_operator
 
 __all__ = [
@@ -139,6 +139,7 @@ class BlockResult:
     n_bad_pixels: np.ndarray  # (n,) uint32
     n_negative_variance_bins: np.ndarray  # (n,) uint32
     max_kev: np.ndarray  # (n,) float32
+    max_kev_static: np.ndarray  # (n,) float32
     bits_present: int = 0
     timings: dict[str, float] = field(default_factory=dict)
 
@@ -161,6 +162,7 @@ def _empty_result(block: Block, npt: int) -> BlockResult:
         n_bad_pixels=np.zeros(n, dtype=np.uint32),
         n_negative_variance_bins=np.zeros(n, dtype=np.uint32),
         max_kev=np.zeros(n, dtype=np.float32),
+        max_kev_static=np.zeros(n, dtype=np.float32),
     )
 
 
@@ -264,6 +266,14 @@ def process_block(block: Block) -> BlockResult:
                 )
             except DataCheckFailed:
                 result.status[row] = FrameStatus.DATA_CHECK_FAILED
+                # The only row type that fills these without being integrated:
+                # the pair is the whole evidence for why the frame failed, and
+                # without it the file records that 473 frames failed the value
+                # check and nothing about what value failed them.
+                reaching, checked = frame_maxima(values, bad, op.static_bad)
+                result.max_kev[row] = reaching
+                result.max_kev_static[row] = checked
+                result.n_bad_pixels[row] = int(bad.sum())
                 continue
             result.signal[row] = frame_result.signal
             result.normalization[row] = frame_result.normalization
@@ -272,6 +282,7 @@ def process_block(block: Block) -> BlockResult:
             result.n_bad_pixels[row] = frame_result.n_bad_pixels
             result.n_negative_variance_bins[row] = frame_result.n_negative_variance_bins
             result.max_kev[row] = frame_result.max_kev
+            result.max_kev_static[row] = frame_result.max_kev_static
             result.status[row] = FrameStatus.OK
         timings["integrate"] += time.perf_counter() - started
 

@@ -35,6 +35,7 @@ __all__ = [
     "ConfigHashMismatch",
     "FrameTableWriter",
     "IncompleteRun",
+    "SchemaMismatch",
     "PassConfig",
     "config_payload",
     "pooled_per_train",
@@ -45,6 +46,17 @@ log = logging.getLogger(__name__)
 
 class ConfigHashMismatch(RuntimeError):
     """An existing output file was written with a different configuration."""
+
+
+class SchemaMismatch(RuntimeError):
+    """An existing output file has a different frame table from this writer's.
+
+    A column added to a pass does not change ``config_hash`` — the hash covers
+    the config, not the layout — so without this check a file written before
+    the column would be reopened for resume and then fail on the first write,
+    part-processed. Derived from ``FRAME_VECTORS``/``FRAME_MATRICES`` rather
+    than from a version number, so it cannot fall behind the schema it guards.
+    """
 
 
 class IncompleteRun(RuntimeError):
@@ -147,16 +159,32 @@ class FrameTableWriter:
         if path.exists() and not cfg.overwrite:
             with h5py.File(path, "r") as existing:
                 stored = existing["provenance"].attrs.get("config_hash")
+                missing = cls._missing_columns(existing)
             if stored != config_hash:
                 raise ConfigHashMismatch(
                     f"{path} was written with config hash {stored}, "
                     f"this run has {config_hash}; pass overwrite=True to replace it"
+                )
+            if missing:
+                raise SchemaMismatch(
+                    f"{path} has no {missing} in its frame table, so it predates "
+                    "a column this pass now stores; pass overwrite=True to "
+                    "reprocess it rather than resuming into it"
                 )
             return cls(h5py.File(path, "r+"), cfg, plan)
 
         handle = h5py.File(path, "w")
         cls._create_layout(handle, cfg, plan, config_hash)
         return cls(handle, cfg, plan)
+
+    @classmethod
+    def _missing_columns(cls, handle: h5py.File) -> list[str]:
+        """Frame-table datasets this writer stores that ``handle`` does not have."""
+        frames = handle.get("frames")
+        wanted = (*cls.FRAME_VECTORS, *cls.FRAME_MATRICES)
+        if frames is None:
+            return sorted(wanted)
+        return sorted(name for name in wanted if name not in frames)
 
     @classmethod
     def _create_layout(

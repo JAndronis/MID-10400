@@ -106,6 +106,17 @@ def test_pinning_the_lit_cells_does_not_change_a_waxs_hash(waxs):
     assert pinned.config_hash() == waxs.config_hash()
 
 
+def test_tolerating_data_check_failures_does_not_change_a_waxs_hash(waxs):
+    """It decides whether the pass raises *after* the file is finished.
+
+    Every row is identical either way, so a run that tolerated 473 failing
+    frames and a strict rerun of the same run must be able to share a file.
+    """
+    strict = dataclasses.replace(waxs, allow_data_check_failures=False)
+    assert strict.allow_data_check_failures != waxs.allow_data_check_failures
+    assert strict.config_hash() == waxs.config_hash()
+
+
 def test_the_lit_thresholds_do_move_a_waxs_hash(waxs):
     """The opposite case, and the reason the two are not one field.
 
@@ -247,7 +258,10 @@ def test_the_stored_file_says_which_fields_the_hash_covers(waxs, tmp_path):
     # excludes one more, and a provenance record that claimed otherwise would
     # be worse than none.
     assert set(recorded) == set(waxs.operational_fields)
-    assert set(recorded) == set(OPERATIONAL_FIELDS) | {"expected_lit_cells"}
+    assert set(recorded) == set(OPERATIONAL_FIELDS) | {
+        "expected_lit_cells",
+        "allow_data_check_failures",
+    }
     assert set(recorded) == set(WAXS_OPERATIONAL_FIELDS)
     # ...and the operational values themselves are still there, in full.
     assert stored["n_workers"] == waxs.n_workers

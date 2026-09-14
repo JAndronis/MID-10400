@@ -123,9 +123,16 @@ DEFAULT_READ_NOISE_KEV: dict[str, float] = {"jf1": 0.3440, "jf2": 0.3195}
 #: ``/frames``. By CLAUDE.md pitfall 12 it therefore stays out of the hash, and
 #: pinning it for a reprocess does not invalidate files written without it.
 #:
+#: ``allow_data_check_failures`` joins it for the same reason: it decides
+#: whether the pass raises *after* the file is finished, and the rows are
+#: identical either way.
+#:
 #: ``lit_fraction_min`` and ``lit_gap_ratio`` are the opposite case and stay in:
 #: they decide which cells are integrated, and so which rows exist at all.
-WAXS_OPERATIONAL_FIELDS: frozenset[str] = OPERATIONAL_FIELDS | {"expected_lit_cells"}
+WAXS_OPERATIONAL_FIELDS: frozenset[str] = OPERATIONAL_FIELDS | {
+    "expected_lit_cells",
+    "allow_data_check_failures",
+}
 
 #: Where the per-run output files are written.
 DEFAULT_OUTPUT_ROOT = f"{_PROPOSAL_ROOT}/scratch/jungfrau_waxs"
@@ -238,6 +245,24 @@ class JungfrauWaxsConfig:
     max_abs_kev: float = 1.0e3
     # ── run, scheduling and output ────────────────────────────────────────
     min_modules: int = 1
+    #: Whether ``DATA_CHECK_FAILED`` frames on their own let the run finish.
+    #:
+    #: They are a property of the data, not a failure of the pass: the frame was
+    #: read, classified and recorded, and ``per_cell`` leaves its slot empty with
+    #: ``n_frames == 0`` rather than guessing at it. r0480/jf1 lost 473 of 23 992
+    #: frames this way — 1.97 % — and raising took the whole run's DAMNIT
+    #: variable down with it, which is the outcome ``_no_lit_cells`` and
+    #: ``combined_curve`` already decided against for the same reason.
+    #:
+    #: The count is never silent: it is logged at WARNING, recorded in
+    #: ``provenance/data_check`` with the two maxima that explain it, and carried
+    #: on the returned grid's ``attrs``. Set it False for a reprocess that must
+    #: refuse anything short of every frame.
+    #:
+    #: ``WORKER_ERROR``, ``NOT_PROCESSED`` and ``LABEL_MISMATCH`` still raise:
+    #: the first two mean the pass did not do its job, and the third means a
+    #: train's frames could not be addressed by label at all.
+    allow_data_check_failures: bool = True
     trains_per_block: int = 8
     n_workers: int | None = None
     selftest_frames: int = 8

@@ -9,6 +9,7 @@ way to find out whether the initializer's arguments actually pickle.
 from __future__ import annotations
 
 import dataclasses
+import json
 import os
 
 import h5py
@@ -154,6 +155,54 @@ def test_a_real_spawned_pool_works(cfg, mock_run_factory, tmp_path):
         output_path=tmp_path / "spawn.h5",
     )
     assert (grid["n_frames"] == 1).all()
+
+
+def test_a_data_check_failure_does_not_take_the_run_down(
+    cfg, mock_run_factory, tmp_path, caplog
+):
+    """r0480: 473 of 23 992 frames failed the value check and the run raised.
+
+    The frame was read, classified and recorded; ``per_cell`` leaves its slot
+    empty with ``n_frames == 0``. Raising over that took the run's whole DAMNIT
+    variable with it, which is what ``allow_data_check_failures`` settles.
+    """
+    import logging
+
+    mock, dc = mock_run_factory(extreme_train=10002)
+    with caplog.at_level(logging.WARNING, logger="analysis.waxs.run"):
+        grid = run(cfg, mock, dc, output_path=tmp_path / "tolerated.h5")
+
+    assert grid is not None
+    with h5py.File(tmp_path / "tolerated.h5") as handle:
+        status = handle["frames/status"][:]
+        failed = status == FrameStatus.DATA_CHECK_FAILED
+        assert failed.sum() == 1
+        recorded = json.loads(handle["provenance"].attrs["data_check"])
+    assert recorded["n"] == 1
+
+    # Tolerated is not silent: the warning, the provenance and the grid all say.
+    assert "failed the value check" in caplog.text
+    assert json.loads(grid.attrs["unplaced"])["DATA_CHECK_FAILED"] == 1
+    assert json.loads(grid.attrs["data_check"])["n"] == 1
+    # The slot is empty rather than guessed at, and nothing else is disturbed.
+    assert int((grid["n_frames"] == 0).sum()) == 1
+
+
+def test_a_strict_run_still_refuses_a_data_check_failure(
+    cfg, mock_run_factory, tmp_path
+):
+    mock, dc = mock_run_factory(extreme_train=10002)
+    strict = dataclasses.replace(cfg, allow_data_check_failures=False)
+    with pytest.raises(IncompleteRun, match="DATA_CHECK_FAILED"):
+        run(strict, mock, dc, output_path=tmp_path / "strict.h5")
+
+
+def test_a_label_mismatch_still_takes_the_run_down(cfg, mock_run_factory, tmp_path):
+    """Only the value check is tolerated: a train that cannot be addressed by
+    label is not a property of the data the pass can record and move past."""
+    mock, dc = mock_run_factory(shuffled_cells_train=10001)
+    with pytest.raises(IncompleteRun, match="LABEL_MISMATCH"):
+        run(cfg, mock, dc, output_path=tmp_path / "label.h5")
 
 
 def test_a_worker_exception_lands_in_the_ledger(cfg, mock_run_factory, tmp_path):

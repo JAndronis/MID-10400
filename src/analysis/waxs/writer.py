@@ -32,6 +32,7 @@ from analysis.common.writer import (
     ConfigHashMismatch,
     FrameTableWriter,
     IncompleteRun,
+    SchemaMismatch,
     as_handle,
     pooled_per_train,
     q_centers,
@@ -41,6 +42,7 @@ __all__ = [
     "ConfigHashMismatch",
     "IncompleteRun",
     "JungfrauWaxsWriter",
+    "SchemaMismatch",
     "per_cell",
     "pooled_per_train",
 ]
@@ -59,6 +61,7 @@ class JungfrauWaxsWriter(FrameTableWriter):
         "n_bad_pixels": np.uint32,
         "n_negative_variance_bins": np.uint32,
         "max_kev": np.float32,
+        "max_kev_static": np.float32,
     }
     FRAME_VECTOR_SOURCES = {
         "cellId": "cell_id",
@@ -67,6 +70,7 @@ class JungfrauWaxsWriter(FrameTableWriter):
         "n_bad_pixels": "n_bad_pixels",
         "n_negative_variance_bins": "n_negative_variance_bins",
         "max_kev": "max_kev",
+        "max_kev_static": "max_kev_static",
     }
     EXTRA_GROUPS = ("operator", "cells")
 
@@ -125,6 +129,42 @@ class JungfrauWaxsWriter(FrameTableWriter):
         group.attrs["error_model_samples"] = model.n_samples
         group.attrs["error_model_sha256"] = model.sha256
 
+    def data_check_summary(self) -> dict[str, Any]:
+        """What the ``DATA_CHECK_FAILED`` rows say about themselves (§3 D6).
+
+        Reads the two maxima the worker stored on those rows and reports, for
+        the run as a whole, which of D6's two clauses fired and whether the
+        offending pixel could have reached the integrator at all. That last
+        count is the one a reader needs: frames clean under the union mask
+        failed over a value ``data.mask`` had already removed, so the number
+        they carry is not evidence of anything wrong with the frame.
+        """
+        frames = self._f["frames"]
+        status = frames["status"][:]
+        failed = status == FrameStatus.DATA_CHECK_FAILED
+        if not failed.any():
+            return {}
+        checked = np.asarray(frames["max_kev_static"][:][failed], dtype=np.float64)
+        reaching = np.asarray(frames["max_kev"][:][failed], dtype=np.float64)
+        bound = float(self._cfg.max_abs_kev)
+        non_finite = ~np.isfinite(checked)
+        clean = np.isfinite(reaching) & (np.abs(reaching) <= bound)
+        finite_checked = checked[np.isfinite(checked)]
+        finite_reaching = reaching[np.isfinite(reaching)]
+        return {
+            "n": int(failed.sum()),
+            "max_abs_kev": bound,
+            "n_non_finite_on_a_kept_pixel": int(non_finite.sum()),
+            "n_clean_under_the_union_mask": int(clean.sum()),
+            "worst_max_kev_static": float(finite_checked.max(initial=0.0)),
+            "worst_max_kev_reaching": float(finite_reaching.max(initial=0.0)),
+            "note": (
+                "max_kev_static is the set D6 tests, max_kev the set the "
+                "integrator sees; a row large in the first and ordinary in the "
+                "second failed over a pixel data.mask already removed"
+            ),
+        }
+
     def per_cell(self) -> Any:
         """Per-frame ``I(q)`` on a (train, cell) grid — see :func:`per_cell`."""
         return per_cell(self._f)
@@ -161,6 +201,9 @@ def per_cell(source: Any, *, dtype: Any = np.float32) -> Any:
         train_ids = handle["trains/trainId"][:]
         if not np.all(np.diff(train_ids.astype(np.int64)) > 0):
             raise ValueError("the train table is not strictly increasing")
+        # Inside the ``with``: an AttributeManager kept past it returns the
+        # default rather than raising (CLAUDE.md pitfall 13).
+        data_check = handle["provenance"].attrs.get("data_check", "")
 
         placeable = status == FrameStatus.OK
         cell_ids = np.unique(row_cell[placeable])
@@ -215,4 +258,7 @@ def per_cell(source: Any, *, dtype: Any = np.float32) -> Any:
     )
     result.attrs["unplaced"] = json.dumps(unplaced, sort_keys=True)
     result.attrs["n_placed"] = placed
+    # Why the DATA_CHECK_FAILED slots are empty, on the object a DAMNIT user
+    # actually has in front of them rather than only in the file.
+    result.attrs["data_check"] = data_check
     return result

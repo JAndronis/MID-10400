@@ -133,6 +133,7 @@ def write_mock_run(
     static_fraction: float = 0.4,
     nonfinite_train: int | None = None,
     extreme_train: int | None = None,
+    extreme_flagged: bool = False,
     shuffled_cells_train: int | None = None,
     fill: bool = True,
     seed: int = 0,
@@ -149,6 +150,10 @@ def write_mock_run(
         cell, to drive ``DATA_CHECK_FAILED``.
     :param extreme_train: put a 1.8e5 keV pixel — the magnitude jf2 actually
         carries, unflagged — on a kept pixel of this train's first lit cell.
+    :param extreme_flagged: also set that pixel's dynamic bit, so the value is
+        one ``data.mask`` removes and the integrator never sees. The frame still
+        fails D6, which tests the pixels the *static* mask keeps — this is the
+        r0480 case, and the only one where the two stored maxima disagree.
     :param shuffled_cells_train: give this train a repeated ``memoryCell``
         entry, so its rows cannot be filled by label.
     :param fill: write frame content. ``False`` leaves ``data/adc``,
@@ -193,6 +198,7 @@ def write_mock_run(
             seed=seed,
             nonfinite_train=nonfinite_train,
             extreme_train=extreme_train,
+            extreme_flagged=extreme_flagged,
             shuffled_cells_train=shuffled_cells_train,
         )
 
@@ -341,6 +347,7 @@ def _fill_frames(
     seed: int,
     nonfinite_train: int | None,
     extreme_train: int | None,
+    extreme_flagged: bool,
     shuffled_cells_train: int | None,
 ) -> None:
     """Fill ``data/adc``, ``data/mask`` and ``data/memoryCell`` with content.
@@ -386,6 +393,8 @@ def _fill_frames(
                 flat_values[lit_cells[0], first_kept] = np.nan
             if train_id is not None and train_id == extreme_train:
                 flat_values[lit_cells[0], first_kept] = 1.8e5
+                if extreme_flagged:
+                    flat_mask[lit_cells[0], first_kept] |= DYNAMIC_BIT
 
             cells = np.arange(CELLS, dtype=np.uint8)
             if train_id is not None and train_id == shuffled_cells_train:

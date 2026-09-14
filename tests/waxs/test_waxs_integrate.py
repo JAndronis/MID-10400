@@ -17,6 +17,7 @@ from analysis.common.status import DataCheckFailed, FrameStatus  # noqa: E402
 from analysis.waxs.integrate import (  # noqa: E402
     ErrorModel,
     frame_data_status,
+    frame_maxima,
     integrate_frame,
 )
 from analysis.waxs.selftest import (  # noqa: E402
@@ -191,6 +192,58 @@ def test_an_extreme_pixel_under_the_static_mask_is_not_this_frames_problem(
     values.reshape(-1)[np.flatnonzero(op.static_bad)[0]] = 1.8e5
     assert frame_data_status(values, op.static_bad, 1e3) is FrameStatus.OK
     integrate_frame(ai, op, model, values, bad, max_abs_kev=1e3)
+
+
+def test_the_two_maxima_separate_a_masked_wild_pixel_from_a_live_one(operator):
+    """r0480: the pair is the evidence a ``DATA_CHECK_FAILED`` row must carry.
+
+    D6 tests the pixels the static mask keeps while the integrator sees the
+    union, so a wild pixel that ``data.mask`` flags fails the frame without
+    being able to change a stored number. ``max_kev`` ordinary beside a huge
+    ``max_kev_static`` is exactly that case, and nothing else produces it.
+    """
+    op, _ = operator
+    values, mask, bad = make_frame(op)
+    dynamic = np.flatnonzero((~op.static_bad) & bad)[0]
+    values.reshape(-1)[dynamic] = 1.8e5
+
+    reaching, checked = frame_maxima(values, bad, op.static_bad)
+    assert checked == pytest.approx(1.8e5)
+    assert reaching < 1e3
+    # ... and the frame still fails, which is what makes the pair worth storing.
+    assert (
+        frame_data_status(values, op.static_bad, 1e3) is FrameStatus.DATA_CHECK_FAILED
+    )
+
+
+def test_a_live_wild_pixel_shows_in_both_maxima(operator):
+    op, _ = operator
+    values, _, bad = make_frame(op)
+    live = np.flatnonzero(~bad)[0]
+    values.reshape(-1)[live] = 1.8e5
+    reaching, checked = frame_maxima(values, bad, op.static_bad)
+    assert reaching == pytest.approx(1.8e5)
+    assert checked == pytest.approx(1.8e5)
+
+
+def test_a_non_finite_value_propagates_into_the_maxima(operator):
+    """No separate column for "why": a NaN maximum is the reason itself."""
+    op, _ = operator
+    values, _, bad = make_frame(op)
+    values.reshape(-1)[np.flatnonzero(~bad)[0]] = np.nan
+    reaching, checked = frame_maxima(values, bad, op.static_bad)
+    assert np.isnan(reaching) and np.isnan(checked)
+
+
+def test_an_integrated_frame_stores_both_maxima(operator, model):
+    op, ai = operator
+    values, _, bad = make_frame(op)
+    result = integrate_frame(ai, op, model, values, bad, max_abs_kev=1e3)
+    flat = values.reshape(-1)
+    assert result.max_kev == pytest.approx(flat[~bad].max())
+    assert result.max_kev_static == pytest.approx(flat[~op.static_bad].max())
+    # The static set is the larger one, so its maximum can only be higher.
+    assert result.max_kev_static >= result.max_kev
 
 
 def test_negative_variance_bins_are_counted_not_hidden(operator):

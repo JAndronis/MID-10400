@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+from types import SimpleNamespace
 
 import h5py
 import numpy as np
@@ -18,6 +19,7 @@ from analysis.waxs import worker  # noqa: E402
 from analysis.waxs.writer import (  # noqa: E402
     ConfigHashMismatch,
     JungfrauWaxsWriter,
+    SchemaMismatch,
     per_cell,
     pooled_per_train,
 )
@@ -105,6 +107,105 @@ def test_a_frame_failing_the_data_check_is_recorded_not_raised(
         worker._STATE = None
 
 
+def _failed_run(cfg, mock_run_factory, operator, model, tmp_path, **mock):
+    """A written file whose one extreme pixel fails exactly one frame."""
+    from analysis.waxs.plan import build_plan, open_detector
+
+    _, dc = mock_run_factory(extreme_train=10002, **mock)
+    op, ai = operator
+    det = open_detector(cfg, dc)
+    plan = build_plan(cfg, LIT_CELLS, dc=dc, control_dc=dc, det=det)
+    worker.init_from_detector(cfg, op, ai, model, LIT_CELLS, det)
+    path = tmp_path / "failed.h5"
+    try:
+        with JungfrauWaxsWriter.open_or_create(cfg, plan, path) as out:
+            out.store_operator(op)
+            out.store_cells(
+                SimpleNamespace(
+                    cells=range(16),
+                    lit_fraction=[0.0] * 16,
+                    n_samples=[1] * 16,
+                    lit=LIT_CELLS,
+                    dark=(),
+                ),
+                model,
+                np.array([10000], dtype=np.uint64),
+            )
+            for block in plan.blocks:
+                out.write_block(block, worker.process_block(block))
+            summary = out.data_check_summary()
+    finally:
+        worker._STATE = None
+    return path, summary
+
+
+def test_a_failed_row_carries_the_value_that_failed_it(
+    cfg, mock_run_factory, operator, model, tmp_path
+):
+    """r0480: the file said 473 frames failed and nothing about why.
+
+    The row is not integrated, so its sums stay zero — but the two maxima are
+    the evidence, and without them the only way to learn what tripped the check
+    is to re-read proc.
+    """
+    path, summary = _failed_run(cfg, mock_run_factory, operator, model, tmp_path)
+    with h5py.File(path) as handle:
+        frames = handle["frames"]
+        failed = frames["status"][:] == FrameStatus.DATA_CHECK_FAILED
+        assert failed.sum() == 1
+        assert frames["max_kev_static"][:][failed][0] == pytest.approx(1.8e5)
+        assert frames["n_bad_pixels"][:][failed][0] > 0
+        assert frames["signal"][:][failed].max() == 0  # nothing was integrated
+        # The labels survive, which is what lets the failure be located.
+        assert frames["trainId"][:][failed][0] == 10002
+
+    assert summary["n"] == 1
+    assert summary["worst_max_kev_static"] == pytest.approx(1.8e5)
+    assert summary["n_clean_under_the_union_mask"] == 0
+
+
+def test_the_summary_separates_a_wild_pixel_the_masks_already_remove(
+    cfg, mock_run_factory, operator, model, tmp_path
+):
+    """The r0480 case: D6 fires on a value that cannot reach the integrator.
+
+    ``n_clean_under_the_union_mask`` is the count the fix turns on, so it has to
+    be right for the case that produced it and not only for the easy one.
+    """
+    path, summary = _failed_run(
+        cfg, mock_run_factory, operator, model, tmp_path, extreme_flagged=True
+    )
+    with h5py.File(path) as handle:
+        frames = handle["frames"]
+        failed = frames["status"][:] == FrameStatus.DATA_CHECK_FAILED
+        assert failed.sum() == 1
+        assert frames["max_kev_static"][:][failed][0] == pytest.approx(1.8e5)
+        assert frames["max_kev"][:][failed][0] < 1e3
+
+    assert summary["n"] == 1
+    assert summary["n_clean_under_the_union_mask"] == 1
+    assert summary["worst_max_kev_reaching"] < 1e3
+
+
+def test_a_file_missing_a_column_is_refused_rather_than_resumed(worker_ready, tmp_path):
+    """A column added to the pass does not move ``config_hash``.
+
+    So without the schema check an older file passes the hash gate, is opened
+    for resume, and fails on the first write with the run part-processed.
+    """
+    path = written(worker_ready, tmp_path)
+    with h5py.File(path, "r+") as handle:
+        del handle["frames/max_kev_static"]
+
+    with pytest.raises(SchemaMismatch, match="max_kev_static"):
+        JungfrauWaxsWriter.open_or_create(worker_ready.cfg, worker_ready.plan, path)
+
+    # overwrite=True is the documented way out, and it must still work.
+    replaced = dataclasses.replace(worker_ready.cfg, overwrite=True)
+    with JungfrauWaxsWriter.open_or_create(replaced, worker_ready.plan, path) as out:
+        assert "max_kev_static" in out._f["frames"]
+
+
 def test_the_worker_refuses_to_run_uninitialised(pipeline):
     worker._STATE = None
     with pytest.raises(RuntimeError, match="worker.init has not run"):
@@ -124,6 +225,7 @@ def test_the_schema_is_the_jungfrau_one(worker_ready, tmp_path):
             "n_bad_pixels",
             "n_negative_variance_bins",
             "max_kev",
+            "max_kev_static",
             "signal",
             "normalization",
             "variance",

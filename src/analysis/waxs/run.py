@@ -11,6 +11,7 @@ its own file, and they are combined only at the plot (§6 O5).
 
 from __future__ import annotations
 
+import json
 import logging
 import platform
 import socket
@@ -111,9 +112,11 @@ def run_jungfrau_waxs(
         is pinned and the measured pattern is not it (§3 D4).
     :raises analysis.waxs.selftest.SelfTestFailed: the NaN path and the
         per-frame-mask reference disagree.
-    :raises IncompleteRun: some frame is not ``OK`` and ``cfg.allow_incomplete``
-        is False. The output file is still written and closed first, so the
-        ledger explains what happened.
+    :raises IncompleteRun: some frame carries a *blocking* status and
+        ``cfg.allow_incomplete`` is False. ``DATA_CHECK_FAILED`` is not one by
+        default — see :func:`_blocking` and ``cfg.allow_data_check_failures`` —
+        but it is logged and recorded either way. The output file is written and
+        closed first whatever happens, so the ledger explains it.
     """
     if reduce not in REDUCERS:
         raise ValueError(f"reduce must be one of {REDUCERS}, got {reduce!r}")
@@ -245,20 +248,50 @@ def run_jungfrau_waxs(
                 "timings": timings,
                 "setup_timings": {**setup, "write_blocks": write_s},
                 "status_summary": out.status_summary(),
+                "data_check": out.data_check_summary(),
                 "run_checks": plan.checks,
             }
         )
-        incomplete = out.any_not_ok()
         summary = out.status_summary()
+        data_check = out.data_check_summary()
+        blocking = _blocking(cfg, summary)
         reduced = None
         if reduce == "pooled":
             reduced = out.pooled_per_train()
         elif reduce == "per_cell":
             reduced = out.per_cell()
 
-    if incomplete and not cfg.allow_incomplete:
-        raise IncompleteRun(f"not every frame reached OK: {summary}")
+    if data_check:
+        # Never silent, whether or not it raises: a tolerated loss is still a
+        # loss, and under §3 D6's unresolved question it could be a biased one.
+        log.warning(
+            "r%d %s: %d frames failed the value check and are absent from the "
+            "result (%s)",
+            cfg.run,
+            cfg.detector,
+            data_check["n"],
+            json.dumps(data_check, sort_keys=True),
+        )
+    if blocking and not cfg.allow_incomplete:
+        detail = f" data check: {data_check}" if data_check else ""
+        raise IncompleteRun(
+            f"not every frame reached OK: {summary}; blocking {blocking}.{detail}"
+        )
     return reduced
+
+
+def _blocking(cfg: JungfrauWaxsConfig, summary: dict[str, int]) -> dict[str, int]:
+    """The non-``OK`` statuses that stop the run finishing.
+
+    ``DATA_CHECK_FAILED`` is a property of the data rather than a failure of the
+    pass — the frame was read, classified and recorded — so by default it is
+    counted and not raised on; see ``cfg.allow_data_check_failures``. Everything
+    else still blocks.
+    """
+    tolerated = {FrameStatus.OK.name}
+    if cfg.allow_data_check_failures:
+        tolerated.add(FrameStatus.DATA_CHECK_FAILED.name)
+    return {name: n for name, n in summary.items() if name not in tolerated}
 
 
 def _sample_trains(cfg: JungfrauWaxsConfig, det: Any) -> np.ndarray:

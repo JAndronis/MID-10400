@@ -19,6 +19,7 @@ __all__ = [
     "ErrorModel",
     "FrameResult",
     "frame_data_status",
+    "frame_maxima",
     "integrate_frame",
 ]
 
@@ -89,7 +90,38 @@ class FrameResult:
     energy_valid: float  # keV summed over the kept pixels
     n_bad_pixels: int
     n_negative_variance_bins: int
+    #: Largest value over the pixels that reach the integrator (the union mask).
     max_kev: float
+    #: Largest value over the pixels the *static* mask keeps — the set D6 tests.
+    #: Stored on every row so that the pair explains a ``DATA_CHECK_FAILED``
+    #: one: see :func:`frame_maxima`.
+    max_kev_static: float
+
+
+def frame_maxima(
+    x: np.ndarray, bad: np.ndarray, static_bad: np.ndarray
+) -> tuple[float, float]:
+    """``(max over the union mask, max over the static mask)``, in keV.
+
+    The pair is what lets a ``DATA_CHECK_FAILED`` row explain itself, because
+    the two masks are not the same set: :func:`frame_data_status` tests the
+    pixels ``static_bad`` keeps, while the integration excludes the union
+    ``bad``. So on a failing frame
+
+    * a large second value with an ordinary first one means the offending pixel
+      is one ``data.mask`` flags — it never reached the integrator, and the
+      frame failed over a value that could not have changed a stored number;
+    * two large values mean it did reach the integrator, and the magnitude then
+      says whether it is artifact-scale or within reach of real scattering.
+
+    Non-finite values propagate rather than being skipped: a NaN maximum *is*
+    the reason that frame failed, and no separate column is needed to say so.
+    """
+    flat = np.asarray(x).reshape(-1)
+    return (
+        float(flat[~bad].max(initial=0.0)),
+        float(flat[~static_bad].max(initial=0.0)),
+    )
 
 
 def frame_data_status(
@@ -185,6 +217,7 @@ def integrate_frame(
 
     kept_values = flat[~bad]
     occupied = sum_normalization > 0
+    max_kev, max_kev_static = frame_maxima(flat, bad, op.static_bad)
     return FrameResult(
         signal=sum_signal,
         normalization=sum_normalization,
@@ -192,5 +225,6 @@ def integrate_frame(
         energy_valid=float(kept_values.sum()),
         n_bad_pixels=int(bad.sum()),
         n_negative_variance_bins=int((occupied & (sum_variance < 0)).sum()),
-        max_kev=float(kept_values.max(initial=0.0)),
+        max_kev=max_kev,
+        max_kev_static=max_kev_static,
     )
