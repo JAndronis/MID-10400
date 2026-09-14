@@ -19,22 +19,20 @@ from typing import Any
 
 import numpy as np
 
-# Re-exported: ``run.py`` and the tests reach these through this module.
-from analysis.common.cpu import THREAD_ENV, set_thread_env
+from analysis.common.cpu import set_thread_env
+from analysis.common.masks import frame_bad
+from analysis.common.plan import Block
+from analysis.common.status import DataCheckFailed, FrameStatus
 from analysis.saxs.config import AgipdSaxsConfig
-from analysis.saxs.masks import BaseMasks, frame_bad, load_masks
+from analysis.saxs.masks import BaseMasks, load_masks
 from analysis.saxs.operator import SparseOperator, load_operator
-from analysis.saxs.plan import Block
 from analysis.saxs.sparse import integrate_frame
-from analysis.saxs.status import DataCheckFailed, FrameStatus
 
 __all__ = [
-    "THREAD_ENV",
     "BlockResult",
     "WorkerPaths",
     "init",
     "process_block",
-    "set_thread_env",
 ]
 
 

@@ -19,8 +19,8 @@ pytest.importorskip("pyFAI", reason="P1 needs pyFAI")
 
 from extra_geom import AGIPD_1MGeometry  # noqa: E402
 
+from analysis.common.masks import MaskSource, StaticMask  # noqa: E402
 from analysis.saxs.config import NPIX, AgipdSaxsConfig  # noqa: E402
-from analysis.saxs.masks import MaskSource, StaticMask  # noqa: E402
 from analysis.saxs.operator import build_operator  # noqa: E402
 
 #: EXtra-geom's test quad positions, in pixel units (the constructor's default
@@ -228,10 +228,10 @@ def mock_pipeline(run_cfg, geom, mock_run_factory):
     from extra_data import by_id
     from extra_data.components import AGIPD1M
 
+    from analysis.common.status import FrameStatus
     from analysis.saxs.masks import BaseMaskAccumulator, build_static_bad
     from analysis.saxs.operator import build_operator
     from analysis.saxs.plan import build_plan
-    from analysis.saxs.status import FrameStatus
 
     run, dc = mock_run_factory()
     plan = build_plan(run_cfg, dc=dc)

@@ -165,28 +165,34 @@ EXPECTED_ALL: dict[str, tuple[str, ...]] = {
         "restore_by_name", "result_fields", "state_by_name",
     ),
     "analysis.common.cpu": (
-        "CPU_TOPOLOGY_ROOT", "THREAD_ENV", "default_pool", "file_sha256",
-        "package_versions", "phase", "physical_cores", "set_thread_env",
+        "CPU_TOPOLOGY_ROOT", "THREAD_ENV", "default_pool",
+        "file_sha256", "package_versions", "phase", "physical_cores",
+        "set_thread_env",
     ),
     "analysis.common.masks": (
-        "MaskSource", "StaticMask", "UnexpectedMaskBits", "bits_to_mask",
-        "describe_bits", "frame_bad",
+        "MaskSource", "StaticMask", "UnexpectedMaskBits",
+        "bits_to_mask", "describe_bits", "frame_bad",
     ),
     "analysis.common.plan": (
-        "Block", "RunPlan", "TrainRecord", "build_blocks", "evenly_spaced",
+        "Block", "RunPlan", "TrainRecord", "build_blocks",
+        "evenly_spaced",
     ),
-    "analysis.common.status": ("DataCheckFailed", "FrameStatus"),
+    "analysis.common.status": (
+        "DataCheckFailed", "FrameStatus",
+    ),
     "analysis.common.writer": (
         "ConfigHashMismatch", "FrameTableWriter", "IncompleteRun",
         "SchemaMismatch", "PassConfig", "as_handle", "config_payload",
         "per_label", "pooled_per_train", "q_centers", "status_counts",
     ),
-    # Omits METHOD, NPIX, SHAPE and DEFAULT_OUTPUT_ROOT, which saxs.__init__,
-    # saxs.masks and saxs.operator import from here by name.
+    # METHOD, NPIX, SHAPE and DEFAULT_OUTPUT_ROOT were missing here while
+    # three modules imported them by name; the pass-throughs are gone.
+
     "analysis.saxs.config": (
-        "DEFAULT_BEAM_CENTER_PX", "DEFAULT_BEAM_CENTER_PY",
-        "DEFAULT_GEOMETRY_FILE", "DEFAULT_PIXEL_MASK_FILE", "EXPECTED_BITS",
-        "AgipdSaxsConfig", "file_sha256", "physical_cores",
+        "AgipdSaxsConfig", "DEFAULT_BEAM_CENTER_PX",
+        "DEFAULT_BEAM_CENTER_PY", "DEFAULT_GEOMETRY_FILE",
+        "DEFAULT_OUTPUT_ROOT", "DEFAULT_PIXEL_MASK_FILE",
+        "EXPECTED_BITS", "METHOD", "NPIX", "SHAPE",
     ),
     "analysis.saxs.operator": (
         "SparseOperator", "build_operator", "geometry_from_config",
@@ -196,24 +202,27 @@ EXPECTED_ALL: dict[str, tuple[str, ...]] = {
         "FrameResult", "denominator", "frame_data_status", "gather",
         "integrate_frame",
     ),
-    # Omits SchemaMismatch, which FrameTableWriter.open_or_create raises for
-    # this pass too; waxs.writer does export it.
+    # No longer re-exports the common exceptions: callers import them from
+    # analysis.common.writer, where they are defined.
+
     "analysis.saxs.writer": (
-        "ConfigHashMismatch", "AgipdSaxsWriter", "IncompleteRun", "per_pulse",
-        "pooled_per_train",
+        "AgipdSaxsWriter", "per_pulse",
     ),
     "analysis.waxs.integrate": (
         "ErrorModel", "FrameResult", "extreme_pixels", "frame_maxima",
         "integrate_frame",
     ),
-    "analysis.waxs.masks": ("build_static_bad", "frame_bad", "load_static_mask"),
+    "analysis.waxs.masks": (
+        "build_static_bad", "load_static_mask",
+    ),
     "analysis.waxs.operator": (
         "WaxsOperator", "WavelengthMismatch", "build_operator",
         "operator_sha256", "resolved_method",
     ),
+    # Same rule as the AGIPD writer.
+
     "analysis.waxs.writer": (
-        "ConfigHashMismatch", "IncompleteRun", "JungfrauWaxsWriter",
-        "SchemaMismatch", "per_cell", "pooled_per_train",
+        "JungfrauWaxsWriter", "per_cell",
     ),
 }  # fmt: skip
 

@@ -16,20 +16,24 @@ from typing import Any
 
 import numpy as np
 
-from analysis.common.cpu import default_pool, phase
-
-# Re-exported: ``default_pool`` is part of this module's documented surface.
+from analysis.common.cpu import file_sha256, phase, set_thread_env
+from analysis.common.masks import frame_bad
+from analysis.common.plan import RunPlan, evenly_spaced
 from analysis.common.run import base_provenance, fan_out
+from analysis.common.status import FrameStatus
+from analysis.common.writer import IncompleteRun
 from analysis.saxs import masks as masks_module
 from analysis.saxs import operator as operator_module
 from analysis.saxs import worker as worker_module
-from analysis.saxs.config import AgipdSaxsConfig, file_sha256
-from analysis.saxs.plan import RunPlan, build_plan
+from analysis.saxs.config import AgipdSaxsConfig
+from analysis.saxs.plan import build_plan
 from analysis.saxs.selftest import run_selftest
-from analysis.saxs.status import FrameStatus
-from analysis.saxs.writer import AgipdSaxsWriter, IncompleteRun
+from analysis.saxs.writer import AgipdSaxsWriter
 
-__all__ = ["REDUCERS", "default_pool", "run_agipd_saxs"]
+__all__ = [
+    "REDUCERS",
+    "run_agipd_saxs",
+]
 
 #: What ``run_agipd_saxs`` may return. ``pooled`` is the per-train I(q) of
 #: ``per_pulse`` is the (trainId, pulseId, q) grid, which is
@@ -74,7 +78,7 @@ def run_agipd_saxs(
         raise ValueError(f"reduce must be one of {REDUCERS}, got {reduce!r}")
 
     # Before any pool exists, so spawned children inherit it.
-    worker_module.set_thread_env()
+    set_thread_env()
     # Wall time is an acceptance criterion, so it is
     # recorded in provenance rather than left to whoever launched the job. It
     # spans the plan, the self-test, the pool and the writer.
@@ -179,7 +183,7 @@ def _build_base_masks(
         [t.train_id for t in plan.trains if t.status is FrameStatus.OK],
         dtype=np.uint64,
     )
-    sampled = masks_module.evenly_spaced(ok_trains, cfg.base_mask_trains)
+    sampled = evenly_spaced(ok_trains, cfg.base_mask_trains)
 
     if dc is None:
         from extra_data import open_run
@@ -215,7 +219,7 @@ def _run_selftest(
     ok_trains = [t.train_id for t in plan.trains if t.status is FrameStatus.OK]
     if not ok_trains:
         raise ValueError("no OK trains to self-test on")
-    chosen = masks_module.evenly_spaced(np.array(ok_trains, dtype=np.uint64), 2)
+    chosen = evenly_spaced(np.array(ok_trains, dtype=np.uint64), 2)
 
     engine = ai.engines[next(iter(ai.engines))].engine
     frames = []
@@ -231,9 +235,7 @@ def _run_selftest(
             frames.append(
                 (
                     data[:, frame].reshape(-1),
-                    masks_module.frame_bad(
-                        mask[:, frame], cfg.mask_bits, base_masks.static_bad
-                    ),
+                    frame_bad(mask[:, frame], cfg.mask_bits, base_masks.static_bad),
                     base_bad,
                     base_denominator,
                 )

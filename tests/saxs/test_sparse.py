@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from analysis.common.status import DataCheckFailed, FrameStatus
 from analysis.saxs.config import METHOD, NPIX
 from analysis.saxs.operator import SparseOperator
 from analysis.saxs.sparse import (
@@ -13,7 +14,6 @@ from analysis.saxs.sparse import (
     gather,
     integrate_frame,
 )
-from analysis.saxs.status import DataCheckFailed, FrameStatus
 
 pytest.importorskip("pyFAI")
 

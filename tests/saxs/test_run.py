@@ -13,11 +13,12 @@ pytest.importorskip("extra_data")
 
 import h5py  # noqa: E402
 
+from analysis.common.cpu import THREAD_ENV  # noqa: E402
+from analysis.common.plan import Block  # noqa: E402
+from analysis.common.status import FrameStatus  # noqa: E402
+from analysis.common.writer import IncompleteRun  # noqa: E402
 from analysis.saxs import worker  # noqa: E402
-from analysis.saxs.plan import Block  # noqa: E402
 from analysis.saxs.run import run_agipd_saxs  # noqa: E402
-from analysis.saxs.status import FrameStatus  # noqa: E402
-from analysis.saxs.writer import IncompleteRun  # noqa: E402
 
 
 class InlinePool:
@@ -123,10 +124,10 @@ def test_end_to_end_with_a_real_spawned_pool(pipeline, tmp_path):
 
 def test_thread_env_is_set_before_any_pool(pipeline, tmp_path, monkeypatch):
     """§3 rule 3: spawned children inherit it, so it must be set in the parent."""
-    for name in worker.THREAD_ENV:
+    for name in THREAD_ENV:
         monkeypatch.delenv(name, raising=False)
     run_on_mock(pipeline, tmp_path)
-    for name in worker.THREAD_ENV:
+    for name in THREAD_ENV:
         assert os.environ[name] == "1"
 
 

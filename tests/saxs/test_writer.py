@@ -11,12 +11,10 @@ pytest.importorskip("extra_data")
 
 import h5py  # noqa: E402
 
+from analysis.common.status import FrameStatus  # noqa: E402
+from analysis.common.writer import ConfigHashMismatch  # noqa: E402
 from analysis.saxs import worker  # noqa: E402
-from analysis.saxs.status import FrameStatus  # noqa: E402
-from analysis.saxs.writer import (  # noqa: E402
-    AgipdSaxsWriter,
-    ConfigHashMismatch,
-)
+from analysis.saxs.writer import AgipdSaxsWriter  # noqa: E402
 
 
 def process_all(pipeline):
@@ -57,7 +55,7 @@ def test_worker_labels_come_from_the_reader(worker_ready):
 
 def test_worker_requires_init():
     worker._STATE = None
-    from analysis.saxs.plan import Block
+    from analysis.common.plan import Block
 
     with pytest.raises(RuntimeError, match="worker.init"):
         worker.process_block(Block(0, (1,), (1,), (0,)))

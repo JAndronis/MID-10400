@@ -19,11 +19,11 @@ import pytest
 pytest.importorskip("extra_data")
 
 from analysis.common.status import FrameStatus  # noqa: E402
+from analysis.common.writer import IncompleteRun  # noqa: E402
 from analysis.waxs.cells import UnexpectedLitCells  # noqa: E402
 from analysis.waxs.config import EXPECTED_LIT_CELLS  # noqa: E402
 from analysis.waxs.run import run_jungfrau_waxs  # noqa: E402
 from analysis.waxs.selftest import SelfTestFailed  # noqa: E402
-from analysis.waxs.writer import IncompleteRun  # noqa: E402
 
 
 class InlinePool:

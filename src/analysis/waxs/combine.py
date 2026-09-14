@@ -442,7 +442,7 @@ def combine_files(
     The stored sums carry real per-bin errors, which the per-cell grid does not,
     so this is the path that gives a meaningful ``reduced_chi2``.
     """
-    from analysis.waxs.writer import pooled_per_train
+    from analysis.common.writer import pooled_per_train
 
     q_ref, i_ref, s_ref = mean_curve(pooled_per_train(Path(reference_file)))
     q_other, i_other, s_other = mean_curve(pooled_per_train(Path(other_file)))

@@ -63,11 +63,13 @@ from typing import Any  # noqa: E402
 import h5py  # noqa: E402
 import numpy as np  # noqa: E402
 
+from analysis.common.masks import frame_bad  # noqa: E402
+from analysis.common.plan import evenly_spaced  # noqa: E402
+from analysis.common.status import FrameStatus  # noqa: E402
 from analysis.saxs import masks as masks_module  # noqa: E402
 from analysis.saxs import operator as operator_module  # noqa: E402
 from analysis.saxs.config import AgipdSaxsConfig  # noqa: E402
 from analysis.saxs.selftest import SelfTestFailed, reference_frame  # noqa: E402
-from analysis.saxs.status import FrameStatus  # noqa: E402
 
 #: Per-frame, per-core cost measured in the stage benchmark (context file §2).
 #: The worker times ``read_data`` and ``read_mask`` around the EXtra-data reads
@@ -200,7 +202,7 @@ def stage_reference(
         candidates = _fully_ok_trains(handle)
         if candidates.size == 0:
             return {"passed": False, "reason": "no train has only OK frames"}
-        chosen = masks_module.evenly_spaced(candidates, n_trains)
+        chosen = evenly_spaced(candidates, n_trains)
         pooled = {int(t): _pooled_from_file(handle, int(t)) for t in chosen.tolist()}
 
     # The reference is only a reference if it was built on the same geometry
@@ -238,7 +240,7 @@ def stage_reference(
         norm_ref = np.zeros(cfg.npt, dtype=np.float64)
         for frame in range(data.shape[1]):
             counts = data[:, frame].reshape(-1)
-            bad = masks_module.frame_bad(mask[:, frame], cfg.mask_bits, static.bad)
+            bad = frame_bad(mask[:, frame], cfg.mask_bits, static.bad)
             ref = reference_frame(engine, op, counts, bad)
             signal_ref += ref.signal
             norm_ref += ref.normalization

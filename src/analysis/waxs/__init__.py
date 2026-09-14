@@ -11,6 +11,7 @@ detectors on one scale by fitting a factor over their overlap.
 
 from __future__ import annotations
 
+from analysis.common.masks import frame_bad
 from analysis.waxs.cells import (
     CellAccumulator,
     CellClassification,
@@ -40,7 +41,7 @@ from analysis.waxs.integrate import (
     extreme_pixels,
     integrate_frame,
 )
-from analysis.waxs.masks import build_static_bad, frame_bad, load_static_mask
+from analysis.waxs.masks import build_static_bad, load_static_mask
 from analysis.waxs.operator import (
     WavelengthMismatch,
     WaxsOperator,

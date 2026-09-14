@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from analysis.saxs.plan import RunPlan
-from analysis.saxs.status import FrameStatus
+from analysis.common.plan import RunPlan
+from analysis.common.status import FrameStatus
 
 
 def status_of(plan: RunPlan, train_id: int) -> FrameStatus:

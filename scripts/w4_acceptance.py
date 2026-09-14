@@ -403,7 +403,7 @@ def stage_ledger(cfg: Any, output: Path, pool: bool = True) -> dict[str, Any]:
     # cheap to check off the file that was just written.
     pooled: dict[str, Any] = {}
     if pool:
-        from analysis.waxs.writer import pooled_per_train
+        from analysis.common.writer import pooled_per_train
 
         per_train = pooled_per_train(output)
         remaining = int(per_train.attrs.get("negative_variance_bins", 0))

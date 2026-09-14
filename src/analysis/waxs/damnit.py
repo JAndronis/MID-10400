@@ -16,6 +16,7 @@ from typing import Any
 
 import numpy as np
 
+from analysis.common.writer import pooled_per_train
 from analysis.waxs.combine import (
     NoOverlap,
     combine_curves,
@@ -23,7 +24,7 @@ from analysis.waxs.combine import (
     scale_to_overlap,
 )
 from analysis.waxs.config import DETECTORS, JungfrauWaxsConfig, config_for
-from analysis.waxs.writer import per_cell, pooled_per_train
+from analysis.waxs.writer import per_cell
 
 __all__ = [
     "combined_curve",

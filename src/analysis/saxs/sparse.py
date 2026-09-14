@@ -15,8 +15,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from analysis.common.status import DataCheckFailed, FrameStatus
 from analysis.saxs.operator import SparseOperator
-from analysis.saxs.status import DataCheckFailed, FrameStatus
 
 __all__ = [
     "FrameResult",

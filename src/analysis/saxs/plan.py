@@ -17,13 +17,14 @@ from typing import Any
 
 import numpy as np
 
-# Re-exported: the row model is detector-agnostic and now lives in
-# ``analysis.common.plan``, but the SAXS package and its tests name it here.
-from analysis.common.plan import Block, RunPlan, TrainRecord, build_blocks
+from analysis.common.plan import RunPlan, TrainRecord, build_blocks
+from analysis.common.status import FrameStatus
 from analysis.saxs.config import AgipdSaxsConfig
-from analysis.saxs.status import FrameStatus
 
-__all__ = ["Block", "RunPlan", "TrainRecord", "build_plan", "run_checks"]
+__all__ = [
+    "build_plan",
+    "run_checks",
+]
 
 log = logging.getLogger(__name__)
 

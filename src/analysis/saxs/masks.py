@@ -35,9 +35,7 @@ from pathlib import Path
 import numpy as np
 from extra_geom import agipd_asic_seams
 
-# Re-exported: the mask vocabulary and the train sampling are detector-agnostic
-# and now live under ``analysis.common``, but the SAXS package, its tests and
-# ``scripts/p4_acceptance.py`` reach them through this module.
+from analysis.common.cpu import file_sha256
 from analysis.common.masks import (
     MaskSource,
     StaticMask,
@@ -46,22 +44,14 @@ from analysis.common.masks import (
     describe_bits,
     frame_bad,
 )
-from analysis.common.plan import evenly_spaced
-from analysis.saxs.config import NPIX, AgipdSaxsConfig, file_sha256
+from analysis.saxs.config import NPIX, AgipdSaxsConfig
 from analysis.saxs.operator import SparseOperator
 from analysis.saxs.sparse import denominator
 
 __all__ = [
     "BaseMaskAccumulator",
     "BaseMasks",
-    "MaskSource",
-    "StaticMask",
-    "UnexpectedMaskBits",
-    "bits_to_mask",
     "build_static_bad",
-    "describe_bits",
-    "evenly_spaced",
-    "frame_bad",
     "load_masks",
     "load_pixel_mask",
     "save_masks",

@@ -29,6 +29,7 @@ from analysis.common.masks import frame_bad
 from analysis.common.plan import evenly_spaced
 from analysis.common.run import base_provenance, fan_out
 from analysis.common.status import FrameStatus
+from analysis.common.writer import IncompleteRun
 from analysis.waxs import worker as worker_module
 from analysis.waxs.cells import CellAccumulator, CellClassification
 from analysis.waxs.config import CELLS_PER_TRAIN, JungfrauWaxsConfig
@@ -36,7 +37,7 @@ from analysis.waxs.integrate import ErrorModel
 from analysis.waxs.operator import WaxsOperator, build_operator
 from analysis.waxs.plan import build_plan, open_detector
 from analysis.waxs.selftest import run_selftest
-from analysis.waxs.writer import IncompleteRun, JungfrauWaxsWriter
+from analysis.waxs.writer import JungfrauWaxsWriter
 
 __all__ = ["REDUCERS", "run_jungfrau_waxs"]
 

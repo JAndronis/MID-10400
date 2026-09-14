@@ -7,8 +7,8 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
+from analysis.common.status import FrameStatus
 from analysis.saxs.plan import build_plan
-from analysis.saxs.status import FrameStatus
 
 pytest.importorskip("extra_data")
 

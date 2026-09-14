@@ -17,8 +17,9 @@ from typing import Any
 
 import numpy as np
 
+from analysis.common.writer import pooled_per_train
 from analysis.saxs.config import AgipdSaxsConfig
-from analysis.saxs.writer import per_pulse, pooled_per_train
+from analysis.saxs.writer import per_pulse
 
 __all__ = [
     "config_for",

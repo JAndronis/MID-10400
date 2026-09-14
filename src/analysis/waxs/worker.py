@@ -24,8 +24,7 @@ from typing import Any
 
 import numpy as np
 
-# Re-exported so that both passes' workers present the same surface.
-from analysis.common.cpu import THREAD_ENV, set_thread_env
+from analysis.common.cpu import set_thread_env
 from analysis.common.masks import frame_bad
 from analysis.common.plan import Block
 from analysis.common.status import DataCheckFailed, FrameStatus
@@ -34,12 +33,10 @@ from analysis.waxs.integrate import ErrorModel, frame_maxima, integrate_frame
 from analysis.waxs.operator import WaxsOperator, build_operator
 
 __all__ = [
-    "THREAD_ENV",
     "BlockResult",
     "init",
     "init_from_detector",
     "process_block",
-    "set_thread_env",
 ]
 
 

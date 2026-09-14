@@ -25,10 +25,13 @@ from pathlib import Path
 import numpy as np
 
 from analysis.common.cpu import file_sha256
-from analysis.common.masks import MaskSource, StaticMask, frame_bad
+from analysis.common.masks import MaskSource, StaticMask
 from analysis.waxs.config import MODULE_SHAPE, NPIX, JungfrauWaxsConfig
 
-__all__ = ["build_static_bad", "frame_bad", "load_static_mask"]
+__all__ = [
+    "build_static_bad",
+    "load_static_mask",
+]
 
 
 def load_static_mask(path: str | Path) -> np.ndarray:

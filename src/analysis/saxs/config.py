@@ -13,26 +13,25 @@ from typing import Any
 
 from pyFAI.units import hc  # keV·Å, derived from scipy CODATA (pyFAI/units.py:66)
 
-# Re-exported: the whole package and its tests reach these through
-# ``analysis.saxs.config``, and ``test_config`` calls ``physical_cores`` with a
-# fixture topology root.
 from analysis.common.config import (
     OPERATIONAL_FIELDS,
     config_sha256,
     restore_by_name,
     state_by_name,
 )
-from analysis.common.cpu import file_sha256, physical_cores
+from analysis.common.cpu import physical_cores
 
 __all__ = [
+    "AgipdSaxsConfig",
     "DEFAULT_BEAM_CENTER_PX",
     "DEFAULT_BEAM_CENTER_PY",
     "DEFAULT_GEOMETRY_FILE",
+    "DEFAULT_OUTPUT_ROOT",
     "DEFAULT_PIXEL_MASK_FILE",
     "EXPECTED_BITS",
-    "AgipdSaxsConfig",
-    "file_sha256",
-    "physical_cores",
+    "METHOD",
+    "NPIX",
+    "SHAPE",
 ]
 
 #: Flattened AGIPD-1M pixel grid, module × slow-scan × fast-scan.
