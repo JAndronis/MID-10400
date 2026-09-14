@@ -10,13 +10,19 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from pyFAI.units import hc  # keV·Å, derived from scipy CODATA (pyFAI/units.py:66)
 
 # Re-exported: the whole package and its tests reach these through
 # ``analysis.saxs.config``, and ``test_config`` calls ``physical_cores`` with a
 # fixture topology root.
-from analysis.common.config import OPERATIONAL_FIELDS, config_sha256
+from analysis.common.config import (
+    OPERATIONAL_FIELDS,
+    config_sha256,
+    restore_by_name,
+    state_by_name,
+)
 from analysis.common.cpu import file_sha256, physical_cores
 
 __all__ = [
@@ -161,6 +167,18 @@ class AgipdSaxsConfig:
             raise ValueError(
                 f"selftest_frames must be positive, got {self.selftest_frames}"
             )
+
+    def __getstate__(self) -> dict[str, Any]:
+        """Pickle by field name, not by position — see :mod:`analysis.common.config`."""
+        return state_by_name(self)
+
+    def __setstate__(self, state: Any) -> None:
+        """Unpickle by field name, refusing a state this class disagrees with.
+
+        Defined here rather than inherited: ``dataclasses`` installs its own
+        positional pair unless ``__getstate__`` is in this class's ``__dict__``.
+        """
+        restore_by_name(self, state)
 
     @property
     def output_file(self) -> Path:
