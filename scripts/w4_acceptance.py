@@ -28,22 +28,15 @@ Needs a DAMNIT-partition node, the real PONI and ``.edf`` files, and the run.
 
 from __future__ import annotations
 
-import os
-
 # Before numpy, pyFAI or EXtra-data import anything that builds a thread pool.
-for _name in (
-    "EXTRA_NUM_THREADS",
-    "OMP_NUM_THREADS",
-    "MKL_NUM_THREADS",
-    "OPENBLAS_NUM_THREADS",
-):
-    os.environ[_name] = "1"
+from _common import report_header, write_report  # noqa: E402
+
+from analysis.threadenv import set_thread_env
+
+set_thread_env()
 
 import argparse  # noqa: E402
 import json  # noqa: E402
-import platform  # noqa: E402
-import socket  # noqa: E402
-import subprocess  # noqa: E402
 import time  # noqa: E402
 import traceback  # noqa: E402
 from datetime import UTC, datetime  # noqa: E402
@@ -82,19 +75,6 @@ BUDGET_MS = {"read_data": 18.0, "read_mask": 8.0, "integrate": 5.0}
 #: The whole r0423 jf1 pass took 17.5 s. 600 s is 34x that: loose enough to
 #: survive a contended node, tight enough that something structural shows.
 WALL_TARGET_S = 600.0
-
-
-def _git_commit() -> str:
-    try:
-        return subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            capture_output=True,
-            text=True,
-            check=True,
-            cwd=Path(__file__).parent,
-        ).stdout.strip()
-    except Exception:  # noqa: BLE001 - provenance is best-effort
-        return "unknown"
 
 
 def _lit_as_configured(cfg: Any, lit: list[int]) -> bool:
@@ -521,23 +501,15 @@ def main(argv=None) -> int:
         _write(report, args)
         return 2
 
-    report: dict[str, Any] = {
-        "generated_at": datetime.now(UTC).isoformat(),
-        "host": socket.gethostname(),
-        "platform": platform.platform(),
-        "python": platform.python_version(),
-        "git_commit": _git_commit(),
-        "proposal": args.proposal,
-        "run": args.run,
-        "detector": args.detector,
-        "workers": args.workers,
-        "config_hash": cfg.config_hash(),
-        "output": str(output),
-        "thread_env": {
-            k: os.environ.get(k) for k in ("EXTRA_NUM_THREADS", "OMP_NUM_THREADS")
-        },
-        "gates": {},
-    }
+    report: dict[str, Any] = report_header(
+        proposal=args.proposal,
+        run=args.run,
+        detector=args.detector,
+        workers=args.workers,
+        config_hash=cfg.config_hash(),
+        output=str(output),
+        gates={},
+    )
 
     if args.skip_run:
         report["gates"]["A_run"] = {"passed": None, "reason": "--skip-run"}
@@ -607,13 +579,9 @@ def main(argv=None) -> int:
     return 0 if report["passed"] else 1
 
 
-def _write(report: dict[str, Any], args) -> None:
-    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    path = args.json or Path(__file__).with_name(
-        f"w4_acceptance_r{args.run:04d}_{args.detector}_{stamp}.json"
-    )
-    path.write_text(json.dumps(report, indent=2, default=str))
-    print(f"\nwrote {path}")
+def _write(report: dict[str, Any], args: Any) -> None:
+    """Write the report beside this script, stamped with the time."""
+    write_report(report, args.json, f"w4_acceptance_r{args.run:04d}_{args.detector}")
 
 
 if __name__ == "__main__":

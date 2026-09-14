@@ -17,6 +17,8 @@ from multiprocessing import get_context
 from pathlib import Path
 from typing import Any
 
+from analysis.threadenv import THREAD_ENV, set_thread_env
+
 __all__ = [
     "CPU_TOPOLOGY_ROOT",
     "THREAD_ENV",
@@ -31,8 +33,6 @@ __all__ = [
 #: Linux CPU topology, where a core's hyperthread siblings are listed.
 CPU_TOPOLOGY_ROOT = Path("/sys/devices/system/cpu")
 
-#: Environment variables that pin every numerical library to one thread.
-THREAD_ENV = ("EXTRA_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS")
 
 #: Packages whose versions are recorded in provenance.
 RECORDED_PACKAGES = (
@@ -74,15 +74,6 @@ def file_sha256(path: str | Path) -> str:
         for block in iter(lambda: handle.read(1 << 20), b""):
             digest.update(block)
     return digest.hexdigest()
-
-
-def set_thread_env() -> None:
-    """Pin every numerical library to one thread, before the pool is built.
-
-    Spawned children inherit the environment at process start.
-    """
-    for name in THREAD_ENV:
-        os.environ[name] = "1"
 
 
 def default_pool(n_workers: int, **kwargs: Any) -> ProcessPoolExecutor:

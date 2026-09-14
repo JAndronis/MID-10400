@@ -32,31 +32,20 @@ To check an output file that already exists, without reintegrating:
 
 from __future__ import annotations
 
-import os
-
 # Before numpy, pyFAI or EXtra-data are imported. This process does the dense
 # reference itself, and a multi-threaded BLAS here would make the stage timings
-# in gate C describe a machine nobody will run the real pass on (CLAUDE.md:
-# any process reading AGIPD data pins these to 1).
-_THREAD_ENV = (
-    "EXTRA_NUM_THREADS",
-    "OMP_NUM_THREADS",
-    "MKL_NUM_THREADS",
-    "OPENBLAS_NUM_THREADS",
-)
-for _name in _THREAD_ENV:
-    os.environ[_name] = "1"
+# in gate C describe a machine nobody will run the real pass on.
+from _common import report_header, write_report  # noqa: E402
+
+from analysis.threadenv import set_thread_env
+
+set_thread_env()
 
 import argparse  # noqa: E402
 import json  # noqa: E402
 import logging  # noqa: E402
-import platform  # noqa: E402
-import socket  # noqa: E402
-import subprocess  # noqa: E402
-import sys  # noqa: E402
 import time  # noqa: E402
 from dataclasses import replace  # noqa: E402
-from datetime import UTC, datetime  # noqa: E402
 from pathlib import Path  # noqa: E402
 from typing import Any  # noqa: E402
 
@@ -501,17 +490,6 @@ def stage_ledger(output: Path, max_listed: int = 20) -> dict[str, Any]:
 
 
 # ── driver ────────────────────────────────────────────────────────────────────
-def _git_commit() -> str:
-    try:
-        return subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            capture_output=True,
-            text=True,
-            check=True,
-            cwd=Path(__file__).resolve().parent,
-        ).stdout.strip()
-    except Exception as error:  # noqa: BLE001 - recorded, never fatal
-        return f"unavailable: {error!r}"
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -562,19 +540,13 @@ def main(argv: list[str] | None = None) -> int:
         cfg = replace(cfg, pixel_mask_file=args.pixel_mask_file)
     output = Path(args.output) if args.output else cfg.output_file
 
-    report: dict[str, Any] = {
-        "run": args.run,
-        "proposal": args.proposal,
-        "when": datetime.now(UTC).isoformat(),
-        "host": socket.gethostname(),
-        "platform": platform.platform(),
-        "python": sys.version.split()[0],
-        "git_commit": _git_commit(),
-        "thread_env": {name: os.environ[name] for name in _THREAD_ENV},
-        "config_hash": cfg.config_hash(),
-        "output": str(output),
-        "gates": {},
-    }
+    report: dict[str, Any] = report_header(
+        run=args.run,
+        proposal=args.proposal,
+        config_hash=cfg.config_hash(),
+        output=str(output),
+        gates={},
+    )
 
     measured_wall_s: float | None = None
     if args.skip_run:
@@ -631,13 +603,9 @@ def main(argv: list[str] | None = None) -> int:
     return 0 if report["passed"] else 1
 
 
-def _write(report: dict[str, Any], args: argparse.Namespace) -> None:
-    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    path = args.json or Path(__file__).with_name(
-        f"p4_acceptance_r{args.run:04d}_{stamp}.json"
-    )
-    path.write_text(json.dumps(report, indent=2, default=str))
-    log.info("wrote %s", path)
+def _write(report: dict[str, Any], args: Any) -> None:
+    """Write the report beside this script, stamped with the time."""
+    write_report(report, args.json, f"p4_acceptance_r{args.run:04d}")
 
 
 if __name__ == "__main__":
