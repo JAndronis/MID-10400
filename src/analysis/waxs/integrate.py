@@ -11,14 +11,14 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from analysis.common.status import DataCheckFailed, FrameStatus
+from analysis.common.status import DataCheckFailed
 from analysis.waxs.config import MODULE_SHAPE
 from analysis.waxs.operator import WaxsOperator
 
 __all__ = [
     "ErrorModel",
     "FrameResult",
-    "frame_data_status",
+    "extreme_pixels",
     "frame_maxima",
     "integrate_frame",
 ]
@@ -93,9 +93,11 @@ class FrameResult:
     #: Largest value over the pixels that reach the integrator (the union mask).
     max_kev: float
     #: Largest value over the pixels the *static* mask keeps — the set D6 tests.
-    #: Stored on every row so that the pair explains a ``DATA_CHECK_FAILED``
-    #: one: see :func:`frame_maxima`.
+    #: With an extreme pixel excluded this is the value that was excluded, which
+    #: is what makes the pair readable: see :func:`frame_maxima`.
     max_kev_static: float
+    #: Kept pixels dropped for being non-finite or outside ``max_abs_kev``.
+    n_extreme_pixels: int
 
 
 def frame_maxima(
@@ -124,32 +126,42 @@ def frame_maxima(
     )
 
 
-def frame_data_status(
-    x: np.ndarray, static_bad: np.ndarray, max_abs_kev: float
-) -> FrameStatus:
-    """Classify a frame's values as ``OK`` or ``DATA_CHECK_FAILED`` (§3 D6).
+def extreme_pixels(
+    x: np.ndarray, excluded: np.ndarray, max_abs_kev: float
+) -> np.ndarray:
+    """Pixels carrying a value the pass will not integrate (§3 D6′).
 
-    Two checks, both on the pixels the static mask keeps — a wild value under
-    the static mask never reaches the integrator, so it is not this frame's
-    problem:
+    Flat bool over the whole frame, True where a pixel that ``excluded`` does
+    *not* already remove is non-finite or outside ``±max_abs_kev``. Pass the
+    union ``bad``, not the static mask alone: a wild value the two masks already
+    drop never reaches the integrator, so it is not this check's doing and must
+    not be counted as such.
 
     * **Non-finite.** The dynamic mask is carried as NaN, so a NaN already in
-      the data would be indistinguishable from a masked pixel.
-    * **Out of range.** jf2 carries 15 pixels reaching ±1.8e5 keV — some 20 000
-      photons where the lit-cell mean is 5.3 — in *every* memory cell, and
-      ``data.mask`` flags none of them. The ``.edf`` happens to cover all of
-      them, but relying on that silently is the failure mode the ledger exists
-      to prevent.
+      the data would be indistinguishable from that sentinel.
+    * **Out of range.** On r0480/jf1 these are NaCl (200) and (111) Bragg spots
+      from the evaporating droplet — 97 % within 1 % of q = 22.33 nm⁻¹ — that
+      land on the far side of a 43× empty band in the value distribution, piled
+      against a hard edge at 8234 keV. The trigger is the sample; the numbers
+      are not intensities.
+
+    **These pixels are excluded, not grounds for discarding the frame.** v1
+    failed the whole frame, which on r0480 threw away 473 frames of 126 230
+    good pixels each over a median of 3 bad ones — and did it in step with
+    crystallisation, since salt rings appear as the droplet shrinks. Excluding
+    them is the same act the two masks already perform, and
+    ``FrameResult.n_extreme_pixels`` records how often it happened.
+
+    The cost is real and falls on one place: in an affected frame the ring's
+    own q bin loses its brightest pixels and reads low. ``n_extreme_pixels``
+    is what a reader filters on before treating those bins quantitatively.
 
     The AGIPD check — integer dtype, no negative counts — is wrong here in both
     halves, so this replaces it rather than adding to it.
     """
-    kept = x.reshape(-1)[~static_bad]
-    if not np.isfinite(kept).all():
-        return FrameStatus.DATA_CHECK_FAILED
-    if kept.size and np.abs(kept).max() > max_abs_kev:
-        return FrameStatus.DATA_CHECK_FAILED
-    return FrameStatus.OK
+    flat = np.asarray(x).reshape(-1)
+    finite = np.isfinite(flat)
+    return (~excluded) & (~finite | (np.abs(flat) > max_abs_kev))
 
 
 def integrate_frame(
@@ -177,9 +189,15 @@ def integrate_frame(
     NaN-ing it again is a no-op; it is included so that ``n_bad_pixels`` counts
     the union a reader would expect.
 
-    :raises DataCheckFailed: the frame is non-finite or out of range on a pixel
-        the static mask keeps. Raised rather than returned: there is no
-        fallback, so a failing frame must never yield arrays.
+    Pixels failing :func:`extreme_pixels` join ``bad`` — locally, so the
+    caller's array is untouched — and are counted into
+    ``FrameResult.n_extreme_pixels``. The frame is still integrated: see that
+    function for why discarding it is the wrong trade.
+
+    :raises DataCheckFailed: *every* pixel is excluded, so there is nothing to
+        integrate. Raised rather than returned, because a frame of zeros placed
+        as if it had been measured is the one outcome no ledger column would
+        make visible.
     """
     flat = np.asarray(x).reshape(-1)
     if flat.size != op.static_bad.size:
@@ -188,14 +206,16 @@ def integrate_frame(
         )
     if bad.shape != op.static_bad.shape:
         raise ValueError(f"bad has shape {bad.shape}, expected {op.static_bad.shape}")
-    if frame_data_status(flat, op.static_bad, max_abs_kev) is not FrameStatus.OK:
-        kept = flat[~op.static_bad]
-        finite = kept[np.isfinite(kept)]
+
+    extreme = extreme_pixels(flat, bad, max_abs_kev)
+    n_extreme = int(extreme.sum())
+    if n_extreme:
+        bad = bad | extreme
+    if bad.all():
         raise DataCheckFailed(
-            "frame fails the value check on pixels the static mask keeps: "
-            f"{int((~np.isfinite(kept)).sum())} non-finite, max |x| "
-            f"{float(np.abs(finite).max(initial=0.0)):.1f} keV against a "
-            f"bound of {max_abs_kev} keV"
+            f"every one of the {bad.size} pixels is excluded: {n_extreme} of them "
+            f"for being non-finite or outside ±{max_abs_kev} keV, the rest by the "
+            "static mask and data.mask. There is nothing left to integrate"
         )
 
     signal = flat.astype(np.float32, copy=True)
@@ -227,4 +247,5 @@ def integrate_frame(
         n_negative_variance_bins=int((occupied & (sum_variance < 0)).sum()),
         max_kev=max_kev,
         max_kev_static=max_kev_static,
+        n_extreme_pixels=n_extreme,
     )

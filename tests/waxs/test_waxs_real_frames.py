@@ -196,18 +196,18 @@ def test_a_real_frame_integrates_to_something_sensible(real):
 
 
 def test_the_value_check_catches_extremes_the_static_mask_would_have_hidden(real):
-    """§3 D6, restated: the check is insurance, not a fix for an unflagged set.
+    """§3 D6′, restated: the check is insurance, and it excludes rather than fails.
 
     This file once claimed jf2 carried extreme pixels ``data.mask`` missed. It
     does not: that came from comparing jf2's data against jf1's mask (see the
     module docstring). On the cluster every extreme pixel on both detectors is
     flagged. What survives is the weaker, still-worth-having statement: strip
     the ``.edf`` away and the value check is what stops a 1.8e5 keV pixel
-    reaching a q bin.
+    reaching a q bin — now by dropping the pixel, not the frame, because on
+    r0480 dropping frames cost 473 of them for a median of 3 pixels each.
     """
     cfg, op, ai, data, mask, detector = real
-    from analysis.common.status import FrameStatus
-    from analysis.waxs.integrate import frame_data_status
+    from analysis.waxs.integrate import extreme_pixels
 
     extreme = np.abs(data) > cfg.max_abs_kev
     assert extreme.any(), "the export should carry some extreme pixels"
@@ -216,10 +216,10 @@ def test_the_value_check_catches_extremes_the_static_mask_would_have_hidden(real
 
     naked = dataclasses.replace(cfg, static_mask_file=None)
     naked_op, _ = build_operator(naked, poni_file=cfg.poni_file)
-    failing = [
-        cell
+    caught = [
+        int(extreme_pixels(data[cell], naked_op.static_bad, cfg.max_abs_kev).sum())
         for cell in range(16)
-        if frame_data_status(data[cell], naked_op.static_bad, cfg.max_abs_kev)
-        is FrameStatus.DATA_CHECK_FAILED
     ]
-    assert failing, "without the .edf the value check must fire"
+    assert any(caught), "without the .edf the value check must fire"
+    # And it stays a handful of pixels, never the whole frame.
+    assert max(caught) < 0.01 * naked_op.static_bad.size

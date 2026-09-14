@@ -13,10 +13,10 @@ import pytest
 from waxs_mockrun import MODULE_SHAPE, PHOTON_KEV, READ_NOISE_KEV  # noqa: E402
 
 from analysis.common.masks import frame_bad  # noqa: E402
-from analysis.common.status import DataCheckFailed, FrameStatus  # noqa: E402
+from analysis.common.status import DataCheckFailed  # noqa: E402
 from analysis.waxs.integrate import (  # noqa: E402
     ErrorModel,
-    frame_data_status,
+    extreme_pixels,
     frame_maxima,
     integrate_frame,
 )
@@ -160,28 +160,78 @@ def test_the_selftest_catches_a_broken_nan_path(operator, model, monkeypatch):
 
 
 # ── the data check ───────────────────────────────────────────────────────────
-def test_a_non_finite_kept_pixel_fails_the_check(operator, model):
+def test_a_non_finite_kept_pixel_is_excluded_not_fatal(operator, model):
     """The dynamic mask is a NaN, so a NaN in the data is indistinguishable."""
     op, ai = operator
     values, _, bad = make_frame(op)
-    values.reshape(-1)[np.flatnonzero(~op.static_bad)[0]] = np.nan
-    assert (
-        frame_data_status(values, op.static_bad, 1e3) is FrameStatus.DATA_CHECK_FAILED
-    )
-    with pytest.raises(DataCheckFailed, match="non-finite"):
-        integrate_frame(ai, op, model, values, bad, max_abs_kev=1e3)
+    pixel = np.flatnonzero(~bad)[0]
+    values.reshape(-1)[pixel] = np.nan
+    assert extreme_pixels(values, bad, 1e3)[pixel]
+
+    result = integrate_frame(ai, op, model, values, bad, max_abs_kev=1e3)
+    assert result.n_extreme_pixels == 1
+    assert np.isfinite(result.signal).all()
 
 
-def test_an_extreme_kept_pixel_fails_the_check(operator, model):
-    """§3 D6: jf2 carries unflagged pixels at 1.8e5 keV in every cell."""
+def test_an_extreme_kept_pixel_is_excluded_not_fatal(operator, model):
+    """§3 D6′: r0480 lost 473 frames of 126 230 good pixels over a median of 3.
+
+    They were NaCl Bragg spots from the evaporating droplet, so the loss tracked
+    crystallisation — the frames the run exists to record.
+    """
     op, ai = operator
     values, _, bad = make_frame(op)
-    values.reshape(-1)[np.flatnonzero(~op.static_bad)[0]] = 1.8e5
-    assert (
-        frame_data_status(values, op.static_bad, 1e3) is FrameStatus.DATA_CHECK_FAILED
-    )
-    with pytest.raises(DataCheckFailed, match="max"):
-        integrate_frame(ai, op, model, values, bad, max_abs_kev=1e3)
+    pixel = np.flatnonzero(~bad)[0]
+    values.reshape(-1)[pixel] = 1.8e5
+
+    result = integrate_frame(ai, op, model, values, bad, max_abs_kev=1e3)
+    assert result.n_extreme_pixels == 1
+    # The value is gone from the sums, and the frame is still an integration.
+    assert result.max_kev < 1e3
+    assert (result.normalization > 0).any()
+    assert result.n_bad_pixels == int(bad.sum()) + 1
+
+
+def test_excluding_an_extreme_pixel_equals_masking_it_by_hand(operator, model):
+    """The exclusion is the same act the two masks already perform.
+
+    Not "close to": the pixel joins ``bad`` and takes the NaN path, so the sums
+    must be bit-identical to passing it in ``bad`` in the first place.
+    """
+    op, ai = operator
+    values, _, bad = make_frame(op)
+    pixel = np.flatnonzero(~bad)[0]
+    values.reshape(-1)[pixel] = 1.8e5
+
+    automatic = integrate_frame(ai, op, model, values, bad, max_abs_kev=1e3)
+    by_hand_mask = bad.copy()
+    by_hand_mask[pixel] = True
+    clean = values.copy()
+    clean.reshape(-1)[pixel] = 0.0
+    by_hand = integrate_frame(ai, op, model, clean, by_hand_mask, max_abs_kev=1e3)
+
+    for name in ("signal", "normalization", "variance"):
+        assert np.array_equal(getattr(automatic, name), getattr(by_hand, name))
+
+
+def test_the_callers_mask_is_not_modified(operator, model):
+    """``bad`` belongs to the worker's loop and is reused; extending it in place
+    would leak one frame's extreme pixels into the next."""
+    op, ai = operator
+    values, _, bad = make_frame(op)
+    values.reshape(-1)[np.flatnonzero(~bad)[0]] = 1.8e5
+    before = bad.copy()
+    integrate_frame(ai, op, model, values, bad, max_abs_kev=1e3)
+    assert np.array_equal(bad, before)
+
+
+def test_a_frame_with_nothing_left_to_integrate_still_fails(operator, model):
+    """The one case that must not become a row of zeros placed as measured."""
+    op, ai = operator
+    values, _, _ = make_frame(op)
+    everything = np.ones_like(op.static_bad)
+    with pytest.raises(DataCheckFailed, match="nothing left to integrate"):
+        integrate_frame(ai, op, model, values, everything, max_abs_kev=1e3)
 
 
 def test_an_extreme_pixel_under_the_static_mask_is_not_this_frames_problem(
@@ -190,8 +240,11 @@ def test_an_extreme_pixel_under_the_static_mask_is_not_this_frames_problem(
     op, ai = operator
     values, _, bad = make_frame(op)
     values.reshape(-1)[np.flatnonzero(op.static_bad)[0]] = 1.8e5
-    assert frame_data_status(values, op.static_bad, 1e3) is FrameStatus.OK
-    integrate_frame(ai, op, model, values, bad, max_abs_kev=1e3)
+    assert not extreme_pixels(values, bad, 1e3).any()
+    assert (
+        integrate_frame(ai, op, model, values, bad, max_abs_kev=1e3).n_extreme_pixels
+        == 0
+    )
 
 
 def test_the_two_maxima_separate_a_masked_wild_pixel_from_a_live_one(operator):
@@ -210,10 +263,8 @@ def test_the_two_maxima_separate_a_masked_wild_pixel_from_a_live_one(operator):
     reaching, checked = frame_maxima(values, bad, op.static_bad)
     assert checked == pytest.approx(1.8e5)
     assert reaching < 1e3
-    # ... and the frame still fails, which is what makes the pair worth storing.
-    assert (
-        frame_data_status(values, op.static_bad, 1e3) is FrameStatus.DATA_CHECK_FAILED
-    )
+    # ... and it is not an extreme pixel at all, because ``bad`` already has it.
+    assert not extreme_pixels(values, bad, 1e3)[dynamic]
 
 
 def test_a_live_wild_pixel_shows_in_both_maxima(operator):
@@ -240,6 +291,7 @@ def test_an_integrated_frame_stores_both_maxima(operator, model):
     values, _, bad = make_frame(op)
     result = integrate_frame(ai, op, model, values, bad, max_abs_kev=1e3)
     flat = values.reshape(-1)
+    assert result.n_extreme_pixels == 0
     assert result.max_kev == pytest.approx(flat[~bad].max())
     assert result.max_kev_static == pytest.approx(flat[~op.static_bad].max())
     # The static set is the larger one, so its maximum can only be higher.

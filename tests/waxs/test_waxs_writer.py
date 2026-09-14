@@ -86,37 +86,56 @@ def test_a_repeated_memory_cell_is_a_label_mismatch(
         worker._STATE = None
 
 
-def test_a_frame_failing_the_data_check_is_recorded_not_raised(
+def test_an_extreme_pixel_costs_the_pixel_and_not_the_frame(
     cfg, mock_run_factory, operator, model
 ):
+    """§3 D6′, the r0480 fix: v1 failed the whole frame over one pixel.
+
+    On r0480/jf1 that was 473 frames of 126 230 good pixels each, lost over a
+    median of 3 — and lost in step with crystallisation, because the pixels were
+    NaCl Bragg spots from the evaporating droplet.
+    """
     from analysis.waxs.plan import build_plan, open_detector
 
-    run, dc = mock_run_factory(extreme_train=10002)
+    _, dc = mock_run_factory(extreme_train=10002)
     op, ai = operator
     det = open_detector(cfg, dc)
     plan = build_plan(cfg, LIT_CELLS, dc=dc, control_dc=dc, det=det)
     worker.init_from_detector(cfg, op, ai, model, LIT_CELLS, det)
     try:
-        failed = 0
+        rows = []
         for block in plan.blocks:
             result = worker.process_block(block)
-            failed += int((result.status == FrameStatus.DATA_CHECK_FAILED).sum())
-        # The extreme pixel sits on a kept pixel of one cell of one train.
-        assert failed == 1
+            assert (result.status == FrameStatus.OK).all()
+            rows.extend(
+                zip(
+                    result.train_id.tolist(),
+                    result.n_extreme_pixels.tolist(),
+                    result.max_kev_static.tolist(),
+                    strict=True,
+                )
+            )
     finally:
         worker._STATE = None
 
+    affected = [row for row in rows if row[1]]
+    assert len(affected) == 1, "one kept pixel of one cell of one train"
+    train, n_extreme, checked = affected[0]
+    assert train == 10002
+    assert n_extreme == 1
+    assert checked == pytest.approx(1.8e5)
 
-def _failed_run(cfg, mock_run_factory, operator, model, tmp_path, **mock):
-    """A written file whose one extreme pixel fails exactly one frame."""
+
+def _written_with_an_extreme_pixel(cfg, mock_run_factory, operator, model, tmp_path):
+    """A finished file whose one extreme pixel was excluded, plus its summary."""
     from analysis.waxs.plan import build_plan, open_detector
 
-    _, dc = mock_run_factory(extreme_train=10002, **mock)
+    _, dc = mock_run_factory(extreme_train=10002)
     op, ai = operator
     det = open_detector(cfg, dc)
     plan = build_plan(cfg, LIT_CELLS, dc=dc, control_dc=dc, det=det)
     worker.init_from_detector(cfg, op, ai, model, LIT_CELLS, det)
-    path = tmp_path / "failed.h5"
+    path = tmp_path / "extreme.h5"
     try:
         with JungfrauWaxsWriter.open_or_create(cfg, plan, path) as out:
             out.store_operator(op)
@@ -139,52 +158,76 @@ def _failed_run(cfg, mock_run_factory, operator, model, tmp_path, **mock):
     return path, summary
 
 
-def test_a_failed_row_carries_the_value_that_failed_it(
+def test_the_file_says_which_frame_lost_pixels_and_what_they_held(
     cfg, mock_run_factory, operator, model, tmp_path
 ):
-    """r0480: the file said 473 frames failed and nothing about why.
+    """The row is integrated, and still carries the evidence for the exclusion.
 
-    The row is not integrated, so its sums stay zero — but the two maxima are
-    the evidence, and without them the only way to learn what tripped the check
-    is to re-read proc.
+    ``max_kev`` is what survived into the sums and ``max_kev_static`` what was
+    taken out, so the pair reads as "this bin is missing a 1.8e5 keV pixel"
+    without anyone going back to proc.
     """
-    path, summary = _failed_run(cfg, mock_run_factory, operator, model, tmp_path)
-    with h5py.File(path) as handle:
-        frames = handle["frames"]
-        failed = frames["status"][:] == FrameStatus.DATA_CHECK_FAILED
-        assert failed.sum() == 1
-        assert frames["max_kev_static"][:][failed][0] == pytest.approx(1.8e5)
-        assert frames["n_bad_pixels"][:][failed][0] > 0
-        assert frames["signal"][:][failed].max() == 0  # nothing was integrated
-        # The labels survive, which is what lets the failure be located.
-        assert frames["trainId"][:][failed][0] == 10002
-
-    assert summary["n"] == 1
-    assert summary["worst_max_kev_static"] == pytest.approx(1.8e5)
-    assert summary["n_clean_under_the_union_mask"] == 0
-
-
-def test_the_summary_separates_a_wild_pixel_the_masks_already_remove(
-    cfg, mock_run_factory, operator, model, tmp_path
-):
-    """The r0480 case: D6 fires on a value that cannot reach the integrator.
-
-    ``n_clean_under_the_union_mask`` is the count the fix turns on, so it has to
-    be right for the case that produced it and not only for the easy one.
-    """
-    path, summary = _failed_run(
-        cfg, mock_run_factory, operator, model, tmp_path, extreme_flagged=True
+    path, _ = _written_with_an_extreme_pixel(
+        cfg, mock_run_factory, operator, model, tmp_path
     )
     with h5py.File(path) as handle:
         frames = handle["frames"]
-        failed = frames["status"][:] == FrameStatus.DATA_CHECK_FAILED
-        assert failed.sum() == 1
-        assert frames["max_kev_static"][:][failed][0] == pytest.approx(1.8e5)
-        assert frames["max_kev"][:][failed][0] < 1e3
+        assert (frames["status"][:] == FrameStatus.OK).all()
+        affected = frames["n_extreme_pixels"][:] > 0
+        assert affected.sum() == 1
+        assert frames["trainId"][:][affected][0] == 10002
+        assert frames["max_kev_static"][:][affected][0] == pytest.approx(1.8e5)
+        assert frames["max_kev"][:][affected][0] < 1e3
+        # Integrated, not zeroed: losing a pixel does not lose the frame.
+        assert frames["normalization"][:][affected].sum() > 0
 
-    assert summary["n"] == 1
-    assert summary["n_clean_under_the_union_mask"] == 1
-    assert summary["worst_max_kev_reaching"] < 1e3
+
+def test_the_summary_counts_what_the_check_cost_the_run(
+    cfg, mock_run_factory, operator, model, tmp_path
+):
+    _, summary = _written_with_an_extreme_pixel(
+        cfg, mock_run_factory, operator, model, tmp_path
+    )
+    assert summary["n_frames_with_excluded_pixels"] == 1
+    assert summary["n_pixels_excluded"] == 1
+    assert summary["worst_frame_n_pixels"] == 1
+    assert summary["worst_excluded_kev"] == pytest.approx(1.8e5)
+    assert summary["n_frames_refused"] == 0
+
+
+def test_a_clean_run_carries_no_data_check_attribute_at_all(worker_ready, tmp_path):
+    """Not an attribute full of zeros: a run that lost nothing says nothing."""
+    path = written(worker_ready, tmp_path)
+    with JungfrauWaxsWriter.open_or_create(
+        dataclasses.replace(worker_ready.cfg, overwrite=False),
+        worker_ready.plan,
+        path,
+    ) as out:
+        assert out.data_check_summary() == {}
+
+
+def test_a_wild_pixel_data_mask_already_removes_is_not_counted(
+    cfg, mock_run_factory, operator, model
+):
+    """``n_extreme_pixels`` means "this check removed it", not "it was wild".
+
+    A value ``data.mask`` already drops never reached the integrator, so
+    counting it would overstate what D6 cost.
+    """
+    from analysis.waxs.plan import build_plan, open_detector
+
+    _, dc = mock_run_factory(extreme_train=10002, extreme_flagged=True)
+    op, ai = operator
+    det = open_detector(cfg, dc)
+    plan = build_plan(cfg, LIT_CELLS, dc=dc, control_dc=dc, det=det)
+    worker.init_from_detector(cfg, op, ai, model, LIT_CELLS, det)
+    try:
+        for block in plan.blocks:
+            result = worker.process_block(block)
+            assert (result.status == FrameStatus.OK).all()
+            assert (result.n_extreme_pixels == 0).all()
+    finally:
+        worker._STATE = None
 
 
 def test_a_file_missing_a_column_is_refused_rather_than_resumed(worker_ready, tmp_path):
@@ -195,15 +238,15 @@ def test_a_file_missing_a_column_is_refused_rather_than_resumed(worker_ready, tm
     """
     path = written(worker_ready, tmp_path)
     with h5py.File(path, "r+") as handle:
-        del handle["frames/max_kev_static"]
+        del handle["frames/n_extreme_pixels"]
 
-    with pytest.raises(SchemaMismatch, match="max_kev_static"):
+    with pytest.raises(SchemaMismatch, match="n_extreme_pixels"):
         JungfrauWaxsWriter.open_or_create(worker_ready.cfg, worker_ready.plan, path)
 
     # overwrite=True is the documented way out, and it must still work.
     replaced = dataclasses.replace(worker_ready.cfg, overwrite=True)
     with JungfrauWaxsWriter.open_or_create(replaced, worker_ready.plan, path) as out:
-        assert "max_kev_static" in out._f["frames"]
+        assert "n_extreme_pixels" in out._f["frames"]
 
 
 def test_the_worker_refuses_to_run_uninitialised(pipeline):
@@ -226,6 +269,7 @@ def test_the_schema_is_the_jungfrau_one(worker_ready, tmp_path):
             "n_negative_variance_bins",
             "max_kev",
             "max_kev_static",
+            "n_extreme_pixels",
             "signal",
             "normalization",
             "variance",

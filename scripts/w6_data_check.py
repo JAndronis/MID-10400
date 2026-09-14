@@ -29,11 +29,22 @@ three different things:
   deleting the frames with the strongest crystalline scattering, and nothing
   about the run would say so.
 
+* **(d)** — added after r0480, which was none of the three. The failing values
+  form a *separate population*: passing frames stopped at 131 keV, failing ones
+  started at 5629 and stopped at 8234, with a 43x empty band between them and
+  the bound inside it. 97 % of the extreme pixels sat within 1 % of q =
+  22.33 nm⁻¹ and the rest near 19.3 — NaCl (200) and (111) — and the failure
+  rate rose through the run as the droplet evaporated. So the *trigger* is the
+  sample and the bound is well placed, but an empty band is what a response
+  discontinuity makes, not what an intensity distribution makes.
+
 The decisive number is **how many failing frames carry an extreme or non-finite
-value on a pixel that survives the union mask**. Zero means (a) outright. The
-control sample answers (c) from the other side: if the OK frames' own maxima
-press up against the bound, it is cutting through the signal distribution rather
-than sitting in a gap.
+value on a pixel that survives the union mask**. Zero means (a) outright. Then
+the *frame-level* separation decides between (b), (c) and (d): a bound with a
+wide gap on both sides is well placed however large the values above it are, and
+a bound the passing frames themselves reach is cutting the signal whatever lies
+further up. Both halves of that are needed — keying (c) on the magnitude alone
+mislabelled r0480 while the control sample sitting beside it said otherwise.
 
     python scripts/w6_data_check.py --run 480 --detector jf1
 
@@ -91,6 +102,16 @@ ARTIFACT_RATIO = 50.0
 #: Below this multiple of the bound an unflagged extreme value is in the range
 #: real scattering can reach — 10× the bound is ~1100 photons.
 SIGNAL_RATIO = 10.0
+
+#: Two populations this many times apart, with the bound between them, are
+#: separate populations rather than one distribution cut in half.
+MIN_SEPARATION = 5.0
+
+#: And the bound has to clear the *passing* frames by this much as well. A
+#: wide gap below the failing population is not enough on its own: a bound
+#: sitting just above the brightest legitimate frame is cutting the signal
+#: distribution whatever lies further up.
+MIN_HEADROOM = 3.0
 
 #: Extreme pixels listed per frame in the JSON. The aggregate counts every one;
 #: this only caps the per-frame detail so the file stays readable.
@@ -279,6 +300,7 @@ def _examine_frame(
         "_extreme_kept": extreme_kept,
         "_extreme_reaching": extreme_reaching,
         "_values": flat[extreme_kept],
+        "_q": q_per_pixel[extreme_kept],
     }
 
 
@@ -307,6 +329,7 @@ def stage_frames(
     recurrence: Counter[int] = Counter()
     values: list[float] = []
     reaching_values: list[float] = []
+    extreme_q: list[float] = []
     n_examined = 0
     started = time.perf_counter()
 
@@ -340,6 +363,7 @@ def stage_frames(
                 ).tolist()
             )
             values.extend(np.abs(frame.pop("_values")).tolist())
+            extreme_q.extend(frame.pop("_q").tolist())
             examined.append({"trainId": train, "cellId": cell, **frame})
             n_examined += 1
         if n_examined % 50 == 0:
@@ -354,6 +378,11 @@ def stage_frames(
     ]
     magnitudes = np.asarray(values, dtype=np.float64)
     reaching = np.asarray(reaching_values, dtype=np.float64)
+    q_values = np.asarray(extreme_q, dtype=np.float64)
+    frame_maxima = np.asarray(
+        [f["max_abs_reaching_kev"] for f in examined if "error" not in f],
+        dtype=np.float64,
+    )
 
     return {
         "n_failing_frames_examined": n_examined,
@@ -376,7 +405,38 @@ def stage_frames(
         "extreme_reaching_kev_percentiles": _percentiles(reaching),
         "extreme_kev_max": float(magnitudes.max(initial=0.0)),
         "extreme_reaching_kev_max": float(reaching.max(initial=0.0)),
+        # Frame-level rather than pixel-level: the *faintest* failing frame is
+        # what the passing frames have to be compared against, because it is the
+        # nearest the two populations ever come to each other.
+        "faintest_failing_frame_kev": float(frame_maxima.min(initial=0.0)),
+        "frame_max_reaching_kev_percentiles": _percentiles(frame_maxima),
+        # A population piled up against a sharp upper edge is a response limit,
+        # not an intensity distribution: real scattering has no hard maximum.
+        "fraction_within_10pc_of_the_max": (
+            float((magnitudes >= 0.9 * magnitudes.max()).mean())
+            if magnitudes.size
+            else None
+        ),
+        # Extreme pixels confined to a narrow q band sit on a ring, which says
+        # the trigger is the sample rather than the detector.
+        "extreme_q_nm_percentiles": _percentiles(q_values),
+        "extreme_q_nm_concentration": _q_concentration(q_values),
         "frames": examined,
+    }
+
+
+def _q_concentration(q_values: np.ndarray) -> dict[str, Any] | None:
+    """How tightly the extreme pixels cluster in q, and where."""
+    if q_values.size == 0:
+        return None
+    median = float(np.median(q_values))
+    within = float((np.abs(q_values - median) <= 0.01 * median).mean())
+    return {
+        "median_q_nm": median,
+        "fraction_within_1pc_of_the_median": within,
+        "n_distinct_1pc_bands": int(
+            np.unique(np.round(q_values / (0.02 * median)).astype(int)).size
+        ),
     }
 
 
@@ -453,7 +513,15 @@ def _percentiles(values: np.ndarray) -> dict[str, float] | None:
 
 
 def verdict(report: dict[str, Any]) -> dict[str, Any]:
-    """Name the cause, or say why the evidence does not settle it."""
+    """Name the cause, or say why the evidence does not settle it.
+
+    The ordering matters. An earlier version keyed the "bound is too tight"
+    branch on the magnitude alone — ``reaching_max <= 10x the bound`` — and so
+    called r0480 that, while its own control sample was saying the passing
+    frames stop at 131 keV, 7.6x *below* the bound. A bound is only cutting the
+    signal distribution if the signal reaches it; that now has to be shown
+    before the branch is taken.
+    """
     cfg_stage = report["configuration"]
     frames = report["frames"]
     control = report.get("control", {})
@@ -468,9 +536,8 @@ def verdict(report: dict[str, Any]) -> dict[str, Any]:
         frame.get("n_nonfinite_reaching", 0) for frame in frames["frames"]
     )
     reaching_max = frames["extreme_reaching_kev_max"]
-    control_p100 = (control.get("max_abs_reaching_kev_percentiles") or {}).get(
-        "p100", 0
-    )
+    faintest = frames["faintest_failing_frame_kev"]
+    control_max = (control.get("max_abs_reaching_kev_percentiles") or {}).get("p100", 0)
 
     if reaching_pixels == 0 and nonfinite_reaching == 0:
         return {
@@ -482,9 +549,36 @@ def verdict(report: dict[str, Any]) -> dict[str, Any]:
                 "frames over pixels that data.mask already removes"
             ),
             "implies": (
-                "Phase 2 option (a): fail a frame only on a pixel the union mask "
-                "keeps, and count wild values under a mask as a diagnostic"
+                "fail a frame only on a pixel the union mask keeps, and count "
+                "wild values under a mask as a diagnostic"
             ),
+        }
+
+    # How far apart are the two populations, and is the bound between them?
+    separation = faintest / control_max if control_max else float("inf")
+    headroom = bound / control_max if control_max else float("inf")
+    between = bool(control_max < bound < faintest)
+    evidence = {
+        "brightest_passing_frame_kev": control_max,
+        "faintest_failing_frame_kev": faintest,
+        "separation": separation,
+        "headroom_over_the_passing_frames": headroom,
+        "bound_lies_between_them": between,
+        "fraction_within_10pc_of_the_max": frames["fraction_within_10pc_of_the_max"],
+        "q_concentration": frames["extreme_q_nm_concentration"],
+    }
+
+    if not between or separation < MIN_SEPARATION or headroom < MIN_HEADROOM:
+        return {
+            "cause": "c",
+            "why": (
+                f"the passing frames themselves reach {control_max:.3g} keV against "
+                f"a bound of {bound:.3g} ({headroom:.1f}x headroom, {separation:.1f}x "
+                "separation), so the bound is cutting the signal distribution "
+                "rather than sitting in a gap"
+            ),
+            "implies": "re-derive max_abs_kev from the measured gap, traceably",
+            "evidence": evidence,
         }
 
     if reaching_max >= ARTIFACT_RATIO * bound:
@@ -495,33 +589,25 @@ def verdict(report: dict[str, Any]) -> dict[str, Any]:
                 f"{reaching_max:.3g} keV — {reaching_max / bound:.0f}x the bound, "
                 "artifact scale, and neither mask removes them"
             ),
-            "implies": "Phase 2 option (b): the .edf has a genuine gap; extend it",
-        }
-
-    if reaching_max <= SIGNAL_RATIO * bound:
-        return {
-            "cause": "c",
-            "why": (
-                f"the extreme values reaching the integrator top out at "
-                f"{reaching_max:.3g} keV "
-                f"({reaching_max / cfg_stage['photon_energy_kev']:.0f} photons), "
-                "within reach of real scattering, and the passing frames reach "
-                f"{control_p100:.3g} keV — the bound sits inside the signal "
-                "distribution, not in a gap"
-            ),
-            "implies": (
-                "Phase 2 option (c): re-derive max_abs_kev from the measured gap; "
-                "the current 1000 keV has no traceable source"
-            ),
+            "implies": "the .edf has a genuine gap; extend it",
+            "evidence": evidence,
         }
 
     return {
-        "cause": "mixed",
+        "cause": "d",
         "why": (
-            f"{reaching_pixels} extreme pixels reach the integrator, up to "
-            f"{reaching_max:.3g} keV ({reaching_max / bound:.1f}x the bound) — "
-            "between signal scale and artifact scale; read frames[] before choosing"
+            f"two populations {separation:.0f}x apart with the bound between them: "
+            f"passing frames stop at {control_max:.3g} keV, failing ones start at "
+            f"{faintest:.3g} keV and stop at {reaching_max:.3g}. The bound is well "
+            "placed; the failing values are a population of their own, and a "
+            "response discontinuity is the only thing that makes an empty band"
         ),
+        "implies": (
+            "the bound is not the problem and the frames are not artifacts: keep "
+            "the frame, exclude the offending pixels, and record them per frame — "
+            "then settle from the raw gain stage whether those values are clipped"
+        ),
+        "evidence": evidence,
     }
 
 

@@ -265,11 +265,13 @@ def run_jungfrau_waxs(
         # Never silent, whether or not it raises: a tolerated loss is still a
         # loss, and under §3 D6's unresolved question it could be a biased one.
         log.warning(
-            "r%d %s: %d frames failed the value check and are absent from the "
-            "result (%s)",
+            "r%d %s: the value check excluded %d pixels across %d frames and "
+            "refused %d outright (%s)",
             cfg.run,
             cfg.detector,
-            data_check["n"],
+            data_check["n_pixels_excluded"],
+            data_check["n_frames_with_excluded_pixels"],
+            data_check["n_frames_refused"],
             json.dumps(data_check, sort_keys=True),
         )
     if blocking and not cfg.allow_incomplete:

@@ -37,7 +37,7 @@ from analysis.waxs.config import (
 from analysis.waxs.integrate import (
     ErrorModel,
     FrameResult,
-    frame_data_status,
+    extreme_pixels,
     integrate_frame,
 )
 from analysis.waxs.masks import build_static_bad, frame_bad, load_static_mask
@@ -74,7 +74,7 @@ __all__ = [
     "combine_files",
     "config_for",
     "frame_bad",
-    "frame_data_status",
+    "extreme_pixels",
     "integrate_frame",
     "load_static_mask",
     "mean_curve",

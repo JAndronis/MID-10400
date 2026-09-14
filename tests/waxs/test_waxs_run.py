@@ -157,44 +157,35 @@ def test_a_real_spawned_pool_works(cfg, mock_run_factory, tmp_path):
     assert (grid["n_frames"] == 1).all()
 
 
-def test_a_data_check_failure_does_not_take_the_run_down(
+def test_an_extreme_pixel_no_longer_takes_the_run_down(
     cfg, mock_run_factory, tmp_path, caplog
 ):
     """r0480: 473 of 23 992 frames failed the value check and the run raised.
 
-    The frame was read, classified and recorded; ``per_cell`` leaves its slot
-    empty with ``n_frames == 0``. Raising over that took the run's whole DAMNIT
-    variable with it, which is what ``allow_data_check_failures`` settles.
+    They were NaCl Bragg spots from the evaporating droplet, so the loss rose
+    through the run — exactly the frames the run exists to record. Now the pixel
+    goes and the frame stays, and the run says what it cost.
     """
     import logging
 
     mock, dc = mock_run_factory(extreme_train=10002)
     with caplog.at_level(logging.WARNING, logger="analysis.waxs.run"):
-        grid = run(cfg, mock, dc, output_path=tmp_path / "tolerated.h5")
+        grid = run(cfg, mock, dc, output_path=tmp_path / "extreme.h5")
 
     assert grid is not None
-    with h5py.File(tmp_path / "tolerated.h5") as handle:
-        status = handle["frames/status"][:]
-        failed = status == FrameStatus.DATA_CHECK_FAILED
-        assert failed.sum() == 1
+    with h5py.File(tmp_path / "extreme.h5") as handle:
+        assert (handle["frames/status"][:] == FrameStatus.OK).all()
+        assert (handle["frames/n_extreme_pixels"][:] > 0).sum() == 1
         recorded = json.loads(handle["provenance"].attrs["data_check"])
-    assert recorded["n"] == 1
+    assert recorded["n_pixels_excluded"] == 1
+    assert recorded["n_frames_with_excluded_pixels"] == 1
+    assert recorded["n_frames_refused"] == 0
 
-    # Tolerated is not silent: the warning, the provenance and the grid all say.
-    assert "failed the value check" in caplog.text
-    assert json.loads(grid.attrs["unplaced"])["DATA_CHECK_FAILED"] == 1
-    assert json.loads(grid.attrs["data_check"])["n"] == 1
-    # The slot is empty rather than guessed at, and nothing else is disturbed.
-    assert int((grid["n_frames"] == 0).sum()) == 1
-
-
-def test_a_strict_run_still_refuses_a_data_check_failure(
-    cfg, mock_run_factory, tmp_path
-):
-    mock, dc = mock_run_factory(extreme_train=10002)
-    strict = dataclasses.replace(cfg, allow_data_check_failures=False)
-    with pytest.raises(IncompleteRun, match="DATA_CHECK_FAILED"):
-        run(strict, mock, dc, output_path=tmp_path / "strict.h5")
+    # Every frame is placed, and the cost is on the record three times over.
+    assert (grid["n_frames"] == 1).all()
+    assert "the value check excluded" in caplog.text
+    assert json.loads(grid.attrs["data_check"])["n_pixels_excluded"] == 1
+    assert json.loads(grid.attrs["unplaced"]) == {}
 
 
 def test_a_label_mismatch_still_takes_the_run_down(cfg, mock_run_factory, tmp_path):
@@ -203,6 +194,32 @@ def test_a_label_mismatch_still_takes_the_run_down(cfg, mock_run_factory, tmp_pa
     mock, dc = mock_run_factory(shuffled_cells_train=10001)
     with pytest.raises(IncompleteRun, match="LABEL_MISMATCH"):
         run(cfg, mock, dc, output_path=tmp_path / "label.h5")
+
+
+def test_which_statuses_block_the_run(cfg):
+    """The split the gate rests on, without needing a run to produce each one.
+
+    ``DATA_CHECK_FAILED`` now means a frame with nothing left to integrate — the
+    value check drops pixels, not frames — and it is still a property of the
+    data rather than a failure of the pass, so it stays tolerated by default.
+    """
+    from analysis.waxs.run import _blocking
+
+    summary = {
+        "OK": 100,
+        "DATA_CHECK_FAILED": 3,
+        "LABEL_MISMATCH": 2,
+        "WORKER_ERROR": 1,
+        "NOT_PROCESSED": 4,
+    }
+    assert _blocking(cfg, summary) == {
+        "LABEL_MISMATCH": 2,
+        "WORKER_ERROR": 1,
+        "NOT_PROCESSED": 4,
+    }
+    strict = dataclasses.replace(cfg, allow_data_check_failures=False)
+    assert _blocking(strict, summary)["DATA_CHECK_FAILED"] == 3
+    assert _blocking(cfg, {"OK": 100}) == {}
 
 
 def test_a_worker_exception_lands_in_the_ledger(cfg, mock_run_factory, tmp_path):

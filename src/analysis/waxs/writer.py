@@ -62,6 +62,7 @@ class JungfrauWaxsWriter(FrameTableWriter):
         "n_negative_variance_bins": np.uint32,
         "max_kev": np.float32,
         "max_kev_static": np.float32,
+        "n_extreme_pixels": np.uint32,
     }
     FRAME_VECTOR_SOURCES = {
         "cellId": "cell_id",
@@ -71,6 +72,7 @@ class JungfrauWaxsWriter(FrameTableWriter):
         "n_negative_variance_bins": "n_negative_variance_bins",
         "max_kev": "max_kev",
         "max_kev_static": "max_kev_static",
+        "n_extreme_pixels": "n_extreme_pixels",
     }
     EXTRA_GROUPS = ("operator", "cells")
 
@@ -130,38 +132,40 @@ class JungfrauWaxsWriter(FrameTableWriter):
         group.attrs["error_model_sha256"] = model.sha256
 
     def data_check_summary(self) -> dict[str, Any]:
-        """What the ``DATA_CHECK_FAILED`` rows say about themselves (§3 D6).
+        """Pixels the value check excluded, and frames it refused (§3 D6′).
 
-        Reads the two maxima the worker stored on those rows and reports, for
-        the run as a whole, which of D6's two clauses fired and whether the
-        offending pixel could have reached the integrator at all. That last
-        count is the one a reader needs: frames clean under the union mask
-        failed over a value ``data.mask`` had already removed, so the number
-        they carry is not evidence of anything wrong with the frame.
+        The per-run record of what D6 cost. Since 2026-09-14 the check drops the
+        offending *pixel* and keeps the frame, so the number that matters is how
+        many frames lost pixels and how many — on r0480/jf1 that was 473 frames
+        losing a median of 3 each, NaCl Bragg spots from the evaporating
+        droplet. ``n_frames_refused`` is the residue: a frame with nothing left
+        to integrate at all, which should not happen and is loud if it does.
+
+        Empty when the run lost nothing, so a clean run carries no attribute
+        rather than an attribute full of zeros.
         """
         frames = self._f["frames"]
         status = frames["status"][:]
-        failed = status == FrameStatus.DATA_CHECK_FAILED
-        if not failed.any():
+        excluded = np.asarray(frames["n_extreme_pixels"][:], dtype=np.int64)
+        integrated = status == FrameStatus.OK
+        affected = integrated & (excluded > 0)
+        refused = status == FrameStatus.DATA_CHECK_FAILED
+        if not affected.any() and not refused.any():
             return {}
-        checked = np.asarray(frames["max_kev_static"][:][failed], dtype=np.float64)
-        reaching = np.asarray(frames["max_kev"][:][failed], dtype=np.float64)
-        bound = float(self._cfg.max_abs_kev)
-        non_finite = ~np.isfinite(checked)
-        clean = np.isfinite(reaching) & (np.abs(reaching) <= bound)
-        finite_checked = checked[np.isfinite(checked)]
-        finite_reaching = reaching[np.isfinite(reaching)]
+        checked = np.asarray(frames["max_kev_static"][:], dtype=np.float64)
+        worst = checked[affected]
+        worst = worst[np.isfinite(worst)]
         return {
-            "n": int(failed.sum()),
-            "max_abs_kev": bound,
-            "n_non_finite_on_a_kept_pixel": int(non_finite.sum()),
-            "n_clean_under_the_union_mask": int(clean.sum()),
-            "worst_max_kev_static": float(finite_checked.max(initial=0.0)),
-            "worst_max_kev_reaching": float(finite_reaching.max(initial=0.0)),
+            "max_abs_kev": float(self._cfg.max_abs_kev),
+            "n_frames_with_excluded_pixels": int(affected.sum()),
+            "n_pixels_excluded": int(excluded[affected].sum()),
+            "worst_frame_n_pixels": int(excluded[affected].max(initial=0)),
+            "worst_excluded_kev": float(worst.max(initial=0.0)),
+            "n_frames_refused": int(refused.sum()),
             "note": (
-                "max_kev_static is the set D6 tests, max_kev the set the "
-                "integrator sees; a row large in the first and ordinary in the "
-                "second failed over a pixel data.mask already removed"
+                "the pixel is dropped and the frame kept; its q bin reads low in "
+                "that frame, so filter on frames/n_extreme_pixels before treating "
+                "an affected bin quantitatively"
             ),
         }
 

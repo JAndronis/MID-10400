@@ -45,12 +45,18 @@ def jungfrau_waxs(proposal: int, run_no: int, detector: str, **overrides: Any) -
     The per-frame sums land in ``scratch/jungfrau_waxs/r{run:04d}/`` either way,
     so the ledger explains what happened.
 
-    Frames that fail the value check are the exception, and deliberately so: a
-    run loses them from the grid — the slot stays empty with ``n_frames == 0``
-    — and still returns, because raising over a property of the data took the
-    whole variable down with it (r0480/jf1, 473 of 23 992 frames). The count is
-    in the WARNING log, in ``provenance/data_check`` and on the returned grid's
-    ``attrs``; pass ``allow_data_check_failures=False`` to refuse instead.
+    The value check is the exception, and deliberately so. It drops the
+    offending *pixel* and keeps the frame, so a run like r0480/jf1 — whose 473
+    extreme pixels were NaCl Bragg spots from the evaporating droplet — returns
+    a complete grid instead of raising and taking the whole variable with it.
+    The cost is that an affected frame's ring bin reads low: filter on
+    ``frames/n_extreme_pixels`` before treating that bin quantitatively. The
+    totals are in the WARNING log, in ``provenance/data_check`` and on the
+    returned grid's ``attrs``.
+
+    A frame with *every* pixel excluded still fails, and that failure is
+    tolerated by default for the same reason a dark run is; pass
+    ``allow_data_check_failures=False`` to refuse instead.
 
     Returns ``None`` for a run with no lit memory cell — no beam means no I(q),
     which is a result and not a failure. The reason is logged at WARNING with

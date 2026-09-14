@@ -275,7 +275,63 @@ artifact-scale or within reach of real scattering. A NaN propagates into both, s
 column is needed to distinguish the two clauses. `writer.data_check_summary` aggregates them into
 `provenance/data_check`, and `per_cell` carries that onto the returned grid's `attrs`.
 
-*Not settled — which of three causes r0480 has.* The bound is `1.0e3` keV, a round number with no
+*Settled 2026-09-14 by `scripts/w6_data_check.py` — it is a fourth cause, (d).* All 473 failing
+frames re-read from proc, plus 200 passing frames as a control:
+
+| | |
+|---|---|
+| reaching the integrator | **2740 of 2742** extreme pixels; `n_frames_clean_under_the_union_mask` = **0** |
+| flagged by `data.mask` | 1 of 1947 listed (`OFFSET_OUT_OF_THRESHOLD`) — **(a) is dead** |
+| magnitude | 2130 → **8234 keV** max, 8.2× the bound, not the 180× artifact scale — **(b) is dead** |
+| passing frames | max 131 keV (p50 48, p99 121), **7.6× *below* the bound** — **(c) is dead** |
+| separation | brightest passing 131 keV, faintest failing frame 5629 keV: a **43× empty band** with the bound inside it |
+| shape | 92.7 % of the extreme values within 10 % of the maximum, hard edge at 8234, nothing above it in 2742 occurrences |
+| q | **97.2 % within 1 % of q = 22.33 nm⁻¹**, the rest at 19.3–19.6 |
+| in time | failures per run decile `[0, 7, 0, 78, 26, 13, 27, 63, 107, 152]` — none in the first tenth, 55 % in the last three |
+| in space | 1187 distinct pixels, recurrence ≤ 15, the recurrent ones contiguous (rows 382–383 × cols 120–123, rows 360–361 × cols 107–110) |
+| per frame | median 3 extreme pixels, max 62, of 126 230 kept; **zero** non-finite |
+
+**Those q values are NaCl.** With a = 5.6402 Å, (200) is at 22.28 nm⁻¹ and (111) at 19.30; the
+observed 22.33 is 0.2 % high, inside the photon-energy dispute (CLAUDE.md open task 15). The
+1893 : 54 split matches rock salt, where (200) is strong and (111) nearly cancels, and (220) at
+31.5 nm⁻¹ falls off jf1's 23.68 max and duly does not appear. The droplet's 150 mM NaCl
+crystallises as it evaporates — which is why the failures rise through the run — and throws grainy
+Bragg spots onto jf1. **So the pass was discarding, in a time-correlated way, precisely the frames
+that document salt crystallisation.** A falsifiable check: jf2 spans q = 9.8–18.5 nm⁻¹, below both
+reflections, so it should show few or none of these failures. If it shows the same thing at the
+same q, this reading is wrong.
+
+**Confirmed on jf2.** r0480 integrates completely on jf2, which spans q = 9.8–18.5 nm⁻¹ — below
+both reflections. That was the falsifiable prediction and it held, so the NaCl reading stands.
+
+*Still open, and deliberately not blocking — are those values numbers?* An empty band is what a
+response discontinuity makes, not what an intensity distribution makes, and 93 % of the values
+piled against a hard edge says the same; WAXS at these q has no business reaching 900 photons in a
+pixel. But they are not a fixed per-pixel clip either: the same pixel gives 14 distinct values
+across 14 frames, spread by up to 1190 keV. Settling it needs the **raw** gain stage, which proc
+does not carry. It does not gate the fix, because the fix is right either way: a clipped value must
+not enter a sum, and a real one must not cost the frame's other 126 230 pixels.
+
+**The resolution (2026-09-14): exclude the pixel, keep the frame.**
+`integrate.extreme_pixels` returns the pixels *not already excluded* by the union mask whose value
+is non-finite or outside `±max_abs_kev`; `integrate_frame` ORs them into a local copy of `bad`,
+integrates, and reports the count as `FrameResult.n_extreme_pixels`, stored per row. This is the
+same act the two masks already perform, and it is bit-identical to having passed the pixel in
+`bad` to begin with — a test pins that rather than a tolerance. `DATA_CHECK_FAILED` survives for
+one case only: **every** pixel excluded, so there is nothing to integrate and a row of zeros would
+otherwise be placed as if measured.
+
+The cost is real and falls in one place: in an affected frame the ring's own q bin loses its
+brightest pixels and reads low, and on r0480 that happens more often late in the run. It was a
+deliberate call not to store the affected q range per frame — this dataset is for kinetics, not
+XCCA or XPCS, and a handful of pixels out of 126 230 will not move a kinetic trace. `filter on
+frames/n_extreme_pixels` is what recovers the affected frames if that ever stops being true.
+
+**The bound stays at 1000 keV.** It sits in a 43× empty band; anything from roughly 400 to 5000
+classifies identically, so moving it would invalidate every config hash for no change in outcome.
+What it gained is a traceable source, which working rule 2 requires and it did not have.
+
+*Superseded — the three causes predicted before the measurement.* The bound is `1.0e3` keV, a round number with no
 derivation: it sits between the 74 keV kept-region maximum measured on r0423 and the 1.8e5 keV
 artifact population, 13.5× above the one and 180× below the other. In photons at 9.04 keV it is
 **110**. So a failing frame can mean (a) the pixel is flagged and merely outside the `.edf` —

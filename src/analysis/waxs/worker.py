@@ -140,6 +140,7 @@ class BlockResult:
     n_negative_variance_bins: np.ndarray  # (n,) uint32
     max_kev: np.ndarray  # (n,) float32
     max_kev_static: np.ndarray  # (n,) float32
+    n_extreme_pixels: np.ndarray  # (n,) uint32
     bits_present: int = 0
     timings: dict[str, float] = field(default_factory=dict)
 
@@ -163,6 +164,7 @@ def _empty_result(block: Block, npt: int) -> BlockResult:
         n_negative_variance_bins=np.zeros(n, dtype=np.uint32),
         max_kev=np.zeros(n, dtype=np.float32),
         max_kev_static=np.zeros(n, dtype=np.float32),
+        n_extreme_pixels=np.zeros(n, dtype=np.uint32),
     )
 
 
@@ -265,11 +267,11 @@ def process_block(block: Block) -> BlockResult:
                     ai, op, model, values, bad, max_abs_kev=cfg.max_abs_kev
                 )
             except DataCheckFailed:
+                # Since 2026-09-14 this means every pixel was excluded, not that
+                # the frame carried a wild value: those are masked and counted
+                # (§3 D6′). The row is still filled with what evidence there is,
+                # because a status on its own explains nothing.
                 result.status[row] = FrameStatus.DATA_CHECK_FAILED
-                # The only row type that fills these without being integrated:
-                # the pair is the whole evidence for why the frame failed, and
-                # without it the file records that 473 frames failed the value
-                # check and nothing about what value failed them.
                 reaching, checked = frame_maxima(values, bad, op.static_bad)
                 result.max_kev[row] = reaching
                 result.max_kev_static[row] = checked
@@ -283,6 +285,7 @@ def process_block(block: Block) -> BlockResult:
             result.n_negative_variance_bins[row] = frame_result.n_negative_variance_bins
             result.max_kev[row] = frame_result.max_kev
             result.max_kev_static[row] = frame_result.max_kev_static
+            result.n_extreme_pixels[row] = frame_result.n_extreme_pixels
             result.status[row] = FrameStatus.OK
         timings["integrate"] += time.perf_counter() - started
 

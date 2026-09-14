@@ -247,17 +247,18 @@ class JungfrauWaxsConfig:
     min_modules: int = 1
     #: Whether ``DATA_CHECK_FAILED`` frames on their own let the run finish.
     #:
-    #: They are a property of the data, not a failure of the pass: the frame was
-    #: read, classified and recorded, and ``per_cell`` leaves its slot empty with
-    #: ``n_frames == 0`` rather than guessing at it. r0480/jf1 lost 473 of 23 992
-    #: frames this way — 1.97 % — and raising took the whole run's DAMNIT
-    #: variable down with it, which is the outcome ``_no_lit_cells`` and
-    #: ``combined_curve`` already decided against for the same reason.
+    #: Since 2026-09-14 that status means a frame with **every** pixel excluded,
+    #: not one carrying a wild value: those pixels are dropped and the frame
+    #: integrated (§3 D6′, ``integrate.extreme_pixels``). It is still a property
+    #: of the data rather than a failure of the pass, and ``per_cell`` leaves the
+    #: slot empty with ``n_frames == 0`` rather than guessing at it, so one
+    #: pathological frame does not take a bulk reprocess down — the outcome
+    #: ``_no_lit_cells`` and ``combined_curve`` already decided against.
     #:
     #: The count is never silent: it is logged at WARNING, recorded in
-    #: ``provenance/data_check`` with the two maxima that explain it, and carried
-    #: on the returned grid's ``attrs``. Set it False for a reprocess that must
-    #: refuse anything short of every frame.
+    #: ``provenance/data_check`` and carried on the returned grid's ``attrs``.
+    #: Set it False for a reprocess that must refuse anything short of every
+    #: frame.
     #:
     #: ``WORKER_ERROR``, ``NOT_PROCESSED`` and ``LABEL_MISMATCH`` still raise:
     #: the first two mean the pass did not do its job, and the third means a

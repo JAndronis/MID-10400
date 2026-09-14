@@ -28,7 +28,7 @@ import numpy as np
 from pyFAI.integrator.azimuthal import AzimuthalIntegrator
 
 from analysis.waxs.config import MODULE_SHAPE
-from analysis.waxs.integrate import ErrorModel, integrate_frame
+from analysis.waxs.integrate import ErrorModel, extreme_pixels, integrate_frame
 from analysis.waxs.operator import WaxsOperator
 
 __all__ = [
@@ -111,6 +111,10 @@ def compare_frame(
     :raises SelfTestFailed: the two paths disagree about which bins are
         populated at all, which no tolerance would catch.
     """
+    # ``integrate_frame`` excludes extreme pixels itself; the reference has to
+    # be given the same union or the two would differ over the policy rather
+    # than over the NaN-vs-mask equivalence this gate exists to test.
+    bad = bad | extreme_pixels(x, bad, max_abs_kev)
     got = integrate_frame(ai, op, model, x, bad, max_abs_kev=max_abs_kev)
     want_s, want_n, want_v = reference_frame(reference_ai, op, model, x, bad)
     if not np.array_equal(got.normalization > 0, want_n > 0):
