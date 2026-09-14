@@ -27,7 +27,7 @@ from pathlib import Path
 import numpy as np
 from pyFAI.integrator.azimuthal import AzimuthalIntegrator
 
-from analysis.common.selftest import relative_difference
+from analysis.common.arrays import relative_difference
 from analysis.waxs.config import MODULE_SHAPE
 from analysis.waxs.integrate import ErrorModel, extreme_pixels, integrate_frame
 from analysis.waxs.operator import WaxsOperator

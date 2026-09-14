@@ -11,15 +11,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from pyFAI.units import hc  # keV·Å
-
 from analysis.common.config import (
     OPERATIONAL_FIELDS,
-    config_sha256,
+    PassConfigMembers,
     restore_by_name,
     state_by_name,
 )
-from analysis.common.cpu import physical_cores
 
 __all__ = [
     "DETECTORS",
@@ -136,7 +133,7 @@ def is_storage_cell_sequence(lit: tuple[int, ...], n_cells: int) -> bool:
 
 
 @dataclass(frozen=True, slots=True)
-class JungfrauWaxsConfig:
+class JungfrauWaxsConfig(PassConfigMembers):
     """Immutable run configuration for one detector.
 
     ``poni_file`` and ``static_mask_file`` default from :attr:`detector` and may
@@ -344,48 +341,12 @@ class JungfrauWaxsConfig:
         )
 
     @property
-    def workers(self) -> int:
-        """Worker count: ``n_workers``, else one per *physical* core.
-
-        Whether hyperthreading helps is an open question, and ``physical_cores``
-        deliberately does not answer it.
-        """
-        import os
-
-        if self.n_workers is not None:
-            return self.n_workers
-        physical = physical_cores()
-        if physical:
-            return physical
-        if hasattr(os, "sched_getaffinity"):
-            return len(os.sched_getaffinity(0))
-        return os.cpu_count() or 1
-
-    @property
     def input_files(self) -> dict[str, str | None]:
         """The input files whose sha256 enters :meth:`config_hash`."""
         return {
             "poni_file": self.poni_file,
             "static_mask_file": self.static_mask_file,
         }
-
-    @property
-    def wavelength_m(self) -> float:
-        """Photon wavelength in metres, from the configured photon energy.
-
-        ``operator.build_operator`` asserts this agrees with the PONI's own
-        wavelength rather than letting either win silently.
-        """
-        return hc / self.photon_energy_kev * 1e-10
-
-    def config_hash(self) -> str:
-        """sha256 over the result-affecting fields plus each input file's sha256.
-
-        Operational fields are excluded — see :mod:`analysis.common.config` —
-        plus ``expected_lit_cells``, which only refuses a run before the output
-        file is opened and so cannot change a stored number either.
-        """
-        return config_sha256(self, self.input_files, self.operational_fields)
 
     @property
     def operational_fields(self) -> frozenset[str]:

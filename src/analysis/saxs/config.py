@@ -6,20 +6,16 @@ Anything that can change a stored number enters :meth:`config_hash`.
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from pyFAI.units import hc  # keV·Å, derived from scipy CODATA (pyFAI/units.py:66)
-
 from analysis.common.config import (
     OPERATIONAL_FIELDS,
-    config_sha256,
+    PassConfigMembers,
     restore_by_name,
     state_by_name,
 )
-from analysis.common.cpu import physical_cores
 
 __all__ = [
     "AgipdSaxsConfig",
@@ -87,7 +83,7 @@ EXPECTED_BITS: frozenset[int] = frozenset({0, 1, 7, 8, 9, 12, 13})
 
 
 @dataclass(frozen=True, slots=True)
-class AgipdSaxsConfig:
+class AgipdSaxsConfig(PassConfigMembers):
     """Immutable run configuration.
 
     ``geometry_file`` may be ``None`` only when the caller supplies a geometry
@@ -185,24 +181,6 @@ class AgipdSaxsConfig:
         return Path(self.output_root) / f"r{self.run:04d}" / "agipd_saxs.h5"
 
     @property
-    def workers(self) -> int:
-        """Worker count: ``n_workers``, else one per *physical* core.
-
-        Whether hyperthreading helps is an open question, so the default must
-        not answer it: ``sched_getaffinity`` counts logical CPUs, and using it
-        would silently run the hyperthreaded configuration while claiming one
-        worker per core.
-        """
-        if self.n_workers is not None:
-            return self.n_workers
-        physical = physical_cores()
-        if physical:
-            return physical
-        if hasattr(os, "sched_getaffinity"):
-            return len(os.sched_getaffinity(0))
-        return os.cpu_count() or 1
-
-    @property
     def input_files(self) -> dict[str, str | None]:
         """The input files whose sha256 enters :meth:`config_hash`."""
         return {
@@ -216,19 +194,6 @@ class AgipdSaxsConfig:
         if self.beam_center_px is None or self.beam_center_py is None:
             return None
         return (self.beam_center_px, self.beam_center_py)
-
-    @property
-    def wavelength_m(self) -> float:
-        """Photon wavelength in metres."""
-        return hc / self.photon_energy_kev * 1e-10
-
-    def config_hash(self) -> str:
-        """sha256 over the result-affecting fields plus each input file's sha256.
-
-        Operational fields are excluded — see :mod:`analysis.common.config` —
-        and recorded in full in provenance instead.
-        """
-        return config_sha256(self, self.input_files, self.operational_fields)
 
     @property
     def operational_fields(self) -> frozenset[str]:

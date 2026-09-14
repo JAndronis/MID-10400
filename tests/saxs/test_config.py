@@ -1,18 +1,20 @@
-"""Config surface: the worker default must not silently answer P6.
+"""The worker default must not silently decide whether to use hyperthreading.
 
-The DAMNIT node exposes 72 logical CPUs for 36 physical cores, so a default
-taken from the affinity mask runs the hyperthreaded configuration while the
-docstring claims one worker per core. P6 is where 36 vs 72 gets decided.
+A node exposing 72 logical CPUs for 36 physical cores would, if the default
+came from the affinity mask, run the hyperthreaded configuration while claiming
+one worker per core. Whether that is the right configuration is an open
+question, and the default must not answer it.
 """
 
 from __future__ import annotations
 
 import os
 
+from analysis.common import config as common_config
+from analysis.common.cpu import physical_cores
 from analysis.saxs.config import AgipdSaxsConfig
 
 
-# ── physical cores (P6 must not be answered by a default) ─────────────────────
 def _fake_topology(root, siblings):
     """Write a sysfs-shaped tree: ``siblings`` maps cpu id to its group."""
     for cpu, group in siblings.items():
@@ -23,8 +25,6 @@ def _fake_topology(root, siblings):
 
 def test_physical_cores_counts_a_hyperthreaded_core_once(tmp_path, monkeypatch):
     """36 physical cores exposed as 72 logical ones must count as 36."""
-    from analysis.saxs import config as config_module
-
     siblings = {}
     for core in range(36):
         siblings[core] = f"{core},{core + 36}"
@@ -32,13 +32,11 @@ def test_physical_cores_counts_a_hyperthreaded_core_once(tmp_path, monkeypatch):
     _fake_topology(tmp_path, siblings)
     monkeypatch.setattr(os, "sched_getaffinity", lambda _: set(siblings), raising=False)
 
-    assert config_module.physical_cores(tmp_path) == 36
+    assert physical_cores(tmp_path) == 36
 
 
 def test_physical_cores_respects_an_affinity_mask(tmp_path, monkeypatch):
     """A job pinned to half the node is not told about the other half."""
-    from analysis.saxs import config as config_module
-
     siblings = {}
     for core in range(4):
         siblings[core] = f"{core},{core + 4}"
@@ -46,20 +44,16 @@ def test_physical_cores_respects_an_affinity_mask(tmp_path, monkeypatch):
     _fake_topology(tmp_path, siblings)
     monkeypatch.setattr(os, "sched_getaffinity", lambda _: {0, 1, 4, 5}, raising=False)
 
-    assert config_module.physical_cores(tmp_path) == 2
+    assert physical_cores(tmp_path) == 2
 
 
 def test_physical_cores_is_none_without_sysfs(tmp_path, monkeypatch):
-    from analysis.saxs import config as config_module
-
     monkeypatch.setattr(os, "sched_getaffinity", lambda _: {0, 1}, raising=False)
-    assert config_module.physical_cores(tmp_path / "absent") is None
+    assert physical_cores(tmp_path / "absent") is None
 
 
 def test_workers_defaults_to_physical_cores(monkeypatch):
-    from analysis.saxs import config as config_module
-
-    monkeypatch.setattr(config_module, "physical_cores", lambda *a, **k: 36)
+    monkeypatch.setattr(common_config, "physical_cores", lambda *a, **k: 36)
     cfg = AgipdSaxsConfig(
         proposal=1, run=1, geometry_file=None, pixel_mask_file=None, n_workers=None
     )
@@ -67,9 +61,7 @@ def test_workers_defaults_to_physical_cores(monkeypatch):
 
 
 def test_explicit_n_workers_still_wins(monkeypatch):
-    from analysis.saxs import config as config_module
-
-    monkeypatch.setattr(config_module, "physical_cores", lambda *a, **k: 36)
+    monkeypatch.setattr(common_config, "physical_cores", lambda *a, **k: 36)
     cfg = AgipdSaxsConfig(
         proposal=1, run=1, geometry_file=None, pixel_mask_file=None, n_workers=72
     )

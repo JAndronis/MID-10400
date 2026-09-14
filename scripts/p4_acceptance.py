@@ -63,9 +63,9 @@ from typing import Any  # noqa: E402
 import h5py  # noqa: E402
 import numpy as np  # noqa: E402
 
+from analysis.common.arrays import relative_difference  # noqa: E402
 from analysis.common.masks import frame_bad  # noqa: E402
 from analysis.common.plan import evenly_spaced  # noqa: E402
-from analysis.common.selftest import relative_difference  # noqa: E402
 from analysis.common.status import FrameStatus  # noqa: E402
 from analysis.saxs import masks as masks_module  # noqa: E402
 from analysis.saxs import operator as operator_module  # noqa: E402

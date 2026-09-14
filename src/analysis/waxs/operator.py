@@ -27,12 +27,13 @@ import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 from pyFAI.integrator.azimuthal import AzimuthalIntegrator
 
+from analysis.common.arrays import frozen_copy
 from analysis.common.cpu import file_sha256
+from analysis.common.pyfai import check_resolved_method
 from analysis.waxs.config import MODULE_SHAPE, JungfrauWaxsConfig
 from analysis.waxs.masks import build_static_bad
 
@@ -41,20 +42,7 @@ __all__ = [
     "WavelengthMismatch",
     "build_operator",
     "operator_sha256",
-    "resolved_method",
 ]
-
-
-def _frozen(array: np.ndarray, dtype: Any) -> np.ndarray:
-    """A contiguous, read-only **copy**.
-
-    The copy is the point: ``np.ascontiguousarray(x, dtype)`` returns ``x``
-    itself when it already matches, so freezing the result would freeze an array
-    pyFAI still owns and its Cython kernels would later reject as read-only.
-    """
-    out = np.array(array, dtype=dtype, copy=True, order="C")
-    out.flags.writeable = False
-    return out
 
 
 class WavelengthMismatch(ValueError):
@@ -94,12 +82,6 @@ class WaxsOperator:
     def q_populated(self) -> tuple[float, float]:
         """The q range the kept pixels actually cover."""
         return float(self.q.min()), float(self.q.max())
-
-
-def resolved_method(result: object) -> tuple[str, str, str]:
-    """The method pyFAI actually ran, as a tuple."""
-    method = result.method  # type: ignore[attr-defined]
-    return (method.split_lower, method.algo_lower, method.impl_lower)
 
 
 def operator_sha256(
@@ -189,19 +171,13 @@ def build_operator(
         mask=mask_2d,
         variance=np.zeros(MODULE_SHAPE, dtype=np.float32),
     )
-    resolved = resolved_method(probe)
-    if resolved != tuple(cfg.method):
-        raise RuntimeError(
-            f"pyFAI resolved method {resolved}, requested {tuple(cfg.method)}; "
-            "a method string or an unavailable engine has silently substituted "
-            "another integrator"
-        )
+    check_resolved_method(probe, cfg.method)
 
-    q = _frozen(probe.radial, np.float64)
+    q = frozen_copy(probe.radial, np.float64, cast=True)
     if q.size != cfg.npt:
         raise RuntimeError(f"pyFAI returned {q.size} bin centres, expected {cfg.npt}")
-    omega = _frozen(
-        np.asarray(ai.solidAngleArray(MODULE_SHAPE)).reshape(-1), np.float64
+    omega = frozen_copy(
+        np.asarray(ai.solidAngleArray(MODULE_SHAPE)).reshape(-1), np.float64, cast=True
     )
 
     operator = WaxsOperator(

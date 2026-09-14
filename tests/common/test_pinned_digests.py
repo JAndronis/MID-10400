@@ -161,8 +161,8 @@ def test_waxs_operator_sha256_is_unchanged():
 # a commit that says which export moved and why.
 EXPECTED_ALL: dict[str, tuple[str, ...]] = {
     "analysis.common.config": (
-        "OPERATIONAL_FIELDS", "ConfigStateMismatch", "config_sha256",
-        "restore_by_name", "result_fields", "state_by_name",
+        "OPERATIONAL_FIELDS", "ConfigStateMismatch", "PassConfigMembers",
+        "config_sha256", "restore_by_name", "result_fields", "state_by_name",
     ),
     "analysis.common.cpu": (
         "CPU_TOPOLOGY_ROOT", "THREAD_ENV", "default_pool",
@@ -217,7 +217,7 @@ EXPECTED_ALL: dict[str, tuple[str, ...]] = {
     ),
     "analysis.waxs.operator": (
         "WaxsOperator", "WavelengthMismatch", "build_operator",
-        "operator_sha256", "resolved_method",
+        "operator_sha256",
     ),
     # Same rule as the AGIPD writer.
 

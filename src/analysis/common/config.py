@@ -18,14 +18,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from dataclasses import asdict, fields
 from typing import Any
 
-from analysis.common.cpu import file_sha256
+from analysis.common.cpu import file_sha256, physical_cores
 
 __all__ = [
     "OPERATIONAL_FIELDS",
     "ConfigStateMismatch",
+    "PassConfigMembers",
     "config_sha256",
     "restore_by_name",
     "result_fields",
@@ -136,3 +138,50 @@ def restore_by_name(cfg: Any, state: Any) -> None:
     post_init = getattr(cfg, "__post_init__", None)
     if post_init is not None:
         post_init()
+
+
+class PassConfigMembers:
+    """The config members both passes compute the same way.
+
+    A plain mixin, never a dataclass: it declares no field, so inheriting it
+    cannot move either config's field list. ``__getstate__``/``__setstate__``
+    deliberately stay in each config's own class body — ``dataclasses`` installs
+    its positional pair unless they are in the class's own ``__dict__``, so a
+    mixin could not hold them.
+
+    A subclass supplies ``input_files`` and ``operational_fields``, which differ
+    per detector, and the fields the members below read.
+    """
+
+    @property
+    def workers(self) -> int:
+        """Worker count: ``n_workers``, else one per *physical* core.
+
+        Whether hyperthreading helps is an open question, so the default must
+        not answer it: ``sched_getaffinity`` counts logical CPUs, and using it
+        would silently run the hyperthreaded configuration while claiming one
+        worker per core.
+        """
+        if self.n_workers is not None:  # type: ignore[attr-defined]
+            return int(self.n_workers)  # type: ignore[attr-defined]
+        physical = physical_cores()
+        if physical:
+            return physical
+        if hasattr(os, "sched_getaffinity"):
+            return len(os.sched_getaffinity(0))
+        return os.cpu_count() or 1
+
+    @property
+    def wavelength_m(self) -> float:
+        """Photon wavelength in metres, from the configured photon energy."""
+        from pyFAI.units import hc  # keV·Å
+
+        return hc / self.photon_energy_kev * 1e-10  # type: ignore[attr-defined]
+
+    def config_hash(self) -> str:
+        """sha256 over the result-affecting fields plus each input file's sha256.
+
+        Operational fields are excluded — see this module's docstring — and
+        recorded in full in provenance instead.
+        """
+        return config_sha256(self, self.input_files, self.operational_fields)  # type: ignore[attr-defined]

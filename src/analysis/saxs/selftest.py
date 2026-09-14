@@ -18,7 +18,7 @@ from dataclasses import asdict, dataclass
 
 import numpy as np
 
-from analysis.common.selftest import relative_difference
+from analysis.common.arrays import relative_difference
 from analysis.saxs.operator import SparseOperator
 from analysis.saxs.sparse import integrate_frame
 
