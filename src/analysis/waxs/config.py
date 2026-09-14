@@ -13,7 +13,7 @@ from pathlib import Path
 
 from pyFAI.units import hc  # keV·Å, derived from scipy CODATA (pyFAI/units.py:66)
 
-from analysis.common.config import config_sha256
+from analysis.common.config import OPERATIONAL_FIELDS, config_sha256
 from analysis.common.cpu import physical_cores
 
 __all__ = [
@@ -22,6 +22,8 @@ __all__ = [
     "DETECTOR_NAMES",
     "PROC_FILE_PATTERN",
     "EXPECTED_BITS",
+    "DEFAULT_READ_NOISE_KEV",
+    "WAXS_OPERATIONAL_FIELDS",
     "EXPECTED_LIT_CELLS",
     "METHOD",
     "MODULE_SHAPE",
@@ -29,6 +31,7 @@ __all__ = [
     "JungfrauWaxsConfig",
     "default_poni_file",
     "default_static_mask_file",
+    "is_storage_cell_sequence",
 ]
 
 #: One JUNGFRAU-500K module, slow-scan × fast-scan.
@@ -74,23 +77,49 @@ _PROPOSAL_ROOT = "/gpfs/exfel/exp/MID/202601/p010400"
 #: (§3 D5).
 EXPECTED_BITS: frozenset[int] = frozenset({0, 1, 21, 22})
 
-#: The memory cells that carry photons: **0–6 and 15**, not 0–7.
+#: The memory cells that carry photons **in the science block, r0379–r0500**:
+#: 0–6 and 15, not 0–7. Eight storage cells starting at 15, so the sequence wraps
+#: 15 → 0 → … → 6.
 #:
-#: Measured on the cluster over r0423 and r0426, both detectors, eight sampled
-#: trains each — the set is identical in all four. Cells 0–6 and 15 sit at
-#: 33–40 % of kept pixels above half a photon; cell 7 is dark at 1e-6, alongside
-#: 8–14. Cell 15 runs a little lower than 0–6 (0.333 against 0.352 on jf2
-#: r0423), which is the usual JUNGFRAU first-storage-cell behaviour and a reason
-#: to look at it separately before pooling it with the rest.
+#: This is one of the proposal's four patterns, not *the* pattern: r0054–r0378
+#: read all 16 cells, r0052/53/56 read only cell 15, and 43 runs saw no beam at
+#: all. See :mod:`analysis.waxs.cells` for the full map. The pass therefore
+#: measures the set per run and checks its *shape*; this constant is only the
+#: expectation a caller may pin :attr:`JungfrauWaxsConfig.expected_lit_cells` to
+#: when reprocessing the science block must be bit-reproducible.
+#:
+#: Cell 15 runs a little lower than 0–6 (0.333 against 0.352 on jf2 r0423),
+#: which is the usual JUNGFRAU first-storage-cell behaviour and a reason to look
+#: at it separately before pooling it with the rest.
 #:
 #: An earlier reading of ``(0…7)`` came from indexing an exported train by array
 #: *position*: positions 0–7 are the lit ones, and the ``data.memoryCell`` values
 #: they carry are 0–6 and 15. That is precisely the inference CLAUDE.md pitfall 4
 #: forbids, and §3 D4's loud failure is what caught it.
-#:
-#: The pass detects the set from the data and **fails** if it is not this; the
-#: constant is the expectation, never the selection.
 EXPECTED_LIT_CELLS: tuple[int, ...] = (0, 1, 2, 3, 4, 5, 6, 15)
+
+#: Readout noise per detector, for runs that read all 16 storage cells and so
+#: have no dark cell to measure it from.
+#:
+#: The median over the 159 (run, detector) results per detector where the dark
+#: side is unambiguous, spanning r0001–r0500: jf1 0.3440 keV (range
+#: 0.3153–0.3724, ±8.3 %), jf2 0.3195 keV (range 0.3147–0.3370, ±3.5 %). A
+#: measurement from the run's own dark cells always wins over this; see
+#: :func:`analysis.waxs.run._error_model` for the order of precedence and
+#: :meth:`analysis.waxs.cells.CellAccumulator._read_noise` for why an error here
+#: costs so little.
+DEFAULT_READ_NOISE_KEV: dict[str, float] = {"jf1": 0.3440, "jf2": 0.3195}
+
+#: The shared operational set plus ``expected_lit_cells``, which only *gates*.
+#:
+#: Pinning it makes the pass refuse a run whose measured pattern differs — it
+#: raises before the output file is opened, so it can never change a value in
+#: ``/frames``. By CLAUDE.md pitfall 12 it therefore stays out of the hash, and
+#: pinning it for a reprocess does not invalidate files written without it.
+#:
+#: ``lit_fraction_min`` and ``lit_gap_ratio`` are the opposite case and stay in:
+#: they decide which cells are integrated, and so which rows exist at all.
+WAXS_OPERATIONAL_FIELDS: frozenset[str] = OPERATIONAL_FIELDS | {"expected_lit_cells"}
 
 #: Where the per-run output files are written.
 DEFAULT_OUTPUT_ROOT = f"{_PROPOSAL_ROOT}/scratch/jungfrau_waxs"
@@ -113,6 +142,21 @@ def default_static_mask_file(detector: str) -> str:
     ``jf1.poni`` / ``jf2.poni``.
     """
     return f"{_PROPOSAL_ROOT}/usr/masks/{detector}_mask.edf"
+
+
+def is_storage_cell_sequence(lit: tuple[int, ...], n_cells: int) -> bool:
+    """Is ``lit`` a run of consecutive cells mod ``n_cells``?
+
+    Empty and full sets are sequences trivially. Everything else must be
+    reachable as ``{(start + i) % n_cells}`` from one of its own members, which
+    is what ``storageCellStart`` plus ``storageCells`` produces.
+    """
+    if not lit or len(lit) >= n_cells:
+        return True
+    wanted = set(lit)
+    return any(
+        {(start + i) % n_cells for i in range(len(lit))} == wanted for start in lit
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,18 +190,41 @@ class JungfrauWaxsConfig:
     mask_bits: int = 0xFFFFFFFF
     expected_bits: frozenset[int] = EXPECTED_BITS
     # ── lit-cell selection (§3 D4) ────────────────────────────────────────
-    expected_lit_cells: tuple[int, ...] = EXPECTED_LIT_CELLS
+    #: Pins the lit set, refusing the run if the data disagree. ``None`` — the
+    #: default — measures it instead and checks only that its *shape* is a
+    #: storage-cell sequence, which is the check that holds for every run: the
+    #: proposal used four different patterns between r0001 and r0500. Pin it to
+    #: :data:`EXPECTED_LIT_CELLS` for the r0379–r0500 science block when a
+    #: reprocess must refuse anything that has drifted.
+    expected_lit_cells: tuple[int, ...] | None = None
     #: Half a photon: a pixel above this held at least one.
     lit_threshold_kev: float = 4.5
-    #: Fraction of kept pixels above the threshold for a cell to count as lit.
-    #: The measured gap is 42–53 % against ≤ 0.08 %, so anything in 0.01–0.30
-    #: separates them; the midpoint is chosen to sit far from both.
-    lit_fraction_min: float = 0.10
+    #: Fraction of kept pixels above :attr:`lit_threshold_kev` for a cell to
+    #: count as lit. The geometric centre of the one empty band in the pooled
+    #: sample of 16 × 746 measured fractions — ``5.654e-05 → 4.083e-03``, a
+    #: factor of 72 with every other step in the sample at most 1.5 — so it
+    #: clears both populations by 8.5×, and any value from 1e-4 to 1e-3 gives
+    #: the identical classification. See :mod:`analysis.waxs.cells`.
+    lit_fraction_min: float = 4.805e-4
+    #: Among the cells that clear the floor, a step larger than this splits them
+    #: again. It never fires on the proposal's runs; it is what keeps a
+    #: uniformly attenuated run splitting on the lit-to-dark step rather than on
+    #: the absolute level.
+    lit_gap_ratio: float = 30.0
     cell_sample_trains: int = 8
     # ── error model (§3 D3) ───────────────────────────────────────────────
     #: ``None`` measures the readout noise from the dark cells of the sampled
-    #: trains, which is what the context file asks for; a float overrides it.
+    #: trains, which is what the context file asks for; a float overrides it
+    #: even when the measurement is available.
     read_noise_kev: float | None = None
+    #: Used only when the run reads every storage cell, leaving no dark cell to
+    #: measure from. ``None`` means "fill it from :data:`DEFAULT_READ_NOISE_KEV`"
+    #: and is resolved in ``__post_init__``, so a *constructed* config never
+    #: holds ``None`` here — there is no way to express "no fallback, refuse
+    #: instead", and `analysis.waxs.run._error_model` says why that is right.
+    #: Resolving it at construction rather than at use is what puts the number
+    #: actually used into :meth:`config_hash` (CLAUDE.md pitfall 12).
+    read_noise_fallback_kev: float | None = None
     # ── data check (§3 D6) ────────────────────────────────────────────────
     #: ``data.mask`` misses pixels reaching ±1.8e5 keV on jf2. Any |x| above
     #: this in a frame routes it to ``DATA_CHECK_FAILED`` rather than trusting
@@ -184,6 +251,12 @@ class JungfrauWaxsConfig:
             object.__setattr__(self, "detector_name", DETECTOR_NAMES[self.detector])
         if self.first_modno is None:
             object.__setattr__(self, "first_modno", DETECTOR_MODNOS[self.detector])
+        if self.read_noise_fallback_kev is None:
+            object.__setattr__(
+                self,
+                "read_noise_fallback_kev",
+                DEFAULT_READ_NOISE_KEV[self.detector],
+            )
         self._refuse_the_other_detector()
         if self.npt < 1:
             raise ValueError(f"npt must be positive, got {self.npt}")
@@ -200,16 +273,30 @@ class JungfrauWaxsConfig:
             raise ValueError(
                 f"mask_bits must fit a uint32 BadPixels field, got {self.mask_bits}"
             )
-        if not self.expected_lit_cells:
-            raise ValueError("expected_lit_cells must name at least one cell")
+        if self.expected_lit_cells is not None:
+            if not self.expected_lit_cells:
+                raise ValueError(
+                    "expected_lit_cells must name at least one cell, or be None "
+                    "to measure the set from the data"
+                )
+            if not is_storage_cell_sequence(
+                tuple(self.expected_lit_cells), CELLS_PER_TRAIN
+            ):
+                raise ValueError(
+                    f"expected_lit_cells {list(self.expected_lit_cells)} is not a "
+                    f"run of consecutive cells mod {CELLS_PER_TRAIN}, so no "
+                    "JUNGFRAU storage-cell sequence can produce it"
+                )
         if not 0.0 < self.lit_fraction_min < 1.0:
             raise ValueError(
                 f"lit_fraction_min must lie in (0, 1), got {self.lit_fraction_min}"
             )
-        if self.read_noise_kev is not None and self.read_noise_kev <= 0:
-            raise ValueError(
-                f"read_noise_kev must be positive, got {self.read_noise_kev}"
-            )
+        if self.lit_gap_ratio <= 1.0:
+            raise ValueError(f"lit_gap_ratio must exceed 1, got {self.lit_gap_ratio}")
+        for name in ("read_noise_kev", "read_noise_fallback_kev"):
+            value = getattr(self, name)
+            if value is not None and value <= 0:
+                raise ValueError(f"{name} must be positive, got {value}")
         if self.max_abs_kev <= 0:
             raise ValueError(f"max_abs_kev must be positive, got {self.max_abs_kev}")
         if self.cell_sample_trains < 1:
@@ -320,8 +407,16 @@ class JungfrauWaxsConfig:
         stores, and covering them made a rerun at a different worker count
         refuse its own output. See :mod:`analysis.common.config`. They are still
         recorded in full in the provenance record.
+
+        ``expected_lit_cells`` joins them here: it refuses a run before the
+        output file is opened, so it cannot change a stored number either.
         """
-        return config_sha256(self, self.input_files)
+        return config_sha256(self, self.input_files, self.operational_fields)
+
+    @property
+    def operational_fields(self) -> frozenset[str]:
+        """Which fields :meth:`config_hash` excludes, for the provenance record."""
+        return WAXS_OPERATIONAL_FIELDS
 
 
 def config_for(proposal: int, run: int, detector: str, **overrides: object):

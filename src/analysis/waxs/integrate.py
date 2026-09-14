@@ -44,9 +44,13 @@ class ErrorModel:
 
     read_noise_kev: float
     photon_energy_kev: float
-    #: ``"measured"`` from the run's dark cells, or ``"configured"``.
+    #: Where ``read_noise_kev`` came from: ``"configured"`` from
+    #: ``cfg.read_noise_kev``, ``"measured"`` from this run's own dark cells, or
+    #: ``"fallback"`` from ``cfg.read_noise_fallback_kev`` for a run that reads
+    #: every storage cell and so has no dark one. See
+    #: :func:`analysis.waxs.run._error_model` for the order of precedence.
     source: str = "configured"
-    #: Frames the measurement averaged over; 0 when configured.
+    #: Frames the measurement averaged over; 0 when configured or fallen back.
     n_samples: int = 0
     dark_cells: tuple[int, ...] = ()
 

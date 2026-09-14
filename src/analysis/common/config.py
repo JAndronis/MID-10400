@@ -19,6 +19,12 @@ refused every single time.
 
 They are still recorded in full in the provenance record, which is where
 "how was this run" belongs. Only the hash narrows.
+
+A pass may exclude *more* than these six, and the JUNGFRAU one does: see
+:data:`analysis.waxs.config.WAXS_OPERATIONAL_FIELDS`. So the set a file was
+written under is asked of the config — ``cfg.operational_fields`` — and stored
+in provenance alongside the hash, rather than being read back off this constant
+by a reader who may have a different version of it to hand.
 """
 
 from __future__ import annotations
@@ -33,8 +39,11 @@ from analysis.common.cpu import file_sha256
 __all__ = ["OPERATIONAL_FIELDS", "config_sha256", "result_fields"]
 
 #: Config fields that change how a pass runs but not what it stores, and which
-#: are therefore excluded from :func:`config_sha256`. Both passes share this
-#: set exactly; anything detector-specific is result-affecting and stays in.
+#: are therefore excluded from :func:`config_sha256`. Every pass excludes at
+#: least these; a pass with a gate-only field of its own excludes that too, and
+#: :data:`analysis.waxs.config.WAXS_OPERATIONAL_FIELDS` is the one that does.
+#: Read a stored file's set off ``config_operational_fields`` in its provenance,
+#: never off this constant.
 #:
 #: Note what is deliberately *absent*: ``base_mask_trains`` (AGIPD) and
 #: ``cell_sample_trains`` (JUNGFRAU) choose which trains are sampled, and so

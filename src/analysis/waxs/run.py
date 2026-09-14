@@ -34,14 +34,14 @@ from analysis.common.plan import evenly_spaced
 from analysis.common.status import FrameStatus
 from analysis.waxs import worker as worker_module
 from analysis.waxs.cells import CellAccumulator, CellClassification
-from analysis.waxs.config import JungfrauWaxsConfig
+from analysis.waxs.config import CELLS_PER_TRAIN, JungfrauWaxsConfig
 from analysis.waxs.integrate import ErrorModel
 from analysis.waxs.operator import WaxsOperator, build_operator
 from analysis.waxs.plan import build_plan, open_detector
 from analysis.waxs.selftest import run_selftest
 from analysis.waxs.writer import IncompleteRun, JungfrauWaxsWriter
 
-__all__ = ["REDUCERS", "ReadNoiseUnavailable", "run_jungfrau_waxs"]
+__all__ = ["REDUCERS", "run_jungfrau_waxs"]
 
 #: What ``run_jungfrau_waxs`` may return. ``per_cell`` is the (trainId, cellId,
 #: q) grid the DAMNIT variable stores; ``pooled`` is the per-train I(q);
@@ -51,8 +51,32 @@ REDUCERS = ("pooled", "per_cell", "none")
 log = logging.getLogger(__name__)
 
 
-class ReadNoiseUnavailable(RuntimeError):
-    """No dark cells to measure the readout noise from, and none configured."""
+def _no_lit_cells(cfg: JungfrauWaxsConfig, classification: CellClassification) -> None:
+    """Log why a run produced nothing, and return nothing.
+
+    Every run goes down the same path: measure the cells, integrate the lit
+    ones. When none are lit there are no frames, so there is no I(q) — that is
+    the honest result for a run that saw no beam, not a failure, and 43 of the
+    proposal's runs are like that. Raising here would make a whole DAMNIT
+    reprocess fall over on runs that are simply dark, so it logs the evidence
+    and returns ``None`` instead.
+    """
+    brightest = max(
+        zip(classification.cells, classification.lit_fraction, strict=True),
+        key=lambda pair: pair[1],
+    )
+    log.warning(
+        "run %d %s: no memory cell is lit, so there is nothing to integrate and "
+        "no I(q) to return. The brightest cell is %d at a lit fraction of %.3e, "
+        "against a floor of %.3e; every cell is below it. This is what a run "
+        "with no beam on the sample looks like.",
+        cfg.run,
+        cfg.detector,
+        int(brightest[0]),
+        float(brightest[1]),
+        cfg.lit_fraction_min,
+    )
+    return None
 
 
 def run_jungfrau_waxs(
@@ -79,8 +103,12 @@ def run_jungfrau_waxs(
     :param reduce: which reduction to return, one of :data:`REDUCERS`. The
         output file is identical either way.
 
-    :raises analysis.waxs.cells.UnexpectedLitCells: the measured cell pattern is
-        not the configured one (§3 D4).
+    :returns: the reduction named by ``reduce``, or ``None`` when the run has no
+        lit memory cell at all — see :func:`_no_lit_cells`.
+    :raises analysis.waxs.cells.ImplausibleLitCells: the measured cell pattern
+        is not a storage-cell sequence, so the classification is wrong (§3 D4).
+    :raises analysis.waxs.cells.UnexpectedLitCells: ``cfg.expected_lit_cells``
+        is pinned and the measured pattern is not it (§3 D4).
     :raises analysis.waxs.selftest.SelfTestFailed: the NaN path and the
         per-frame-mask reference disagree.
     :raises IncompleteRun: some frame is not ``OK`` and ``cfg.allow_incomplete``
@@ -108,7 +136,11 @@ def run_jungfrau_waxs(
         det = open_detector(cfg, dc)
     with phase(setup, "cells"):
         classification, sampled = _classify_cells(cfg, op, det)
-        classification.check_expected(cfg.expected_lit_cells)
+        classification.check_structure(CELLS_PER_TRAIN)
+        if cfg.expected_lit_cells is not None:
+            classification.check_expected(cfg.expected_lit_cells)
+        if not classification.lit:
+            return _no_lit_cells(cfg, classification)
         model = _error_model(cfg, classification)
     with phase(setup, "plan"):
         plan = build_plan(
@@ -256,11 +288,29 @@ def _classify_cells(
 def _error_model(
     cfg: JungfrauWaxsConfig, classification: CellClassification
 ) -> ErrorModel:
-    """The configured readout noise, else the one measured from the dark cells.
+    """sigma_read, in order of precedence: configured, measured, fallback.
 
-    :raises ReadNoiseUnavailable: neither is available. Guessing a noise floor
-        would put a number with no source into every stored variance
-        (CLAUDE.md working rule 2).
+    An explicit ``cfg.read_noise_kev`` wins outright. Otherwise the run's own
+    dark cells are measured, which is what §3 D3 asks for. A run that reads
+    every storage cell has no dark cell — 213 of the proposal's do — and falls
+    back to ``cfg.read_noise_fallback_kev``, the per-detector median over the
+    runs that do. ``ErrorModel.source`` records which of the three it was, so a
+    stored file never has to be guessed at.
+
+    **There is deliberately no fourth branch that raises.** An earlier draft had
+    one, for "no measurement and no fallback" — but `JungfrauWaxsConfig` resolves
+    ``read_noise_fallback_kev`` from
+    :data:`~analysis.waxs.config.DEFAULT_READ_NOISE_KEV` in ``__post_init__``, so
+    it is never ``None`` by the time a config exists and that branch could not
+    fire. Resolving it there rather than here is what keeps
+    the *used* number inside ``config_hash`` (CLAUDE.md pitfall 12): were the
+    field left ``None`` and filled in at this point, a change to the constant
+    would silently let resume merge blocks computed at two different sigma_read.
+
+    The guarantee CLAUDE.md working rule 2 asks for — never a number without a
+    traceable source — is met by ``ErrorModel.source`` instead of by an
+    exception: every stored file says which of the three it used, so selecting
+    against ``"fallback"`` is a question the provenance can answer.
     """
     if cfg.read_noise_kev is not None:
         return ErrorModel(
@@ -270,17 +320,26 @@ def _error_model(
             0,
             classification.dark,
         )
-    if classification.read_noise_kev is None:
-        raise ReadNoiseUnavailable(
-            f"no dark memory cell in this run (cells {list(classification.cells)} "
-            f"are all lit), so sigma_read cannot be measured; set "
-            "cfg.read_noise_kev explicitly for it"
+    if classification.read_noise_kev is not None:
+        return ErrorModel(
+            classification.read_noise_kev,
+            cfg.photon_energy_kev,
+            "measured",
+            classification.read_noise_samples,
+            classification.dark,
         )
+    log.info(
+        "run %d %s: all %d cells are lit, so sigma_read falls back to %.4f keV",
+        cfg.run,
+        cfg.detector,
+        len(classification.cells),
+        cfg.read_noise_fallback_kev,
+    )
     return ErrorModel(
-        classification.read_noise_kev,
+        cfg.read_noise_fallback_kev,
         cfg.photon_energy_kev,
-        "measured",
-        classification.read_noise_samples,
+        "fallback",
+        0,
         classification.dark,
     )
 

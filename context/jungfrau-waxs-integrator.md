@@ -6,7 +6,8 @@ Read `CLAUDE.md` first, then `context/agipd-saxs-integrator.md` — this file is
 against that one and does not repeat its reasoning. Where a section here is silent, the AGIPD
 design applies unchanged; §4 says exactly which parts those are.
 
-Work phase by phase (§7). Present a plan before creating files. Nothing here is implemented yet.
+Work phase by phase (§7). Present a plan before creating files. **W0–W4 are done and W5 is
+implemented but unrun**; §7 carries the state of each, and §8 the testing conventions.
 
 ---
 
@@ -36,9 +37,9 @@ itself a finding.
 | dtype | `float32` | `float32` | **not** integer counts; `sparse.integrate_frame`'s dtype check rejects it, correctly |
 | Units | **keV** — single-photon peak 8.87 | **keV** — peak 9.12 | 9.04 keV expected; charge sharing biases a photon peak low. The Poisson term is in keV, not counts (§3 D3) |
 | Layout | `(train, cell, 512, 1024)`, 16 memory cells per train, fixed | same | rectangular, not AGIPD's ragged frame table |
-| **Lit cells** | **0–7** | **0–7** | confirmed on both. Lit cells 42–53 % of pixels > 4.5 keV; dark cells ≤ 0.004 %. Integrating all 16 halves I(q) (§3 D4) |
+| **Lit cells** | ~~0–7~~ **`{0…6, 15}`** | ~~0–7~~ **`{0…6, 15}`** | **Corrected — the `0–7` was array *positions*, not cell ids (§6 O4, CLAUDE.md pitfall 4).** Lit cells 42–53 % of pixels > 4.5 keV; dark cells ≤ 0.004 %. Integrating all 16 halves I(q) (§3 D4). And this set holds for the r0379–r0500 science block only: the proposal used **four** readout patterns (§6 O4) |
 | Lit / dark mean, kept region | +5.67 / −0.16 keV | +5.32 / −0.00 keV | — |
-| Readout σ, dark cells, kept region | **0.323 keV** | **0.317 keV** | the noise floor of the error model, and the two agree |
+| Readout σ, dark cells, kept region | **0.323 keV** | **0.317 keV** | the noise floor of the error model, and the two agree. Measured per run (§3 D3); a run that reads all 16 cells has no dark cell and falls back to a per-detector median |
 | Exactly zero, lit | 0.002 % | 0.004 % | **dense**; no sparsity to exploit (§3 D1) |
 | Negative, lit, kept region | 20.8 % | 16.2 % | 45.6 % / 31.8 % over the whole detector. Either way the "no negative counts" data check is wrong here |
 | Dynamic mask set | 1.08 % | 1.08 % | same masking design as AGIPD |
@@ -57,6 +58,11 @@ Both detectors agree on dtype, units, the lit-cell set, the bit set, the mask fr
 readout noise, which is what makes these numbers worth building on. Still **one train of one run**:
 the lit-cell split and the bit set must be re-checked across runs, including a crystallised one,
 before they are treated as run-invariant (§6 O4).
+
+*That re-check happened, and the lit-cell row is the one it moved* — twice. First the set itself
+(`{0…6, 15}`, not `0–7`, W1); then, over the whole proposal, the discovery that there is no single
+set to name at all (§6 O4, 2026-09-14). The bit set, the mask fractions, the q ranges and the
+readout noise all survived unchanged.
 
 ---
 
@@ -96,12 +102,96 @@ visible. `common.writer.pooled_per_train` gives σ = 0 for any bin whose *pooled
 non-positive and counts those in `attrs["negative_variance_bins"]`, rather than rooting a negative
 number.
 
-**D4 — Lit-cell selection is mandatory, and it comes from the data.** Cells 8–15 hold no photons
-at all (0.00 % of pixels above half a photon, against 42–49 % in cells 0–7). Integrating all 16
+*Amended 2026-09-14: σ_read has three sources, in this order.* "Measure it per run" assumed every
+run has a dark cell to measure from. 213 of the proposal's runs read all 16 storage cells (D4′) and
+have none, so `run._error_model` falls back rather than raising:
+
+1. `cfg.read_noise_kev` — an explicit value wins outright.
+2. The run's own dark cells, which is what this decision asks for.
+3. `cfg.read_noise_fallback_kev`, defaulted per detector from `DEFAULT_READ_NOISE_KEV` —
+   **jf1 0.3440, jf2 0.3195 keV**, the median over the 159 (run, detector) results per detector
+   where the dark side is unambiguous. jf1's spans 0.3153–0.3724 (±8.3 %), jf2's 0.3147–0.3370
+   (±3.5 %).
+
+`ErrorModel.source` records which of the three it was, so a stored file never has to be guessed at.
+
+*There is no fourth branch that refuses.* The first draft of this had one — "no measurement and no
+fallback" — and `ReadNoiseUnavailable` with it. It could not fire: `__post_init__` resolves
+`read_noise_fallback_kev` from `DEFAULT_READ_NOISE_KEV`, so a constructed config never holds
+`None` and there is no way to express "no fallback". Resolving it at construction is deliberate and
+is what puts the number *actually used* inside `config_hash` — were the field left `None` and
+filled in at use, a change to the constant would let resume merge blocks computed at two different
+σ_read (CLAUDE.md pitfall 12). The exception was removed 2026-09-14 rather than made reachable,
+because working rule 2's guarantee is already met by `ErrorModel.source`: every stored file says
+which of the three it used, so "refuse anything that fell back" is a question the provenance
+answers. The fallback is affordable because σ_read is a small lever: integrating the r0423 jf1
+frames with it wrong by **+41 %** moves σ(q) by at most **0.19 %** at that run's occupancy and
+**0.95 %** at the lower occupancy of the all-16 runs, against a per-frame σ/I of 3–7 %. It is in
+`config_hash` all the same — when it is used, it changes a stored number.
+
+**D4 — Lit-cell selection is mandatory, and it comes from the data.** Eight of the sixteen cells
+hold no photons at all (0.00 % of pixels above half a photon, against 42–49 % in the lit eight —
+array *positions* 0–7 as first recorded, cell ids `{0…6,15}` as later measured, §6 O4). Integrating all 16
 would halve I(q) and add a dark-frame background. Unlike AGIPD's open task 3, this does not wait
 on LITFRM: the split is unambiguous in the frames themselves. v1 selects lit cells by a measured
 per-cell threshold, records the selected set in provenance, and **fails loudly if the lit set is
 not what the config expects** — a silent change in the cell pattern between runs must not pass.
+
+**D4′ — Amended 2026-09-14, measured over the whole proposal. The gate is the *shape*, not a named
+set.** The sentence above has a hidden premise: that there is one pattern to expect. There is not.
+Over **746 (run, detector) results spanning r0001–r0500** the proposal used four:
+
+| pattern | cells | runs | n |
+|---|---|---|---|
+| 8 cells from 15 | `{0…6, 15}` | 379–500 | 114 |
+| all 16 | `{0…15}` | 54–378 | 213 |
+| 1 cell | `{15}` | 52, 53, 56 | 3 |
+| none (no beam) | `{}` | 1–42, 68–69, 140, … | 43 |
+
+Every one is a run of consecutive memory cells **mod 16** — a JUNGFRAU storage-cell sequence, set
+by `storageCellStart` and `storageCells` on the control device. That is a far stronger thing to
+hold the pass to than any one set, because it is a property of *every* valid readout pattern rather
+than of this beamtime. So:
+
+- `config.is_storage_cell_sequence` defines the shape, and `cells.CellClassification.check_structure`
+  raises `ImplausibleLitCells` — a subclass of `UnexpectedLitCells` — when the measured set is not
+  one. This runs on **every** run. A failure there means the *classification* is wrong, not that the
+  run is unusual, and the message names `lit_fraction_min` and `lit_gap_ratio` because those are
+  what to look at.
+- `cfg.expected_lit_cells` becomes `None` by default and now only *pins*: set it to
+  `EXPECTED_LIT_CELLS` when reprocessing the r0379–r0500 science block must refuse anything that
+  has drifted. Because it refuses **before the output file is opened**, it cannot change a stored
+  number, so by CLAUDE.md pitfall 12 it is excluded from `config_hash`
+  (`WAXS_OPERATIONAL_FIELDS`) and pinning it does not invalidate files written without it.
+- **A run with no lit cell returns `None` rather than raising.** No beam means no I(q), which is a
+  result; 43 of the proposal's runs are like that, and raising would take a whole DAMNIT reprocess
+  down on runs that are simply dark. `run._no_lit_cells` logs the brightest cell and its fraction
+  against the floor, so the verdict carries its evidence. `plan.build_plan` therefore accepts an
+  empty set too and plans zero rows — whether that is worth integrating is the pass's call, not the
+  row model's — and `damnit.combined_curve` returns `None` when either detector produced nothing.
+
+**Where the threshold comes from, and why the old one was wrong.** Pooling all 16 × 746 per-cell
+fractions and sorting them leaves exactly **one** wide multiplicative gap, `5.654e-05 → 4.083e-03`,
+a factor of 72; every other step in the whole sample is at most 1.5. `lit_fraction_min` sits at the
+geometric centre of that empty band — **4.805e-4**, with a factor of 8.5 of margin on each side —
+and the classification is *identical* for any floor between 1e-4 and 1e-3, a decade-wide plateau.
+
+The floor it replaced was **0.10**, chosen as "the midpoint" between 42–53 % and 0.08 % on the one
+run then available. That is a fraction of *scattered intensity*, so it moves with the beam: the lit
+cells of a bright run sit at 0.45 and those of a dim one at 0.09, and a threshold at 0.10 cuts
+through the middle of the population. It produced **67 physically impossible sets** such as
+`[5, 7, 9, 10]` and `[1, 12]` — which is exactly what `check_structure` now catches.
+
+`lit_gap_ratio` (default 30) then subdivides the cells that clear the floor, so a uniformly
+attenuated run — every lit cell pushed towards the floor together — still splits on the step
+between lit and dark rather than on the absolute level. On the 746 results it never fires; the
+floor alone reproduces all four patterns. Both knobs *do* change which cells are integrated and so
+which rows exist, so unlike `expected_lit_cells` they stay **in** `config_hash`.
+
+> **Provenance gap.** The 746-result sweep is recorded here and in
+> `analysis.waxs.cells`' module docstring, but its JSON is **not in the repo**, which §7's
+> "keep benchmark JSONs next to the script" rule asks for. Re-run it, or find and commit it,
+> before any of these numbers is quoted as measured elsewhere.
 
 **D5 — No seam mask; `static_bad` is the `.edf` file alone.** `agipd_asic_seams()` has no JUNGFRAU
 counterpart and needs none: bit 22 `NON_STANDARD_SIZE` is set in `data.mask` (§2), which is exactly
@@ -180,14 +270,14 @@ halves (§2), so this replaces it rather than adding to it.
 | `cpu.py` | `physical_cores`, `file_sha256`, `THREAD_ENV`, `set_thread_env`, `default_pool`, `phase`, `package_versions` | Was split across AGIPD's `config`, `worker` and `run` |
 | `plan.py` | `TrainRecord`, `Block`, `RunPlan`, `build_blocks`, `evenly_spaced` | The row model. Each pass keeps its own `build_plan` and `run_checks` |
 | `masks.py` | `MaskSource`, `StaticMask`, `UnexpectedMaskBits`, `bits_to_mask`, `describe_bits`, `frame_bad` | The mask vocabulary and the per-frame union |
-| `writer.py` | `FrameTableWriter`, `ConfigHashMismatch`, `IncompleteRun`, `pooled_per_train`, `as_handle`, `q_centers` | The layout, ledger, resume and label checks. The per-frame column schema is class attributes, so each pass declares its own |
+| `writer.py` | `FrameTableWriter`, `ConfigHashMismatch`, `IncompleteRun`, `pooled_per_train`, `as_handle`, `q_centers` | The layout, ledger, resume and label checks. The per-frame column schema is class attributes, so each pass declares its own. The `PassConfig` protocol requires `operational_fields`, and provenance records **that** set rather than the shared constant — the two passes exclude different ones |
 
 | `analysis.waxs` module | Verdict |
 |---|---|
-| `config.py` | **New.** `JungfrauWaxsConfig`, one per detector; `config_for(proposal, run, detector)` fills the per-detector PONI and `.edf` paths |
+| `config.py` | **New.** `JungfrauWaxsConfig`, one per detector; `config_for(proposal, run, detector)` fills the per-detector PONI and `.edf` paths. Also `WAXS_OPERATIONAL_FIELDS` — the shared six plus `expected_lit_cells` (D4′) — and `is_storage_cell_sequence` |
 | `operator.py` | **New, and much smaller than AGIPD's.** No LUT is lifted out: under D5′ pyFAI keeps the matrix and the pass keeps only the q axis, the solid angle, the static mask and the PONI text, hashed together |
 | `masks.py` | **New, simpler.** The `.edf` alone. No seams (D5), no per-cell base mask (D5′ removes the reason for one) |
-| `cells.py` | **New.** Lit-cell selection and the readout-noise measurement, off the same sampled trains |
+| `cells.py` | **New.** Lit-cell selection (`split_lit_dark`, the floor-plus-gap split of D4′), the storage-cell-sequence check, and the readout-noise measurement, all off the same sampled trains |
 | `integrate.py` | **New.** `ErrorModel` and the pure per-frame dense integration. The AGIPD `sparse.py` is not used and not moved |
 | `plan.py` | **New, same shape.** The one thing that does not transfer is the row model: see §5 R6 |
 | `worker.py`, `writer.py`, `run.py`, `damnit.py` | **New**, following the AGIPD shapes |
@@ -290,17 +380,32 @@ path. The parent still pins `EXTRA_NUM_THREADS=1` before the pool exists.
   nonsense. Do not reach for that test on the next mask question.
 - **O3 — Resolved 2026-09-13.** The `jf2` export was a copy of `jf1`; re-exported and verified
   distinct (`module=2`, different sha256). §2 now carries both detectors.
-- **O4 — Resolved 2026-09-13 on the cluster: invariant, and the set is `{0,1,2,3,4,5,6,15}`.**
-  `scripts/w1_facts.py` over r0423 and r0426, both detectors, eight sampled trains each: the lit
-  set is identical in all four. Cells 0–6 and 15 hold 33–40 % of kept pixels above half a photon;
-  cells 7–14 sit at 1e-6 to 4e-5 — five orders of magnitude of margin, so the threshold is in no
-  danger. A single global `expected_lit_cells` is therefore right; no per-run expression is needed.
+- **O4 — Resolved twice, and the second answer reversed the first. Closed 2026-09-14: the set is
+  *not* run-invariant; its shape is.**
+
+  *First pass, 2026-09-13, r0423 + r0426.* `scripts/w1_facts.py`, both detectors, eight sampled
+  trains each: the lit set is identical in all four, `{0,1,2,3,4,5,6,15}`. Cells 0–6 and 15 hold
+  33–40 % of kept pixels above half a photon; cells 7–14 sit at 1e-6 to 4e-5 — five orders of
+  magnitude of margin. ~~A single global `expected_lit_cells` is therefore right; no per-run
+  expression is needed.~~ **That conclusion was drawn from two runs out of 373 and is wrong.**
 
   **Cell 7 is dark and cell 15 is lit**, which is not what §2 recorded. The earlier `(0…7)` came
   from indexing an exported train by array *position*: positions 0–7 are the lit ones, and the
   `data.memoryCell` values they carry are 0–6 and 15. That is exactly the inference CLAUDE.md
   pitfall 4 forbids — and D4's loud failure is what caught it, on the first cluster run, before a
   single frame was integrated. The design worked; the constant was wrong.
+
+  *Second pass, 2026-09-14, r0001–r0500.* Over 746 (run, detector) results the proposal used
+  **four** readout patterns, tabulated in D4′: `{0…6,15}` for r0379–r0500, all 16 for r0054–r0378,
+  `{15}` for three runs, and nothing at all for 43. `{0,1,2,3,4,5,6,15}` is the *science block's*
+  set, not the proposal's. What **is** invariant is that every pattern is a storage-cell sequence
+  mod 16, and that is what the pass now gates on (D4′); the named set survives as
+  `EXPECTED_LIT_CELLS`, an expectation a reprocess may pin, never the default.
+
+  *The lesson is about the shape of the evidence, not about JUNGFRAUs.* Two runs agreeing looked
+  like invariance and was in fact one plateau of a four-level step. The same pattern of reasoning
+  is live in this file's §6 O5 (a χ² measured on one featureless run) and in CLAUDE.md open task 4
+  (a beam centre agreed on one train), so it is worth naming.
 
   Cell 15 runs consistently a little below 0–6 (0.333 against 0.352 on jf2 r0423, 0.363 against
   0.385 on jf1 r0423). That is the usual JUNGFRAU first-storage-cell behaviour and a reason to look
@@ -396,7 +501,7 @@ detectors, eight sampled trains each (`scripts/w1_facts.py`, JSON beside itself)
 | q populated | jf1 **11.53–23.68**, jf2 **9.80–18.46** nm⁻¹ — the §2 figures, now from the real PONIs. Overlap 11.53–18.46 |
 | Static mask | 75.92 % / 84.39 % — as recorded |
 | Bits | `{0, 1, 21, 22}` on all four, none unexpected |
-| **O4**, lit cells | `{0,1,2,3,4,5,6,15}`, identical across both runs and both detectors — see O4 above. **Not** `{0…7}` |
+| **O4**, lit cells | `{0,1,2,3,4,5,6,15}`, identical across both runs and both detectors — **Not** `{0…7}`. Read this as *these two runs agree*, not as invariance: the r0001–r0500 sweep later found four patterns (§6 O4, §3 D4′) |
 | Readout noise | jf1 0.359 (r0423) / 0.337 (r0426); jf2 0.318 / 0.318. jf1's moves 6 % between runs, which is why D3 measures it per run instead of hardcoding |
 | **Is `data.mask` train-invariant?** | **Yes** over the sampled trains: zero differing pixels, all four combinations |
 | **Does `roi` save I/O?** | **No, and it cannot** |
@@ -425,7 +530,7 @@ and both I/O questions have numeric answers.
 | PONI load, shape and wavelength assertion | pass; fires on a PONI refined at 9.000 keV |
 | Method resolution `("full","csc","cython")` | pass, asserted on the probe |
 | σ_read measured from the dark cells | 0.3230 (jf1) / 0.3175 (jf2) keV — the §2 numbers |
-| Lit cells measured from the data | (0…7) on both; 42–53 % against ≤ 0.08 % |
+| Lit cells measured from the data | array positions 0–7 on both; 42–53 % against ≤ 0.08 %. The *cell ids* are `{0…6,15}` (§6 O4) — the synthetic geometry here carries no `data.memoryCell` |
 | Poisson recovery on a synthetic frame | model mean variance within 0.04 % of the true one |
 | **NaN equivalence (D5′)** | **max rel S, N, V all exactly `0.0e+00`**, 8 frames per detector, all 500 bins, one cached engine |
 | Per-frame cost | 2.3–2.9 ms against 16.8 ms for the per-frame-mask path |
@@ -439,8 +544,16 @@ unlike the AGIPD mock the images need no recasting). Covered: dropped train, zer
 multi-entry refusal, block never straddling a gap, repeated `memoryCell` → `LABEL_MISMATCH`,
 `DATA_CHECK_FAILED` on an extreme pixel, worker exception → `WORKER_ERROR`, broken pool →
 `NOT_PROCESSED` and raise, resume completing only missing blocks, config-hash mismatch refused, a
-real spawned pool, the D4 loud failure end to end, and `ReadNoiseUnavailable` when a run has no
-dark cell. Invariants: rows written by label, no NaN anywhere in the file.
+real spawned pool, the D4 loud failure end to end, and a run with no dark cell. Invariants: rows
+written by label, no NaN anywhere in the file.
+
+*Extended 2026-09-14 for D4′ and the D3 fallback:* the floor-and-gap split as a pure function, the
+storage-cell-sequence table (including two of the 67 impossible sets the 0.10 floor produced), an
+impossible set raising `ImplausibleLitCells`, a pinned set that the data contradicts stopping the
+run while the same run unpinned integrates cleanly, a run with **no** lit cell returning `None`
+with its evidence in the log, an empty lit set planning zero rows rather than being refused, and
+σ_read taking each of its three sources in turn — and that the fallback **cannot** be cleared,
+which is the assertion that caught the dead `ReadNoiseUnavailable` branch (D3).
 
 *First cluster run, 2026-09-13:* both scripts failed immediately on max-exfl484 with
 `ValueError: buffer source array is read-only`, in `build_operator`, for every run and detector.
@@ -453,6 +566,14 @@ now.
 
 **W4 — on-node acceptance, r0423: ACCEPTED on BOTH detectors 2026-09-13** (max-exfl484, 36
 workers, full runs).
+
+> **Both accepted files are now stale, 2026-09-14.** D4′ and D3's fallback added
+> `lit_gap_ratio` and `read_noise_fallback_kev` to the config and moved `lit_fraction_min`'s
+> default, and all three are result-affecting and so in `config_hash`. Every
+> `jungfrau_waxs_*.h5` written before that date carries the old hash and will be **refused, not
+> resumed** — the same situation as CLAUDE.md pitfall 12's 2026-09-13 note. Rerun W4 on both
+> detectors before W5. The numbers below are still the right *targets*; they are no longer a
+> current verdict.
 
 | Gate | jf1 | jf2 |
 |---|---|---|
@@ -498,8 +619,10 @@ This is D3 working, not failing, but it does mean **per-frame σ is unusable on 
 frames** and anyone wanting per-frame errors must select on the count. The pooled σ is unaffected,
 which is the claim the design rests on — so the W4 ledger now pools the run the way §9 pools it and
 reports how many bins are *still* non-positive afterwards, rather than leaving "pooling fixes it"
-as an assertion. `tests/waxs/test_waxs_w4_acceptance.py` forces per-frame negatives and checks both
-that they cancel and that the reducer says so when they do not.
+as an assertion. `tests/waxs/test_waxs_writer.py` forces per-frame negatives on a written file and
+checks both that they cancel and that `pooled_per_train` says so when they do not — the cancellation
+is a property of the reducer, so it is tested against the reducer rather than against the script
+that happens to report it.
 
 *Remaining:* nothing on W4. Both detectors are accepted.
 
@@ -527,12 +650,59 @@ load, not one core at a time** — the AGIPD P4 found every single-core figure 1
 and the 2.3–2.9 ms/frame above was measured on one idle core of a laptop, which is why `BUDGET_MS`
 here is set well above it.
 
-**W5 — DAMNIT. Implemented 2026-09-13; not yet run on the cluster.** Three variables in
+**W5 — DAMNIT. Implemented 2026-09-13; not yet run on the cluster.** Four variables in
 `src/amore/context.py`, all thin wrappers over `analysis.waxs.damnit`: `jungfrau_waxs_jf1`,
 `jungfrau_waxs_jf2` (each returning the `(trainId, cellId, q)` grid — 48 MB at 3000 trains × 8 cells
-× npt 500, against 0.93 GB for the AGIPD per-pulse grid) and `jungfrau_waxs_overview`, which draws
+× npt 500, against 0.93 GB for the AGIPD per-pulse grid), `jungfrau_waxs_overview`, which draws
 the two as **two traces with their overlap shaded** (§6 O5) and states the AGIPD gap on the figure
-(§6 O6). `tests/test_context.py` now checks every integration wrapper's body is an import and a
-call, by AST rather than by line count.
+(§6 O6), and `jungfrau_waxs_combined`. `tests/test_context.py` checks every integration wrapper's
+body is an import and a call, by AST rather than by line count.
 
-*Remaining:* run them on r0423 and r0426. Needs the cluster and the real PONI files.
+**A bulk reprocess survives a dark run.** D4′'s `None` return runs through the whole surface:
+`jungfrau_waxs` returns `None` for a run with no lit cell, `combined_curve` returns `None` when
+either detector produced nothing, and `overview_figure` already drew with one or both missing. 43
+of the proposal's runs are in that state, so this is the difference between a reprocess finishing
+and a reprocess stopping on r0001.
+
+*Remaining:* run them on r0423 and r0426. Needs the cluster and the real PONI files — **and a W4
+rerun first**, because the config hash moved (see W4's note). Pre-flight `scripts/w1_facts.py`
+over the full run list: with D4′ it no longer fails on a run whose pattern merely differs, but
+`lit_matches_expected` still reports against the science-block set, which is what tells you which
+block a run belongs to before you integrate it.
+
+---
+
+## 8. Testing conventions
+
+**The suite covers `src/` only.** `scripts/` is not unit-tested: `tests/saxs/test_p4_acceptance.py`,
+`tests/waxs/test_waxs_w1_facts.py` and `tests/waxs/test_waxs_w4_acceptance.py` were removed
+2026-09-14. 406 tests collected.
+
+The consequence is worth being explicit about, because it is a real trade. The acceptance scripts
+are the things that decide whether a run is accepted, and nothing now re-checks their gate logic
+between edits — a change to `stage_ledger` or `_lit_as_configured` is caught by running the script
+on a node, not by pytest. When editing one, run it on r0423 before trusting it.
+
+What was *not* lost: the one test in that set whose subject was `src` — D3's claim that per-frame
+negative variances cancel on pooling — moved to `tests/waxs/test_waxs_writer.py`, where it tests
+`pooled_per_train` directly instead of the script that happens to report it. Nothing else in the
+three files asserted anything about `analysis.*`.
+
+**The mock run costs 135 MB.** `data/adc` is dense `float32` over 16 cells of 512×1024, because the
+real detector is. `tests/waxs/conftest.py`'s `mock_run_factory` caches one run per **resolved**
+keyword signature — bound against `write_mock_run`'s own defaults, so passing a default explicitly
+does not silently write a second identical copy — and holds it for the whole session. So the
+suite's peak is 135 MB × the number of distinct signatures. Three things keep that bounded:
+
+- `data/mask` is recreated gzip+shuffle before it is filled, `(1, 16, 512, 1024)` chunks as the
+  real CORR files use. Its content is a few hundred set bits in a field of zeros, so it goes from
+  134 MB to 0.74 MB and both reading and writing get *faster*. `adc` is left alone: dense noise,
+  15 % for 2.3 s of deflate per run, paid back on every read.
+- `fill=False` creates the datasets unwritten — kilobytes, not megabytes — for tests that read only
+  metadata (source names, INDEX, train ids). Anything reading a frame gets the fill value silently,
+  so it is only for those.
+- `pyproject.toml` sets `tmp_path_retention_policy = "failed"` and `tmp_path_retention_count = 1`.
+  pytest's defaults keep the last *three* sessions' basetemps, which is gigabytes of synthetic
+  detector frames outliving the run that made them.
+
+**Add a new mock signature deliberately.** Each one is another 135 MB for the session.

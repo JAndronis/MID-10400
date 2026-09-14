@@ -28,7 +28,6 @@ from typing import Any, Protocol, runtime_checkable
 import h5py
 import numpy as np
 
-from analysis.common.config import OPERATIONAL_FIELDS
 from analysis.common.plan import Block, RunPlan
 from analysis.common.status import FrameStatus
 
@@ -65,6 +64,9 @@ class PassConfig(Protocol):
 
     @property
     def output_file(self) -> Path: ...
+
+    @property
+    def operational_fields(self) -> frozenset[str]: ...
 
     def config_hash(self) -> str: ...
 
@@ -204,9 +206,11 @@ class FrameTableWriter:
         )
         # Which fields the hash covers, so a stored file explains its own
         # compatibility rules rather than requiring the reader to have the
-        # matching source version to hand.
+        # matching source version to hand. Asked of the config rather than
+        # taken from the shared constant: the two passes exclude different
+        # sets, and a provenance record that says otherwise is worse than none.
         provenance.attrs["config_operational_fields"] = json.dumps(
-            sorted(OPERATIONAL_FIELDS)
+            sorted(cfg.operational_fields)
         )
         provenance.attrs["detector_name"] = plan.detector_name
         provenance.attrs["run_checks"] = json.dumps(plan.checks, default=str)

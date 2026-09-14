@@ -52,9 +52,12 @@ from analysis.common.masks import describe_bits  # noqa: E402
 from analysis.common.plan import evenly_spaced  # noqa: E402
 from analysis.waxs.cells import CellAccumulator  # noqa: E402
 from analysis.waxs.config import (  # noqa: E402
+    CELLS_PER_TRAIN,
     DETECTORS,
     EXPECTED_BITS,
+    EXPECTED_LIT_CELLS,
     config_for,
+    is_storage_cell_sequence,
 )
 from analysis.waxs.operator import build_operator  # noqa: E402
 from analysis.waxs.plan import open_detector  # noqa: E402
@@ -107,7 +110,19 @@ def stage_sources(cfg: Any, dc: Any, det: Any) -> dict[str, Any]:
 
 
 def stage_cells(cfg: Any, det: Any, op: Any, n_trains: int) -> dict[str, Any]:
-    """O4: the lit-cell split and the readout noise, over sampled trains."""
+    """O4: the lit-cell split and the readout noise, over sampled trains.
+
+    ``cfg.expected_lit_cells`` is ``None`` unless a caller pinned it, because
+    the proposal used four different readout patterns between r0001 and r0500
+    and the pass measures the set per run. This stage is still the place the
+    *expectation* is checked, so an unpinned config is compared against
+    :data:`~analysis.waxs.config.EXPECTED_LIT_CELLS`, the science-block set:
+    a pre-flight that quietly accepted every pattern would answer nothing.
+
+    ``lit_is_storage_cell_sequence`` is the separate, run-invariant question —
+    is this shape one a JUNGFRAU can even produce? A ``False`` there means the
+    classification is wrong, not that the run is unusual.
+    """
     sampled = evenly_spaced(np.asarray(det.train_ids, dtype=np.uint64), n_trains)
     accumulator = CellAccumulator(cfg, op.static_bad)
     for train_id in sampled.tolist():
@@ -116,14 +131,20 @@ def stage_cells(cfg: Any, det: Any, op: Any, n_trains: int) -> dict[str, Any]:
 
     bits = {b for b in range(32) if accumulator.bits_present >> b & 1}
     unexpected = bits - set(EXPECTED_BITS)
-    matches = result.lit == tuple(cfg.expected_lit_cells)
+    pinned = cfg.expected_lit_cells is not None
+    expected = tuple(cfg.expected_lit_cells) if pinned else EXPECTED_LIT_CELLS
+    matches = result.lit == expected
+    plausible = is_storage_cell_sequence(result.lit, CELLS_PER_TRAIN)
     return {
-        "passed": matches and not unexpected,
+        "passed": matches and plausible and not unexpected,
         "sampled_trains": [int(t) for t in sampled],
         "lit": list(result.lit),
         "dark": list(result.dark),
-        "expected_lit": list(cfg.expected_lit_cells),
+        "expected_lit": list(expected),
+        "expected_lit_pinned": pinned,
         "lit_matches_expected": matches,
+        "lit_is_storage_cell_sequence": plausible,
+        "gap_ratio": result.gap_ratio,
         "lit_fraction": {
             int(c): float(f)
             for c, f in zip(result.cells, result.lit_fraction, strict=True)
@@ -285,9 +306,16 @@ def inspect(proposal: int, run: int, detector: str, args) -> dict[str, Any]:
     det = open_detector(cfg, dc)
     report["sources"] = stage_sources(cfg, dc, det)
     report["cells"] = stage_cells(cfg, det, op, args.trains)
-    lit = tuple(report["cells"]["lit"]) or tuple(cfg.expected_lit_cells)
+    lit = tuple(report["cells"]["lit"])
     report["mask_variability"] = stage_mask_variability(cfg, det, args.trains)
-    report["roi"] = stage_roi(cfg, det, lit, args.repeats)
+    # A run with no beam has no lit cell, so there is no window to ask for.
+    # Falling back to the expected set here would time a read of cells this run
+    # does not have, and report it as if it were this run's answer.
+    report["roi"] = (
+        stage_roi(cfg, det, lit, args.repeats)
+        if lit
+        else {"passed": None, "reason": "no lit cell in this run; no ROI to time"}
+    )
     report["values"] = stage_values(cfg, det, op)
 
     verdicts = [

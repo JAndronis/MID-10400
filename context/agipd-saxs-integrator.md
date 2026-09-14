@@ -476,8 +476,8 @@ Parallel efficiency 0.856, with 54.5 s (14 %) of the wall outside the workers' t
 serial part; nothing else depends on it.
 
 `scripts/p4_acceptance.py` runs the pass and the gates and writes its verdict as JSON beside
-itself; the gates are unit-tested against the mock run (`tests/saxs/test_p4_acceptance.py`),
-including a deliberately corrupted stored row. Gate B re-reads what the writer stored and pools it
+itself. The gates are **not** unit-tested: the test suite covers `src/` only, so a change to the
+gates is caught by running the script on a node, not by pytest. Gate B re-reads what the writer stored and pools it
 the way §9 does, so the row-to-train map, the `f4` storage and `pooled_per_train` are all inside
 the comparison; the per-frame kernel is the self-test's job. It needs a DAMNIT-partition node, the
 real geometry and mask files, and r0423. **Rerun it whenever the frame loop, the masks or the

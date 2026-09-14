@@ -16,7 +16,7 @@ from pyFAI.units import hc  # keV·Å, derived from scipy CODATA (pyFAI/units.py
 # Re-exported: the whole package and its tests reach these through
 # ``analysis.saxs.config``, and ``test_config`` calls ``physical_cores`` with a
 # fixture topology root.
-from analysis.common.config import config_sha256
+from analysis.common.config import OPERATIONAL_FIELDS, config_sha256
 from analysis.common.cpu import file_sha256, physical_cores
 
 __all__ = [
@@ -215,4 +215,9 @@ class AgipdSaxsConfig:
         refuse its own output. See :mod:`analysis.common.config`. They are still
         recorded in full in the provenance record.
         """
-        return config_sha256(self, self.input_files)
+        return config_sha256(self, self.input_files, self.operational_fields)
+
+    @property
+    def operational_fields(self) -> frozenset[str]:
+        """Which fields :meth:`config_hash` excludes, for the provenance record."""
+        return OPERATIONAL_FIELDS

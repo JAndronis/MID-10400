@@ -102,7 +102,11 @@ def build_plan(
 
     :param lit_cells: the memory cells to integrate, measured from the data by
         :class:`analysis.waxs.cells.CellAccumulator`. They set how many rows a
-        train owns, which is why the plan cannot be built before them.
+        train owns, which is why the plan cannot be built before them. An empty
+        set is allowed and gives a plan of zero rows: a run that saw no beam is
+        not a broken run, and 43 of the proposal's are like that. Whether that
+        is worth integrating is :func:`analysis.waxs.run.run_jungfrau_waxs`'s
+        call, not this function's.
     :param dc: an open ``DataCollection``. When ``None``, the proc run named by
         ``cfg`` is opened.
     :param control_dc: where :func:`run_checks` looks for the timeserver and
@@ -112,9 +116,6 @@ def build_plan(
 
     :raises InconsistentEntries: a train holds other than one detector entry.
     """
-    if not lit_cells:
-        raise ValueError("lit_cells is empty; there would be nothing to integrate")
-
     opened_here = dc is None
     if opened_here:
         from extra_data import open_run

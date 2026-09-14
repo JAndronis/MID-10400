@@ -44,6 +44,10 @@ def jungfrau_waxs(proposal: int, run_no: int, detector: str, **overrides: Any) -
     ``IncompleteRun`` unless ``allow_incomplete``, and this does not catch it.
     The per-frame sums land in ``scratch/jungfrau_waxs/r{run:04d}/`` either way,
     so the ledger explains what happened.
+
+    Returns ``None`` for a run with no lit memory cell — no beam means no I(q),
+    which is a result and not a failure. The reason is logged at WARNING with
+    the evidence that produced it.
     """
     from analysis.waxs.run import run_jungfrau_waxs
 
@@ -75,10 +79,25 @@ def combined_curve(jf1: Any, jf2: Any, *, method: str = "wls") -> Any:
     does, and 2 in the overlap, so a reader can always tell which detector a
     point came from.
 
+    Returns ``None`` when either detector produced nothing — a run with no beam
+    gives no I(q) on either, and there is nothing to combine. The per-detector
+    variables say the same thing on their own, so this stays quiet rather than
+    raising and taking a reprocess down with it.
+
     :raises NoOverlap: the two populate no shared q range. That is a geometry
         problem, not a plotting one, so it is not swallowed.
     """
     import xarray as xr
+
+    missing = [
+        name for name, grid in zip(DETECTORS, (jf1, jf2), strict=True) if grid is None
+    ]
+    if missing:
+        log.info(
+            "no combined curve: %s produced no frames to combine",
+            " and ".join(missing),
+        )
+        return None
 
     q_ref, i_ref, s_ref = mean_curve(jf1)
     q_other, i_other, s_other = mean_curve(jf2)

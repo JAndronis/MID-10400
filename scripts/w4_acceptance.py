@@ -56,7 +56,12 @@ import numpy as np  # noqa: E402
 from analysis.common.masks import describe_bits, frame_bad  # noqa: E402
 from analysis.common.status import FrameStatus  # noqa: E402
 from analysis.waxs.cells import UnexpectedLitCells  # noqa: E402
-from analysis.waxs.config import EXPECTED_BITS, config_for  # noqa: E402
+from analysis.waxs.config import (  # noqa: E402
+    CELLS_PER_TRAIN,
+    EXPECTED_BITS,
+    config_for,
+    is_storage_cell_sequence,
+)
 from analysis.waxs.integrate import ErrorModel  # noqa: E402
 from analysis.waxs.operator import build_operator  # noqa: E402
 from analysis.waxs.plan import open_detector  # noqa: E402
@@ -90,6 +95,21 @@ def _git_commit() -> str:
         ).stdout.strip()
     except Exception:  # noqa: BLE001 - provenance is best-effort
         return "unknown"
+
+
+def _lit_as_configured(cfg: Any, lit: list[int]) -> bool:
+    """Does the file's lit set satisfy what this config asks of it?
+
+    ``cfg.expected_lit_cells`` pins one named set and is ``None`` unless a
+    caller asked for that, because the proposal used four different readout
+    patterns and the pass measures the set per run. Unpinned, the acceptance
+    cannot re-derive which cells *should* have been selected without reading
+    the frames again — so it asks the run-invariant question instead: is the
+    stored set non-empty, and is it a shape a JUNGFRAU can produce?
+    """
+    if cfg.expected_lit_cells is not None:
+        return lit == list(cfg.expected_lit_cells)
+    return bool(lit) and is_storage_cell_sequence(tuple(lit), CELLS_PER_TRAIN)
 
 
 # ── gate A: run the pass ─────────────────────────────────────────────────────
@@ -170,7 +190,7 @@ def stage_configuration(cfg: Any, output: Path, workers: int) -> dict[str, Any]:
     checks = {
         "config_hash_matches": stored_hash == expected,
         "workers_as_requested": n_workers == workers,
-        "lit_matches_config": lit == list(cfg.expected_lit_cells),
+        "lit_matches_config": _lit_as_configured(cfg, lit),
     }
     return {
         "passed": all(checks.values()),
@@ -402,7 +422,7 @@ def stage_ledger(cfg: Any, output: Path, pool: bool = True) -> dict[str, Any]:
             reconciles
             and set(counts) == {"OK"}
             and not unexpected
-            and lit == list(cfg.expected_lit_cells)
+            and _lit_as_configured(cfg, lit)
         ),
         "status_counts": counts,
         "train_status_counts": train_counts,

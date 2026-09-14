@@ -80,3 +80,11 @@ addopts = "-ra"
 markers = [
     "integration: requires extra_data + real EuXFEL data (skipped when unavailable)",
 ]
+# The JUNGFRAU mock run is 135 MB (dense float32 over 16 memory cells of
+# 512x1024, as the real detector is), the fixtures cache one per distinct
+# keyword signature, and pytest's defaults keep the last *three* sessions'
+# basetemps. That is gigabytes of synthetic detector frames outliving the run
+# that made them. "failed" deletes the whole basetemp when the session passes,
+# and the count bounds what a failing session leaves behind for debugging.
+tmp_path_retention_policy = "failed"
+tmp_path_retention_count = 1
