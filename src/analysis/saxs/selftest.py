@@ -18,6 +18,7 @@ from dataclasses import asdict, dataclass
 
 import numpy as np
 
+from analysis.common.selftest import relative_difference
 from analysis.saxs.operator import SparseOperator
 from analysis.saxs.sparse import integrate_frame
 
@@ -66,11 +67,6 @@ class SelfTestFailed(AssertionError):
         self.report = report
 
 
-def _rel(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    """Relative difference ``|a - b| / max(|b|, 1e-12)``."""
-    return np.abs(a - b) / np.maximum(np.abs(b), 1e-12)
-
-
 def reference_frame(engine, op: SparseOperator, x: np.ndarray, bad: np.ndarray):
     """Integrate one frame densely with the pyFAI engine.
 
@@ -107,9 +103,13 @@ def compare_frame(
         return 0.0, 0.0, 0.0, empty_bins_agree
 
     return (
-        float(_rel(result.signal, ref.signal)[populated].max()),
-        float(_rel(result.normalization, ref.normalization)[populated].max()),
-        float(_rel(result.variance, ref.variance)[populated].max()),
+        float(relative_difference(result.signal, ref.signal)[populated].max()),
+        float(
+            relative_difference(result.normalization, ref.normalization)[
+                populated
+            ].max()
+        ),
+        float(relative_difference(result.variance, ref.variance)[populated].max()),
         empty_bins_agree,
     )
 

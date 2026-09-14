@@ -65,6 +65,7 @@ import numpy as np  # noqa: E402
 
 from analysis.common.masks import frame_bad  # noqa: E402
 from analysis.common.plan import evenly_spaced  # noqa: E402
+from analysis.common.selftest import relative_difference  # noqa: E402
 from analysis.common.status import FrameStatus  # noqa: E402
 from analysis.saxs import masks as masks_module  # noqa: E402
 from analysis.saxs import operator as operator_module  # noqa: E402
@@ -253,24 +254,9 @@ def stage_reference(
         both = populated_ours & populated_ref
         intensity_ours = signal_ours[both] / norm_ours[both]
         intensity_ref = signal_ref[both] / norm_ref[both]
-        rel_i = float(
-            (
-                np.abs(intensity_ours - intensity_ref)
-                / np.maximum(np.abs(intensity_ref), 1e-12)
-            ).max()
-        )
-        rel_s = float(
-            (
-                np.abs(signal_ours[both] - signal_ref[both])
-                / np.maximum(np.abs(signal_ref[both]), 1e-12)
-            ).max()
-        )
-        rel_n = float(
-            (
-                np.abs(norm_ours[both] - norm_ref[both])
-                / np.maximum(np.abs(norm_ref[both]), 1e-12)
-            ).max()
-        )
+        rel_i = float(relative_difference(intensity_ours, intensity_ref).max())
+        rel_s = float(relative_difference(signal_ours[both], signal_ref[both]).max())
+        rel_n = float(relative_difference(norm_ours[both], norm_ref[both]).max())
         worst_intensity = max(worst_intensity, rel_i)
         worst_signal = max(worst_signal, rel_s)
         worst_normalization = max(worst_normalization, rel_n)

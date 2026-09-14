@@ -27,6 +27,7 @@ from pathlib import Path
 import numpy as np
 from pyFAI.integrator.azimuthal import AzimuthalIntegrator
 
+from analysis.common.selftest import relative_difference
 from analysis.waxs.config import MODULE_SHAPE
 from analysis.waxs.integrate import ErrorModel, extreme_pixels, integrate_frame
 from analysis.waxs.operator import WaxsOperator
@@ -93,7 +94,7 @@ def reference_frame(
 
 
 def _relative(got: np.ndarray, want: np.ndarray) -> float:
-    return float(np.max(np.abs(got - want) / np.maximum(np.abs(want), 1e-12)))
+    return float(np.max(relative_difference(got, want)))
 
 
 def compare_frame(
