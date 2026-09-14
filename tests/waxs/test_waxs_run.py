@@ -19,7 +19,8 @@ pytest.importorskip("extra_data")
 
 from analysis.common.status import FrameStatus  # noqa: E402
 from analysis.waxs.cells import UnexpectedLitCells  # noqa: E402
-from analysis.waxs.run import ReadNoiseUnavailable, run_jungfrau_waxs  # noqa: E402
+from analysis.waxs.config import EXPECTED_LIT_CELLS  # noqa: E402
+from analysis.waxs.run import run_jungfrau_waxs  # noqa: E402
 from analysis.waxs.selftest import SelfTestFailed  # noqa: E402
 from analysis.waxs.writer import IncompleteRun  # noqa: E402
 
@@ -202,29 +203,83 @@ def test_resume_processes_only_the_missing_blocks(cfg, mock_run_factory, tmp_pat
     assert submitted == []  # a complete run does no work
 
 
-def test_an_unexpected_lit_set_stops_the_run(cfg, mock_run_factory, tmp_path):
-    """§3 D4, end to end: nothing is written when the pattern is wrong."""
-    mock, dc = mock_run_factory(lit_cells=(0, 1, 2, 3))
-    with pytest.raises(UnexpectedLitCells, match="are lit"):
-        run(cfg, mock, dc, output_path=tmp_path / "lit.h5")
-    assert not (tmp_path / "lit.h5").exists()
-
-
-def test_a_run_with_no_dark_cell_needs_a_configured_noise(
+def test_a_pinned_lit_set_that_the_data_contradicts_stops_the_run(
     cfg, mock_run_factory, tmp_path
 ):
+    """§3 D4, end to end: nothing is written when the pinned pattern is wrong.
+
+    Pinned, because the pass measures the set per run by default — the
+    proposal used four readout patterns. ``(0, 1, 2, 3)`` is a shape a
+    JUNGFRAU can read, so only the pin catches it.
+    """
+    mock, dc = mock_run_factory(lit_cells=(0, 1, 2, 3))
+    pinned = dataclasses.replace(cfg, expected_lit_cells=EXPECTED_LIT_CELLS)
+    with pytest.raises(UnexpectedLitCells, match="are lit"):
+        run(pinned, mock, dc, output_path=tmp_path / "lit.h5")
+    assert not (tmp_path / "lit.h5").exists()
+
+    # ...and unpinned the same run is integrated without complaint, because a
+    # run that really does read four cells is not a broken run.
+    grid = run(cfg, mock, dc, output_path=tmp_path / "unpinned.h5")
+    assert grid.shape[1] == 4
+
+
+def test_a_run_with_no_lit_cell_returns_nothing_and_says_why(
+    cfg, mock_run_factory, tmp_path, caplog
+):
+    """43 of the proposal's runs saw no beam. That is a result, not a failure.
+
+    Raising here would make a bulk DAMNIT reprocess fall over on runs that are
+    simply dark, so the pass logs the evidence and returns ``None``.
+    """
+    import logging
+
+    mock, dc = mock_run_factory(lit_cells=())
+    with caplog.at_level(logging.WARNING, logger="analysis.waxs.run"):
+        assert run(cfg, mock, dc, output_path=tmp_path / "dark.h5") is None
+
+    assert not (tmp_path / "dark.h5").exists()
+    # The evidence, not just the verdict: which cell came closest, and to what.
+    assert "no memory cell is lit" in caplog.text
+    assert "lit fraction" in caplog.text
+
+
+def test_a_run_with_no_dark_cell_falls_back_to_the_configured_noise(
+    cfg, mock_run_factory, tmp_path
+):
+    """213 of the proposal's runs read all 16 cells, so none is left to measure.
+
+    Raising there would take a whole DAMNIT reprocess down on runs that are
+    perfectly ordinary, so sigma_read falls back to the per-detector median and
+    ``ErrorModel.source`` records that it did.
+    """
+    import json
+
     mock, dc = mock_run_factory(lit_cells=tuple(range(16)))
     everything = dataclasses.replace(cfg, expected_lit_cells=tuple(range(16)))
-    with pytest.raises(ReadNoiseUnavailable, match="cfg.read_noise_kev"):
-        run(everything, mock, dc, output_path=tmp_path / "noise.h5")
 
-    grid = run(
+    grid = run(everything, mock, dc, output_path=tmp_path / "fallback.h5")
+    assert grid.shape[1] == 16
+    with h5py.File(tmp_path / "fallback.h5") as handle:
+        model = json.loads(handle["provenance"].attrs["error_model"])
+    assert model["source"] == "fallback"
+    assert model["read_noise_kev"] == pytest.approx(cfg.read_noise_fallback_kev)
+
+    # ...and the fallback cannot be cleared: ``None`` means "use the
+    # per-detector default" and __post_init__ resolves it, so a constructed
+    # config never holds None. Pinned because reading it the other way is what
+    # made an earlier version of this test assert an unreachable branch.
+    stripped = dataclasses.replace(everything, read_noise_fallback_kev=None)
+    assert stripped.read_noise_fallback_kev == cfg.read_noise_fallback_kev
+
+    # An explicit value still wins over both.
+    configured = run(
         dataclasses.replace(everything, read_noise_kev=0.32),
         mock,
         dc,
         output_path=tmp_path / "noise2.h5",
     )
-    assert grid.shape[1] == 16
+    assert configured.shape[1] == 16
 
 
 def test_allow_incomplete_returns_instead_of_raising(cfg, mock_run_factory, tmp_path):

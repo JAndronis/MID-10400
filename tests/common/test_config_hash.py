@@ -18,7 +18,11 @@ from analysis.common.config import OPERATIONAL_FIELDS, result_fields
 pytest.importorskip("pyFAI")
 
 from analysis.saxs.config import AgipdSaxsConfig  # noqa: E402
-from analysis.waxs.config import JungfrauWaxsConfig  # noqa: E402
+from analysis.waxs.config import (  # noqa: E402
+    EXPECTED_LIT_CELLS,
+    WAXS_OPERATIONAL_FIELDS,
+    JungfrauWaxsConfig,
+)
 
 #: Fields that must not move a hash. Every pass shares this set.
 OPERATIONAL = (
@@ -87,6 +91,32 @@ def test_a_worker_count_does_not_change_a_waxs_hash(waxs):
     explicit = dataclasses.replace(waxs, n_workers=36)
     default = dataclasses.replace(waxs, n_workers=None)
     assert explicit.config_hash() == default.config_hash()
+
+
+def test_pinning_the_lit_cells_does_not_change_a_waxs_hash(waxs):
+    """``expected_lit_cells`` only *gates*, so by pitfall 12 it stays out.
+
+    It refuses a run whose measured pattern is not the pinned one, and it does
+    that before the output file is opened — so it can never change a value in
+    ``/frames``, and pinning it for a reprocess must not invalidate the files
+    written without it.
+    """
+    pinned = dataclasses.replace(waxs, expected_lit_cells=EXPECTED_LIT_CELLS)
+    assert pinned.expected_lit_cells != waxs.expected_lit_cells
+    assert pinned.config_hash() == waxs.config_hash()
+
+
+def test_the_lit_thresholds_do_move_a_waxs_hash(waxs):
+    """The opposite case, and the reason the two are not one field.
+
+    ``lit_fraction_min`` and ``lit_gap_ratio`` decide which cells come out lit,
+    and so which rows exist at all. They stay in the hash.
+    """
+    for field, value in (("lit_fraction_min", 1e-3), ("lit_gap_ratio", 50.0)):
+        assert (
+            dataclasses.replace(waxs, **{field: value}).config_hash()
+            != waxs.config_hash()
+        ), field
 
 
 def test_overwrite_does_not_change_a_hash(waxs):
@@ -171,15 +201,24 @@ def test_every_operational_field_exists_on_both_configs(agipd, waxs):
 
 def test_result_fields_excludes_exactly_the_operational_set(waxs):
     names = {f.name for f in dataclasses.fields(waxs)}
-    kept = set(result_fields(waxs))
-    assert kept == names - OPERATIONAL_FIELDS
+    # The default is the shared six...
+    assert set(result_fields(waxs)) == names - OPERATIONAL_FIELDS
+    # ...and what the hash actually uses is the config's own set, which for
+    # this pass is one wider.
+    assert set(result_fields(waxs, waxs.operational_fields)) == (
+        names - WAXS_OPERATIONAL_FIELDS
+    )
 
 
 def test_result_fields_renders_sets_and_tuples_stably(waxs):
-    payload = result_fields(waxs)
-    assert payload["expected_bits"] == sorted(waxs.expected_bits)
-    assert payload["method"] == list(waxs.method)
-    assert payload["expected_lit_cells"] == list(waxs.expected_lit_cells)
+    pinned = dataclasses.replace(waxs, expected_lit_cells=EXPECTED_LIT_CELLS)
+    payload = result_fields(pinned)
+    assert payload["expected_bits"] == sorted(pinned.expected_bits)
+    assert payload["method"] == list(pinned.method)
+    assert payload["expected_lit_cells"] == list(pinned.expected_lit_cells)
+    # An unpinned set is None, not an empty tuple: "measure it" and "measure it
+    # and expect nothing" are different instructions and must not render alike.
+    assert result_fields(waxs)["expected_lit_cells"] is None
 
 
 def test_the_stored_file_says_which_fields_the_hash_covers(waxs, tmp_path):
@@ -204,7 +243,12 @@ def test_the_stored_file_says_which_fields_the_hash_covers(waxs, tmp_path):
     with h5py.File(path) as handle:
         recorded = json.loads(handle["provenance"].attrs["config_operational_fields"])
         stored = json.loads(handle["provenance"].attrs["config"])
-    assert set(recorded) == set(OPERATIONAL_FIELDS)
+    # The set the *config* excludes, not the shared constant: the JUNGFRAU pass
+    # excludes one more, and a provenance record that claimed otherwise would
+    # be worse than none.
+    assert set(recorded) == set(waxs.operational_fields)
+    assert set(recorded) == set(OPERATIONAL_FIELDS) | {"expected_lit_cells"}
+    assert set(recorded) == set(WAXS_OPERATIONAL_FIELDS)
     # ...and the operational values themselves are still there, in full.
     assert stored["n_workers"] == waxs.n_workers
     assert stored["output_root"] == waxs.output_root

@@ -276,3 +276,37 @@ def test_pooled_per_train_agrees_with_the_stored_sums(worker_ready, tmp_path):
     got = pooled["intensity"].values[0]
     assert got == pytest.approx(expected, rel=1e-5)
     assert int(pooled["n_frames"].values[0]) == count
+
+
+def test_pooling_really_does_cancel_per_frame_negatives(worker_ready, tmp_path):
+    """§3 D3's actual claim, forced rather than waited for.
+
+    "Store the variance unclamped, pooling fixes it" is a claim about
+    *cancellation*, and a test that only ever saw positive frames would pass
+    whether or not it were true. So half a train's frames are driven negative
+    in one bin and the rest positive by more — how noise around a small true
+    variance behaves — and the pooled sum has to survive it.
+    """
+    path = written(worker_ready, tmp_path)
+    with h5py.File(path, "r+") as handle:
+        variance = handle["frames/variance"][:]
+        count = int(handle["trains/count"][0])
+        first = int(handle["trains/first"][0])
+        variance[first : first + count // 2, 0] = -1.0
+        variance[first + count // 2 : first + count, 0] = 3.0
+        handle["frames/variance"][:] = variance
+
+    per_train = pooled_per_train(path)
+    assert per_train["sigma"].values[0, 0] > 0
+    assert int(per_train.attrs["negative_variance_bins"]) == 0
+
+    # ...and when they do not cancel, the reducer says so instead of rooting a
+    # negative number.
+    with h5py.File(path, "r+") as handle:
+        variance = handle["frames/variance"][:]
+        variance[first : first + count, 0] = -1.0
+        handle["frames/variance"][:] = variance
+
+    per_train = pooled_per_train(path)
+    assert per_train["sigma"].values[0, 0] == 0.0
+    assert int(per_train.attrs["negative_variance_bins"]) >= 1

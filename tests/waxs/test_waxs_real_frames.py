@@ -44,7 +44,11 @@ from waxs_mockrun import write_synthetic_poni  # noqa: E402
 
 from analysis.common.masks import frame_bad  # noqa: E402
 from analysis.waxs.cells import CellAccumulator  # noqa: E402
-from analysis.waxs.config import EXPECTED_BITS, JungfrauWaxsConfig  # noqa: E402
+from analysis.waxs.config import (  # noqa: E402
+    EXPECTED_BITS,
+    EXPECTED_LIT_CELLS,
+    JungfrauWaxsConfig,
+)
 from analysis.waxs.integrate import ErrorModel, integrate_frame  # noqa: E402
 from analysis.waxs.operator import build_operator  # noqa: E402
 from analysis.waxs.selftest import run_selftest  # noqa: E402
@@ -137,11 +141,14 @@ def test_the_lit_array_positions_are_the_first_eight(real):
     assert result.lit_fraction[:8].min() > 0.40
     assert result.lit_fraction[8:].max() < 0.001
 
-    # ...and so this set is *not* the configured one, which is about cell ids.
+    # Positions 0-7 are consecutive, so the run-invariant shape check is happy
+    # with them - which is the point: it cannot catch a pitfall-4 mix-up.
+    result.check_structure(16)
+    # ...and so this set is *not* the expected one, which is about cell ids.
     from analysis.waxs.cells import UnexpectedLitCells
 
     with pytest.raises(UnexpectedLitCells):
-        result.check_expected(cfg.expected_lit_cells)
+        result.check_expected(EXPECTED_LIT_CELLS)
 
 
 def test_the_read_noise_is_recovered(real):

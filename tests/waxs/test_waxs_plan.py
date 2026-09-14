@@ -84,10 +84,19 @@ def test_a_block_never_straddles_a_gap(cfg, mock_run_factory, operator):
     assert 10001 not in {t for b in plan.blocks for t in b.train_ids}
 
 
-def test_empty_lit_cells_is_refused(cfg, mock_run_factory):
+def test_an_empty_lit_set_plans_no_rows_rather_than_refusing(cfg, mock_run_factory):
+    """A run that saw no beam is not a broken run; 43 of the proposal's are.
+
+    ``run_jungfrau_waxs`` returns before it ever gets here on such a run, but
+    the plan itself must not refuse one: whether an empty set is worth
+    integrating is the pass's call, not the row model's.
+    """
     _, dc = mock_run_factory()
-    with pytest.raises(ValueError, match="nothing to integrate"):
-        build_plan(cfg, (), dc=dc, control_dc=dc)
+    plan = build_plan(cfg, (), dc=dc, control_dc=dc)
+
+    assert plan.n_frames == 0
+    assert all(record.n_frames == 0 for record in plan.trains)
+    assert plan.checks["lit_cells"] == []
 
 
 def test_run_checks_record_the_entry_shape(pipeline):
@@ -167,11 +176,14 @@ def test_auto_detection_is_ambiguous_with_both_detectors_present(
 
     root = tmp_path / "both"
     for detector in ("jf1", "jf2"):
+        # fill=False: this asserts on source names and nothing reads a frame,
+        # so writing 135 MB of adc twice would buy nothing.
         write_mock_run(
             root,
             detector_name=DETECTOR_NAMES[detector],
             module=DETECTOR_MODNOS[detector],
             train_ids=(10000, 10001),
+            fill=False,
         )
     dc = RunDirectory(str(root))
 

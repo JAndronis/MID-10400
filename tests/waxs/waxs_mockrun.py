@@ -19,6 +19,14 @@ JUNGFRAU-500K module with its own PONI and mask, and ``plan.open_detector``
 refuses a multi-module selection outright, so a train can only have its one
 module or none.
 
+**A filled run costs 135 MB on disk**, nearly all of it ``data/adc``: 16 cells
+of 512x1024 float32 per train, dense by construction because the real detector
+is. ``data/mask`` used to cost the same again until it was compressed (see
+``_recreate_mask_compressed``). The fixtures cache a run per distinct keyword
+signature and hold it for the whole session, so the suite's peak is that 135 MB
+times the number of distinct signatures — keep new signatures deliberate, and
+pass ``fill=False`` for a run whose frames are never read.
+
 This leans on ``extra_data.tests.mockdata``, an internal test package of
 EXtra-data with no API stability promise — the same dependency the AGIPD mock
 carries, and the same thing to check on an EXtra-data upgrade.
@@ -126,6 +134,7 @@ def write_mock_run(
     nonfinite_train: int | None = None,
     extreme_train: int | None = None,
     shuffled_cells_train: int | None = None,
+    fill: bool = True,
     seed: int = 0,
 ) -> MockRun:
     """Write a one-module proc-like JUNGFRAU run under ``root``.
@@ -142,6 +151,12 @@ def write_mock_run(
         carries, unflagged — on a kept pixel of this train's first lit cell.
     :param shuffled_cells_train: give this train a repeated ``memoryCell``
         entry, so its rows cannot be filled by label.
+    :param fill: write frame content. ``False`` leaves ``data/adc``,
+        ``data/mask`` and ``data/memoryCell`` created but unwritten, which for
+        a chunked dataset means no space is allocated for them at all — a run
+        that costs kilobytes instead of 135 MB. Only for tests that read the
+        file's *metadata*: source names, INDEX, train ids. Anything that reads
+        a frame gets the fill value, silently.
     """
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
@@ -167,18 +182,19 @@ def write_mock_run(
         _zero_entry_counts(path, detector_name, train_ids, zero_entry_trains, module)
     if legacy_alias:
         _add_legacy_alias(path, detector_name, module)
-    _fill_frames(
-        path,
-        detector_name,
-        module,
-        train_ids,
-        lit_cells=lit_cells,
-        static=static,
-        seed=seed,
-        nonfinite_train=nonfinite_train,
-        extreme_train=extreme_train,
-        shuffled_cells_train=shuffled_cells_train,
-    )
+    if fill:
+        _fill_frames(
+            path,
+            detector_name,
+            module,
+            train_ids,
+            lit_cells=lit_cells,
+            static=static,
+            seed=seed,
+            nonfinite_train=nonfinite_train,
+            extreme_train=extreme_train,
+            shuffled_cells_train=shuffled_cells_train,
+        )
 
     return MockRun(
         path=root,
@@ -281,6 +297,39 @@ def _zero_entry_counts(
         index["count"][:] = counts
 
 
+def _recreate_mask_compressed(group: h5py.Group) -> h5py.Dataset:
+    """Replace ``data/mask`` with a gzip+shuffle copy of itself, still empty.
+
+    ``write_file`` creates it uncompressed, so once every entry is filled it
+    costs 134 MB per run on disk — half of what a mock run weighs, and the
+    bytes that made a session of these tests fill a disk. Its content is a few
+    hundred bits set in a field of zeros, so gzip takes it to 0.74 MB
+    (measured), and both writing and reading it get *faster*: there is that
+    much less I/O and the deflate is trivial.
+
+    ``adc`` is deliberately left alone. It is dense float32 noise, so the same
+    treatment buys 15 % for 2.3 s of deflate per run and pays it back on every
+    read.
+
+    ``(1, 16, 512, 1024)`` is the chunking the real CORR files use — one chunk
+    spanning all sixteen memory cells, which is what rules an ``roi`` over the
+    lit cells out on real data (W1). The dataset is recreated before anything
+    is written to it, so nothing is orphaned in the file.
+    """
+    shape, dtype = group["mask"].shape, group["mask"].dtype
+    del group["mask"]
+    return group.create_dataset(
+        "mask",
+        shape,
+        dtype,
+        maxshape=(None, *shape[1:]),
+        chunks=(1, *shape[1:]),
+        shuffle=True,
+        compression="gzip",
+        compression_opts=1,
+    )
+
+
 def _fill_frames(
     path: Path,
     detector_name: str,
@@ -306,7 +355,8 @@ def _fill_frames(
 
     with h5py.File(path, "r+") as handle:
         group = handle[f"INSTRUMENT/{source(detector_name, module)}/data"]
-        adc, mask, memory = group["adc"], group["mask"], group["memoryCell"]
+        adc, memory = group["adc"], group["memoryCell"]
+        mask = _recreate_mask_compressed(group)
         n_entries = adc.shape[0]
 
         for entry in range(n_entries):

@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from analysis.waxs.config import (
+    DEFAULT_READ_NOISE_KEV,
     DETECTORS,
     EXPECTED_BITS,
     EXPECTED_LIT_CELLS,
@@ -44,6 +45,17 @@ def test_the_defaults_are_the_measured_ones():
     assert cfg.photon_energy_kev == 9.04
     assert cfg.method == ("full", "csc", "cython")
     assert cfg.read_noise_kev is None  # measured per run, not hardcoded
+    # The lit set is measured per run too: the proposal used four readout
+    # patterns between r0001 and r0500, so EXPECTED_LIT_CELLS is the
+    # science-block expectation a reprocess may pin, never the default.
+    assert cfg.expected_lit_cells is None
+    # The geometric centre of the one empty band in 16 x 746 measured
+    # fractions, 5.654e-05 -> 4.083e-03. See analysis.waxs.cells.
+    assert cfg.lit_fraction_min == pytest.approx(4.805e-4)
+    # Only for runs that read all 16 cells and so have no dark one: the median
+    # over the 159 (run, detector) results per detector where it is measurable.
+    assert cfg.read_noise_fallback_kev == pytest.approx(DEFAULT_READ_NOISE_KEV["jf1"])
+    assert DEFAULT_READ_NOISE_KEV == {"jf1": 0.3440, "jf2": 0.3195}
 
 
 def test_an_unknown_detector_is_refused():
@@ -59,9 +71,14 @@ def test_an_unknown_detector_is_refused():
         ("method", ("bbox", "csr", "cython"), "method must be"),
         ("mask_bits", -1, "uint32"),
         ("expected_lit_cells", (), "at least one cell"),
+        # No storageCellStart produces these, so pinning one means a typo.
+        ("expected_lit_cells", (0, 2, 4), "storage-cell sequence"),
+        ("expected_lit_cells", (1, 12), "storage-cell sequence"),
         ("lit_fraction_min", 0.0, r"\(0, 1\)"),
         ("lit_fraction_min", 1.0, r"\(0, 1\)"),
+        ("lit_gap_ratio", 1.0, "lit_gap_ratio must exceed 1"),
         ("read_noise_kev", 0.0, "read_noise_kev"),
+        ("read_noise_fallback_kev", -0.1, "read_noise_fallback_kev"),
         ("max_abs_kev", 0.0, "max_abs_kev"),
         ("cell_sample_trains", 0, "cell_sample_trains"),
         ("trains_per_block", 0, "trains_per_block"),
@@ -80,12 +97,27 @@ def test_the_hash_covers_every_field_and_the_input_files(cfg):
     for field, value in (
         ("npt", cfg.npt // 2),
         ("photon_energy_kev", 9.0),
-        ("expected_lit_cells", (0, 1)),
         ("lit_threshold_kev", 5.0),
+        ("lit_fraction_min", 1e-3),
+        ("lit_gap_ratio", 50.0),
         ("max_abs_kev", 1e4),
         ("read_noise_kev", 0.32),
+        ("read_noise_fallback_kev", 0.40),
     ):
-        assert dataclasses.replace(cfg, **{field: value}).config_hash() != baseline
+        assert dataclasses.replace(cfg, **{field: value}).config_hash() != baseline, (
+            field
+        )
+
+
+def test_the_hash_ignores_the_pinned_lit_cells(cfg):
+    """It gates before the file is opened, so it cannot change a stored number.
+
+    ``lit_fraction_min`` and ``lit_gap_ratio`` above are the opposite case and
+    stay in: they decide which cells are integrated, and so which rows exist.
+    Full reasoning in :mod:`analysis.common.config` and CLAUDE.md pitfall 12.
+    """
+    pinned = dataclasses.replace(cfg, expected_lit_cells=EXPECTED_LIT_CELLS)
+    assert pinned.config_hash() == cfg.config_hash()
 
 
 def test_the_hash_moves_when_an_input_file_changes(cfg, tmp_path):
