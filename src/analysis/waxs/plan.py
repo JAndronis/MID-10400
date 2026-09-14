@@ -64,9 +64,9 @@ def open_detector(cfg: JungfrauWaxsConfig, dc: Any) -> Any:
         raise ValueError(
             f"{det.detector_name} selects {len(det.source_to_modno)} modules; "
             "this pass integrates one JUNGFRAU-500K module per run because each "
-            "carries its own PONI, its own static mask and its own q range "
-            "(§3 D2). Point cfg.detector_name at a single detector, or pass "
-            "modules= upstream."
+            "carries its own PONI, its own static mask and its own q range. "
+            "Point cfg.detector_name at a single detector, or pass modules= "
+            "upstream."
         )
     return det
 
@@ -260,8 +260,7 @@ def run_checks(
             "lit_cells_per_train": len(lit_cells),
             "note": (
                 "the JUNGFRAU samples a subset of the train's X-ray pulses; "
-                "which subset is unresolved (WAXS context file §5 R5), so no "
-                "pulse id is stored"
+                "which subset is unresolved, so no pulse id is stored"
             ),
         }
 

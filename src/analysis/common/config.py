@@ -116,9 +116,9 @@ def restore_by_name(cfg: Any, state: Any) -> None:
         size = len(state) if isinstance(state, list | tuple) else "?"
         raise ConfigStateMismatch(
             f"{name} arrived as {size} values pickled by position, which is "
-            "what a process running a version of this module from before "
-            "2026-09-14 sends. Nothing in that state says which value is which, "
-            f"so none of it can be trusted. {_SKEW_HINT}"
+            "what a process running an older version of this module sends. "
+            "Nothing in that state says which value is which, so none of it "
+            f"can be trusted. {_SKEW_HINT}"
         )
     names = [field.name for field in fields(cfg)]
     missing = [key for key in names if key not in state]

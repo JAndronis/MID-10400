@@ -260,8 +260,8 @@ class BaseMaskAccumulator:
             warnings.warn(
                 f"image.mask carries unexpected BadPixels bits: "
                 f"{describe_bits(unexpected)}. A blanket mask_bits is only "
-                "correct while every bit present marks an unusable pixel "
-                "(CLAUDE.md pitfall 6) — check these before trusting the run.",
+                "correct while every bit present marks an unusable pixel — "
+                "check these before trusting the run.",
                 UnexpectedMaskBits,
                 stacklevel=2,
             )

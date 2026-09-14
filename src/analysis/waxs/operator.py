@@ -194,7 +194,7 @@ def build_operator(
         raise RuntimeError(
             f"pyFAI resolved method {resolved}, requested {tuple(cfg.method)}; "
             "a method string or an unavailable engine has silently substituted "
-            "another integrator (CLAUDE.md pitfall 1)"
+            "another integrator"
         )
 
     q = _frozen(probe.radial, np.float64)

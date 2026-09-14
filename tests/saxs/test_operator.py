@@ -115,7 +115,7 @@ def test_load_rejects_a_corrupt_operator(op, tmp_path):
 
 
 def test_config_rejects_a_non_full_split_method():
-    with pytest.raises(ValueError, match="rule 1"):
+    with pytest.raises(ValueError, match="method must be"):
         AgipdSaxsConfig(proposal=10400, run=423, method=("no", "csr", "cython"))
 
 

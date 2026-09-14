@@ -110,7 +110,7 @@ def geometry_from_config(cfg: AgipdSaxsConfig) -> AGIPD_1MGeometry:
     if cfg.geometry_file is None:
         raise ValueError(
             "cfg.geometry_file is None; pass a geometry object to "
-            "build_operator directly (P1 synthetic geometry)"
+            "build_operator directly"
         )
     return AGIPD_1MGeometry.from_crystfel_geom(cfg.geometry_file)
 
@@ -175,7 +175,7 @@ def build_operator(
         raise RuntimeError(
             f"pyFAI resolved method {resolved}, requested {tuple(cfg.method)}; "
             "a method string or an unavailable engine has silently substituted "
-            "another integrator (CLAUDE.md pitfall 1)"
+            "another integrator"
         )
 
     engine = ai.engines[probe.method].engine

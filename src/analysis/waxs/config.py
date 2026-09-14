@@ -233,8 +233,9 @@ class JungfrauWaxsConfig:
             )
         if tuple(self.method) != METHOD:
             raise ValueError(
-                f"method must be {METHOD} (AGIPD context file §3 rule 1), "
-                f"got {tuple(self.method)}"
+                f"method must be {METHOD}, got {tuple(self.method)}; "
+                "it is given as a tuple because a method string resolves "
+                "silently to a different integrator"
             )
         if not 0 <= self.mask_bits <= 0xFFFFFFFF:
             raise ValueError(
