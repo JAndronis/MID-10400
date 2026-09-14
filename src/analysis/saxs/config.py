@@ -1,8 +1,7 @@
 """Frozen configuration for the AGIPD SAXS integrator (``agipd_saxs``).
 
-P1 scope: only the fields the operator, the sparse kernels and the self-test
-need (context file §5). The masking, planning, worker and writer fields arrive
-with their own phases.
+One config per run, covering the operator, the masks, the plan and the output.
+Anything that can change a stored number enters :meth:`config_hash`.
 """
 
 from __future__ import annotations
@@ -36,11 +35,11 @@ __all__ = [
     "physical_cores",
 ]
 
-#: Flattened AGIPD-1M pixel grid, module × slow-scan × fast-scan (context §6).
+#: Flattened AGIPD-1M pixel grid, module × slow-scan × fast-scan.
 SHAPE: tuple[int, int] = (16 * 512, 128)
 NPIX: int = SHAPE[0] * SHAPE[1]
 
-#: The only integration method this pipeline accepts (context file §3 rule 1).
+#: The only integration method this pipeline accepts.
 METHOD: tuple[str, str, str] = ("full", "csc", "cython")
 
 _PROPOSAL_ROOT = "/gpfs/exfel/exp/MID/202601/p010400"
@@ -81,7 +80,7 @@ DEFAULT_OUTPUT_ROOT = f"{_PROPOSAL_ROOT}/scratch/agipd_saxs"
 DEFAULT_BEAM_CENTER_PX: float = 607.4598195630211
 DEFAULT_BEAM_CENTER_PY: float = 672.076693118667
 
-#: ``BadPixels`` bits seen in r0423 and r0426 (CLAUDE.md, image.mask). Any
+#: ``BadPixels`` bits seen in r0423 and r0426. Any
 #: other bit present in a run is a provenance flag and a warning, not a
 #: failure: every bit in these files marks an unusable pixel, so the blanket
 #: ``mask_bits`` stays correct, but an unrecorded bit must be looked at.
@@ -93,7 +92,7 @@ class AgipdSaxsConfig:
     """Immutable run configuration.
 
     ``geometry_file`` may be ``None`` only when the caller supplies a geometry
-    object directly (the synthetic geometry used by the P1 unit tests). Every
+    object directly, which is what the unit tests do with a synthetic one. Every
     real run must set it, so that its sha256 enters :meth:`config_hash`.
     """
 
@@ -110,13 +109,13 @@ class AgipdSaxsConfig:
     npt: int = 500
     method: tuple[str, str, str] = METHOD
     unit: str = "q_nm^-1"
-    # ── masks (P2, context file §6.3) ─────────────────────────────────────
+    # ── masks ─────────────────────────────────────
     mask_bits: int = 0xFFFFFFFF
     expected_bits: frozenset[int] = EXPECTED_BITS
     use_asic_seams: bool = True
     pixel_mask_file: str | None = DEFAULT_PIXEL_MASK_FILE
     base_mask_trains: int = 8
-    # ── run, scheduling and output (P3, context file §5) ──────────────────
+    # ── run, scheduling and output ──────────────────
     detector_name: str | None = None
     min_modules: int = 16
     trains_per_block: int = 4
@@ -173,26 +172,26 @@ class AgipdSaxsConfig:
         return state_by_name(self)
 
     def __setstate__(self, state: Any) -> None:
-        """Unpickle by field name, refusing a state this class disagrees with.
+        """Unpickle by field name; defined here because a mixin would not bind.
 
-        Defined here rather than inherited: ``dataclasses`` installs its own
-        positional pair unless ``__getstate__`` is in this class's ``__dict__``.
+        ``dataclasses`` installs its own positional pair unless ``__getstate__``
+        is in this class's own ``__dict__``.
         """
         restore_by_name(self, state)
 
     @property
     def output_file(self) -> Path:
-        """``{output_root}/r{run:04d}/agipd_saxs.h5`` (context file §7)."""
+        """``{output_root}/r{run:04d}/agipd_saxs.h5``."""
         return Path(self.output_root) / f"r{self.run:04d}" / "agipd_saxs.h5"
 
     @property
     def workers(self) -> int:
         """Worker count: ``n_workers``, else one per *physical* core.
 
-        SMT is P6's question, so the default must not answer it. On the DAMNIT
-        node ``sched_getaffinity`` reports 72 logical CPUs for 36 physical
-        cores, and using it would silently run the hyperthreaded configuration
-        while claiming one worker per core.
+        Whether hyperthreading helps is an open question, so the default must
+        not answer it: ``sched_getaffinity`` counts logical CPUs, and using it
+        would silently run the hyperthreaded configuration while claiming one
+        worker per core.
         """
         if self.n_workers is not None:
             return self.n_workers
@@ -226,12 +225,8 @@ class AgipdSaxsConfig:
     def config_hash(self) -> str:
         """sha256 over the result-affecting fields plus each input file's sha256.
 
-        Purely operational fields — worker count, block size, output root,
-        ``allow_incomplete``, ``overwrite``, ``selftest_frames`` — are
-        deliberately **excluded**: they change how the pass runs, never what it
-        stores, and covering them made a rerun at a different worker count
-        refuse its own output. See :mod:`analysis.common.config`. They are still
-        recorded in full in the provenance record.
+        Operational fields are excluded — see :mod:`analysis.common.config` —
+        and recorded in full in provenance instead.
         """
         return config_sha256(self, self.input_files, self.operational_fields)
 

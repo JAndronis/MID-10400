@@ -1,4 +1,4 @@
-"""Frame status codes and the data-check exception (context file §8).
+"""Frame status codes and the data-check exception.
 
 These moved to :mod:`analysis.common.status` when the JUNGFRAU WAXS pass
 started sharing them; the names stay importable from here because the whole

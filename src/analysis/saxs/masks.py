@@ -1,4 +1,4 @@
-"""Static and per-cell base masks (context file §6.3).
+"""Static and per-cell base masks.
 
 Three things are combined here:
 
@@ -21,7 +21,7 @@ Three things are combined here:
 
 This module does not import EXtra-data. It consumes mask samples handed to it
 by the caller — the train selection and the ``image.mask`` read belong to the
-plan and the worker (P3) — which also keeps it testable without data.
+plan and the worker — which also keeps it testable without data.
 """
 
 from __future__ import annotations
@@ -106,7 +106,7 @@ def load_pixel_mask(path: str | Path) -> np.ndarray:
 
 
 def build_static_bad(cfg: AgipdSaxsConfig) -> StaticMask:
-    """ASIC seams ∪ the pixel mask (context file §6.3, I4 option (a))."""
+    """ASIC seams ∪ the pixel mask."""
     bad = np.zeros(NPIX, dtype=bool)
     sources: list[MaskSource] = []
 
@@ -153,11 +153,9 @@ class BaseMasks:
     def for_cell(self, cell: int) -> tuple[np.ndarray, np.ndarray]:
         """``(base_bad, denominator)`` for ``cell``.
 
-        A cell that never appeared in the sampled trains falls back to the
-        static mask and its denominator. The per-frame correction in
-        ``sparse.integrate_frame`` stays exact either way — the fallback only
-        means more pixels are corrected per frame — but such cells are counted
-        in provenance.
+        A cell absent from the sampled trains falls back to the static mask and
+        is counted in provenance. The per-frame correction stays exact either
+        way; the fallback only corrects more pixels per frame.
         """
         index = int(np.searchsorted(self.cells, cell))
         if index < self.cells.size and int(self.cells[index]) == cell:
@@ -170,7 +168,7 @@ class BaseMasks:
 
 
 class BaseMaskAccumulator:
-    """Majority-vote accumulator over sampled trains (context file §6.3).
+    """Majority-vote accumulator over sampled trains.
 
     The caller feeds one train at a time; ``finalise`` turns the votes into base
     masks and denominators. Votes are uint8, so a cell may be sampled at most
@@ -199,8 +197,7 @@ class BaseMaskAccumulator:
 
         :param mask: ``(16, n_frames, 512, 128)`` uint32 ``BadPixels`` field.
         :param cell_ids: ``(n_frames,)`` memory-cell id per frame, from
-            ``cell_id_coordinates()``. Never inferred from array position
-            (CLAUDE.md pitfall 4).
+            ``cell_id_coordinates()`` — never inferred from array position.
         """
         mask = np.asarray(mask)
         cell_ids = np.asarray(cell_ids)
@@ -246,7 +243,7 @@ class BaseMaskAccumulator:
         for index, cell in enumerate(cells.tolist()):
             count = self._counts[cell]
             # Strict majority. Written as ``votes > count // 2`` rather than
-            # §6.3's ``votes * 2 > count``: identical for every integer count,
+            # ``votes * 2 > count`` is identical for every integer count,
             # and it cannot overflow the uint8 vote array.
             voted = self._votes[cell] > count // 2
             if (self._static.bad & ~voted).any():

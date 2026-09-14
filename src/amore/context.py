@@ -364,16 +364,10 @@ def xpcs_saxs_plot(run, ds: "var#xpcs_pipeline"):
     return XPCS_RESULTS["figure_saxs"]
 
 
-# ── AGIPD SAXS integration (analysis.saxs; context file §10, P5) ─────────────
-# `agipd_saxs` keeps its name and column: this is the same quantity, computed
-# by `analysis.saxs` instead of `analysis_helpers.integrate_run` — over an hour
-# per run against 6.3 min here, and without dividing by I0 in place, which
-# could not be undone afterwards.
-#
-# What the column holds therefore changes at this commit: I(q) in nm^-1 and not
-# I0-divided, where before it was A^-1 and divided. Runs processed earlier hold
-# the old quantity, so clear the column for them rather than plotting across
-# the boundary.
+# ── AGIPD SAXS integration (analysis.saxs) ───────────────────────────────────
+# The column holds I(q) in nm^-1, undivided. Runs processed before this pass
+# existed hold A^-1 divided by I0, so clear the column for them rather than
+# plotting across the boundary.
 #
 # Both variables are thin on purpose: DAMNIT execs this file into a dict, so a
 # function defined here cannot be pickled to the workers the pass spawns.

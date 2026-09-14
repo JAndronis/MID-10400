@@ -1,19 +1,12 @@
-"""Sparse full-split integration operator (context file §6.1).
+"""Sparse full-split integration operator.
 
 The operator is pyFAI's own ``("full", "csc", "cython")`` sparse matrix, lifted
 out of the engine so that the per-frame integration can run over photon hits
 only (``sparse.integrate_frame``) instead of over the dense detector.
 
-Array names differ from the context file's pseudocode to avoid a collision with
-``image.data`` and to match pyFAI's own attribute names:
-
-===============  ==================  ===========================================
-this module      context file §6.1   pyFAI ``engine.lut``
-===============  ==================  ===========================================
-``coef``         ``data``            ``lut[0]`` — split coefficient per entry
-``bins``         ``rows``            ``lut[1]`` — CSC row index, i.e. the q bin
-``indptr``       ``indptr``          ``lut[2]`` — column starts, one per pixel
-===============  ==================  ===========================================
+The array names match pyFAI's own, and avoid colliding with ``image.data``:
+``coef`` is ``lut[0]``, the split coefficient per entry; ``bins`` is ``lut[1]``,
+the CSC row index, i.e. the q bin; ``indptr`` is ``lut[2]``, the column starts.
 
 The matrix is in CSC layout with one column per flattened pixel, so
 ``len(indptr) == NPIX + 1``; this is asserted at build time.
@@ -113,7 +106,7 @@ def operator_sha256(
 
 
 def geometry_from_config(cfg: AgipdSaxsConfig) -> AGIPD_1MGeometry:
-    """Load the CrystFEL geometry named by ``cfg`` (context file §3 rule 4)."""
+    """Load the CrystFEL geometry named by ``cfg``."""
     if cfg.geometry_file is None:
         raise ValueError(
             "cfg.geometry_file is None; pass a geometry object to "

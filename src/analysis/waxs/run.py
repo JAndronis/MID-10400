@@ -1,4 +1,4 @@
-"""Orchestration for one run and one detector (WAXS context file §3 D2).
+"""Orchestration for one run and one detector.
 
 The parent builds the geometry, measures the cell pattern and the readout
 noise, gates on the self-test, then fans blocks out to spawned single-threaded
@@ -6,7 +6,7 @@ workers and writes their results itself. Nothing in the hot loop depends on the
 XGM, transmission or background.
 
 The two detectors never meet here: each gets its own config, its own pass and
-its own file, and they are combined only at the plot (§6 O5).
+its own file, and they are combined only at the plot.
 """
 
 from __future__ import annotations
@@ -107,9 +107,9 @@ def run_jungfrau_waxs(
     :returns: the reduction named by ``reduce``, or ``None`` when the run has no
         lit memory cell at all — see :func:`_no_lit_cells`.
     :raises analysis.waxs.cells.ImplausibleLitCells: the measured cell pattern
-        is not a storage-cell sequence, so the classification is wrong (§3 D4).
+        is not a storage-cell sequence, so the classification is wrong.
     :raises analysis.waxs.cells.UnexpectedLitCells: ``cfg.expected_lit_cells``
-        is pinned and the measured pattern is not it (§3 D4).
+        is pinned and the measured pattern is not it.
     :raises analysis.waxs.selftest.SelfTestFailed: the NaN path and the
         per-frame-mask reference disagree.
     :raises IncompleteRun: some frame carries a *blocking* status and
@@ -121,7 +121,7 @@ def run_jungfrau_waxs(
     if reduce not in REDUCERS:
         raise ValueError(f"reduce must be one of {REDUCERS}, got {reduce!r}")
 
-    # Before any pool exists, so spawned children inherit it (§3 rule 3).
+    # Before any pool exists, so spawned children inherit it.
     set_thread_env()
     started_at = time.time()
     started = time.perf_counter()
@@ -263,7 +263,7 @@ def run_jungfrau_waxs(
 
     if data_check:
         # Never silent, whether or not it raises: a tolerated loss is still a
-        # loss, and under §3 D6's unresolved question it could be a biased one.
+        # loss, and it is not necessarily an unbiased one.
         log.warning(
             "r%d %s: the value check excluded %d pixels across %d frames and "
             "refused %d outright (%s)",
@@ -285,10 +285,8 @@ def run_jungfrau_waxs(
 def _blocking(cfg: JungfrauWaxsConfig, summary: dict[str, int]) -> dict[str, int]:
     """The non-``OK`` statuses that stop the run finishing.
 
-    ``DATA_CHECK_FAILED`` is a property of the data rather than a failure of the
-    pass — the frame was read, classified and recorded — so by default it is
-    counted and not raised on; see ``cfg.allow_data_check_failures``. Everything
-    else still blocks.
+    ``DATA_CHECK_FAILED`` is a property of the data, not a failure of the pass,
+    so ``cfg.allow_data_check_failures`` decides. Everything else blocks.
     """
     tolerated = {FrameStatus.OK.name}
     if cfg.allow_data_check_failures:
@@ -326,26 +324,18 @@ def _error_model(
     """sigma_read, in order of precedence: configured, measured, fallback.
 
     An explicit ``cfg.read_noise_kev`` wins outright. Otherwise the run's own
-    dark cells are measured, which is what §3 D3 asks for. A run that reads
-    every storage cell has no dark cell — 213 of the proposal's do — and falls
-    back to ``cfg.read_noise_fallback_kev``, the per-detector median over the
-    runs that do. ``ErrorModel.source`` records which of the three it was, so a
-    stored file never has to be guessed at.
+    dark cells are measured, which is the preferred source. A run that reads
+    every storage cell has no dark cell and falls back to
+    ``cfg.read_noise_fallback_kev``, the per-detector median over the runs that
+    do. ``ErrorModel.source`` records which of the three it was, so a stored file
+    never has to be guessed at and can be selected against.
 
-    **There is deliberately no fourth branch that raises.** An earlier draft had
-    one, for "no measurement and no fallback" — but `JungfrauWaxsConfig` resolves
-    ``read_noise_fallback_kev`` from
-    :data:`~analysis.waxs.config.DEFAULT_READ_NOISE_KEV` in ``__post_init__``, so
-    it is never ``None`` by the time a config exists and that branch could not
-    fire. Resolving it there rather than here is what keeps
-    the *used* number inside ``config_hash`` (CLAUDE.md pitfall 12): were the
-    field left ``None`` and filled in at this point, a change to the constant
-    would silently let resume merge blocks computed at two different sigma_read.
-
-    The guarantee CLAUDE.md working rule 2 asks for — never a number without a
-    traceable source — is met by ``ErrorModel.source`` instead of by an
-    exception: every stored file says which of the three it used, so selecting
-    against ``"fallback"`` is a question the provenance can answer.
+    There is no fourth branch that raises: ``JungfrauWaxsConfig`` resolves
+    ``read_noise_fallback_kev`` in ``__post_init__``, so it is never ``None`` by
+    the time a config exists. Resolving it there rather than here is what keeps
+    the number actually used inside ``config_hash`` — filled in at this point, a
+    change to the constant would let resume merge blocks computed at two
+    different sigma_read.
     """
     if cfg.read_noise_kev is not None:
         return ErrorModel(

@@ -1,7 +1,7 @@
-"""The error model and the pure per-frame integration (WAXS context file §3).
+"""The error model and the pure per-frame integration.
 
 Kept free of I/O and of EXtra-data so the self-test and the unit tests can
-reach it without a run, the way ``analysis.saxs.sparse`` is for AGIPD.
+reach it without a run, the way :mod:`analysis.saxs.sparse` is for AGIPD.
 """
 
 from __future__ import annotations
@@ -26,21 +26,17 @@ __all__ = [
 
 @dataclass(frozen=True, slots=True)
 class ErrorModel:
-    """``Var(x) = σ_read² + E·x``, in keV² (context file §3 D3).
+    """``Var(x) = σ_read² + E·x``, in keV².
 
     ``Σc²·x`` is the Poisson variance of *integer photon counts*; on keV-valued
     data with a negative tail it is not a variance at all. For a pixel holding
     ``x`` keV deposited by ``E``-keV photons the count is ``x/E``, whose Poisson
-    variance is ``x/E``, which in keV² is ``E·x``; the readout term adds
-    ``σ_read²``.
+    variance in keV² is ``E·x``; the readout term adds ``σ_read²``.
 
-    **The result is deliberately not clamped.** On r0423 it is negative for
-    23–26 % of kept pixels, and integrating leaves 5 of 4000 occupied per-frame
-    bins with a non-positive ``sum_variance`` on jf1. Clamping at zero would
-    bias the noise floor upward on every negative-noise pixel, and that bias
-    does *not* cancel; the unbiased form's negatives do, once a bin pools many
-    frames. So the sums are stored as they come and the per-frame negative bins
-    are counted into the ledger, where they stay visible.
+    **The result is deliberately not clamped.** Clamping at zero would bias the
+    noise floor upward on every negative-noise pixel and that bias does not
+    cancel, where the unbiased form's negatives do once a bin pools many frames.
+    The per-frame negative bins are counted into the ledger instead.
     """
 
     read_noise_kev: float
@@ -105,19 +101,12 @@ def frame_maxima(
 ) -> tuple[float, float]:
     """``(max over the union mask, max over the static mask)``, in keV.
 
-    The pair is what lets a ``DATA_CHECK_FAILED`` row explain itself, because
-    the two masks are not the same set: :func:`frame_data_status` tests the
-    pixels ``static_bad`` keeps, while the integration excludes the union
-    ``bad``. So on a failing frame
+    The pair lets a ``DATA_CHECK_FAILED`` row explain itself: a large
+    static-mask maximum beside an ordinary union one means the offending pixel
+    never reached the integrator, where two large values mean it did.
 
-    * a large second value with an ordinary first one means the offending pixel
-      is one ``data.mask`` flags — it never reached the integrator, and the
-      frame failed over a value that could not have changed a stored number;
-    * two large values mean it did reach the integrator, and the magnitude then
-      says whether it is artifact-scale or within reach of real scattering.
-
-    Non-finite values propagate rather than being skipped: a NaN maximum *is*
-    the reason that frame failed, and no separate column is needed to say so.
+    :returns: the two maxima, each 0.0 if its mask keeps no pixel. Non-finite
+        values propagate, since a NaN maximum is itself why a frame failed.
     """
     flat = np.asarray(x).reshape(-1)
     return (
@@ -129,35 +118,20 @@ def frame_maxima(
 def extreme_pixels(
     x: np.ndarray, excluded: np.ndarray, max_abs_kev: float
 ) -> np.ndarray:
-    """Pixels carrying a value the pass will not integrate (§3 D6′).
+    """Pixels carrying a value the pass will not integrate.
 
-    Flat bool over the whole frame, True where a pixel that ``excluded`` does
-    *not* already remove is non-finite or outside ``±max_abs_kev``. Pass the
-    union ``bad``, not the static mask alone: a wild value the two masks already
-    drop never reaches the integrator, so it is not this check's doing and must
-    not be counted as such.
+    Non-finite values go because the dynamic mask is itself carried as NaN.
+    These pixels are excluded, **not** grounds for discarding the frame: that
+    would throw away every good pixel in it, in step with crystallisation.
+    ``FrameResult.n_extreme_pixels`` is the filter a reader applies instead.
 
-    * **Non-finite.** The dynamic mask is carried as NaN, so a NaN already in
-      the data would be indistinguishable from that sentinel.
-    * **Out of range.** On r0480/jf1 these are NaCl (200) and (111) Bragg spots
-      from the evaporating droplet — 97 % within 1 % of q = 22.33 nm⁻¹ — that
-      land on the far side of a 43× empty band in the value distribution, piled
-      against a hard edge at 8234 keV. The trigger is the sample; the numbers
-      are not intensities.
-
-    **These pixels are excluded, not grounds for discarding the frame.** v1
-    failed the whole frame, which on r0480 threw away 473 frames of 126 230
-    good pixels each over a median of 3 bad ones — and did it in step with
-    crystallisation, since salt rings appear as the droplet shrinks. Excluding
-    them is the same act the two masks already perform, and
-    ``FrameResult.n_extreme_pixels`` records how often it happened.
-
-    The cost is real and falls on one place: in an affected frame the ring's
-    own q bin loses its brightest pixels and reads low. ``n_extreme_pixels``
-    is what a reader filters on before treating those bins quantitatively.
-
-    The AGIPD check — integer dtype, no negative counts — is wrong here in both
-    halves, so this replaces it rather than adding to it.
+    :param x: one frame, keV.
+    :param excluded: the union bad-pixel mask, flat. Not the static mask alone:
+        a wild value the masks already drop never reaches the integrator, so it
+        is not this check's doing and must not be counted as such.
+    :param max_abs_kev: values beyond ``±`` this are excluded.
+    :returns: flat bool over the whole frame, True where a pixel is to be
+        dropped by this check.
     """
     flat = np.asarray(x).reshape(-1)
     finite = np.isfinite(flat)
@@ -173,31 +147,27 @@ def integrate_frame(
     *,
     max_abs_kev: float,
 ) -> FrameResult:
-    """Integrate one frame densely through pyFAI (§3 D1).
-
-    :param ai: the ``AzimuthalIntegrator`` whose engine was built by
-        :func:`analysis.waxs.operator.build_operator` — that is, with ``mask``
-        already set to ``op.static_bad``. Passing any other mask here would
-        rebuild the sparse matrix; see that module's docstring.
-    :param x: one frame, ``(512, 1024)`` or flat, in keV.
-    :param bad: this frame's bad-pixel mask, ``((m & mask_bits) != 0) |
-        static_bad``, flat.
+    """Integrate one frame densely through pyFAI.
 
     ``bad`` is carried into pyFAI as NaN in both the data and the variance,
     which drops those pixels from the numerator and the denominator exactly.
-    The static half of ``bad`` is already excluded by the engine's own mask, so
-    NaN-ing it again is a no-op; it is included so that ``n_bad_pixels`` counts
-    the union a reader would expect.
+    Pixels failing :func:`extreme_pixels` join it locally, leaving the caller's
+    array untouched, and the frame is still integrated.
 
-    Pixels failing :func:`extreme_pixels` join ``bad`` — locally, so the
-    caller's array is untouched — and are counted into
-    ``FrameResult.n_extreme_pixels``. The frame is still integrated: see that
-    function for why discarding it is the wrong trade.
-
+    :param ai: the ``AzimuthalIntegrator`` built by
+        :func:`analysis.waxs.operator.build_operator`, with ``mask`` already set
+        to ``op.static_bad``. Passing a mask here instead would rebuild pyFAI's
+        sparse matrix on every frame.
+    :param op: the operator whose q axis and static mask the engine was built on.
+    :param model: the variance model applied to the kept pixels.
+    :param x: one frame, ``(512, 1024)`` or flat, in keV.
+    :param bad: this frame's bad-pixel mask, flat, as
+        ``((m & mask_bits) != 0) | static_bad``.
+    :param max_abs_kev: value bound handed to :func:`extreme_pixels`.
+    :returns: the per-bin sums, maxima and pixel counts for this frame.
     :raises DataCheckFailed: *every* pixel is excluded, so there is nothing to
         integrate. Raised rather than returned, because a frame of zeros placed
-        as if it had been measured is the one outcome no ledger column would
-        make visible.
+        as if it had been measured is the one outcome no ledger column shows.
     """
     flat = np.asarray(x).reshape(-1)
     if flat.size != op.static_bad.size:

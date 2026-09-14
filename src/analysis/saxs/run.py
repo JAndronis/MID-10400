@@ -1,9 +1,9 @@
-"""Orchestration for one run (context file §6.7).
+"""Orchestration for one run.
 
 The parent builds everything the workers need, gates on the self-test, then
 fans blocks out to spawned single-threaded workers and writes their results
 itself. Nothing in the hot loop depends on XGM, transmission or background
-(§3 rule 9).
+corrections: those are applied afterwards, to the stored sums.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ from analysis.saxs.writer import AgipdSaxsWriter, IncompleteRun
 __all__ = ["REDUCERS", "default_pool", "run_agipd_saxs"]
 
 #: What ``run_agipd_saxs`` may return. ``pooled`` is the per-train I(q) of
-#: context file §9; ``per_pulse`` is the (trainId, pulseId, q) grid, which is
+#: ``per_pulse`` is the (trainId, pulseId, q) grid, which is
 #: what the DAMNIT variable stores; ``none`` skips the reduction for a caller
 #: that only wants the file written.
 REDUCERS = ("pooled", "per_pulse", "none")
@@ -74,9 +74,9 @@ def run_agipd_saxs(
     if reduce not in REDUCERS:
         raise ValueError(f"reduce must be one of {REDUCERS}, got {reduce!r}")
 
-    # Before any pool exists, so spawned children inherit it (§3 rule 3).
+    # Before any pool exists, so spawned children inherit it.
     worker_module.set_thread_env()
-    # Wall time is an acceptance criterion (context file §10, P4), so it is
+    # Wall time is an acceptance criterion, so it is
     # recorded in provenance rather than left to whoever launched the job. It
     # spans the plan, the self-test, the pool and the writer.
     started_at = time.time()

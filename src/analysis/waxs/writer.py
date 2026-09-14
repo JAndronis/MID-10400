@@ -1,4 +1,4 @@
-"""Output file, ledger and resume for one detector (WAXS context file §3 D2).
+"""Output file, ledger and resume for one detector.
 
 The layout, the ledger, resume, the label checks and ``pooled_per_train`` are
 :class:`analysis.common.writer.FrameTableWriter`. What is here is the JUNGFRAU
@@ -8,11 +8,11 @@ Two columns differ from AGIPD in a way worth stating:
 
 * **There is no ``reader_pulseId``.** ``JUNGFRAU`` is a ``MultimodDetectorBase``
   and its ``MultimodKeyData`` has ``train_id_coordinates()`` and nothing else —
-  no pulse ids exist in the reader at all (§5 R5). Which of a train's X-ray
+  no pulse ids exist in the reader at all. Which of a train's X-ray
   pulses each memory cell sampled has to be aligned from ``XrayPulses``/LITFRM
   onto the cell axis, and until that alignment exists the pass stores the cell
   id and leaves pulse identity absent rather than synthesising one from
-  position (CLAUDE.md pitfall 4).
+  position.
 * **``max_count`` becomes ``max_kev``**, a float. The data are energies, not
   counts.
 """
@@ -132,17 +132,15 @@ class JungfrauWaxsWriter(FrameTableWriter):
         group.attrs["error_model_sha256"] = model.sha256
 
     def data_check_summary(self) -> dict[str, Any]:
-        """Pixels the value check excluded, and frames it refused (§3 D6′).
+        """Pixels the value check excluded, and frames it refused.
 
-        The per-run record of what D6 cost. Since 2026-09-14 the check drops the
-        offending *pixel* and keeps the frame, so the number that matters is how
-        many frames lost pixels and how many — on r0480/jf1 that was 473 frames
-        losing a median of 3 each, NaCl Bragg spots from the evaporating
-        droplet. ``n_frames_refused`` is the residue: a frame with nothing left
-        to integrate at all, which should not happen and is loud if it does.
+        The check drops the offending *pixel* and keeps the frame, so what
+        matters is how many frames lost pixels and how many they lost.
+        ``n_frames_refused`` is the residue: a frame with nothing left to
+        integrate at all, which should not happen and is loud if it does.
 
-        Empty when the run lost nothing, so a clean run carries no attribute
-        rather than an attribute full of zeros.
+        :returns: the record, empty when the run lost nothing, so a clean run
+            carries no attribute rather than one full of zeros.
         """
         frames = self._f["frames"]
         status = frames["status"][:]
@@ -180,10 +178,10 @@ def per_cell(source: Any, *, dtype: Any = np.float32) -> Any:
     The JUNGFRAU counterpart of ``analysis.saxs.writer.per_pulse``, and the same
     discipline: every frame is placed by its *stored* trainId and cellId, never
     by its row position, so a dropped or short train cannot slide frames onto
-    the wrong train (CLAUDE.md pitfall 4). Only ``OK`` frames carry trustworthy
+    the wrong train. Only ``OK`` frames carry trustworthy
     labels, so anything else is counted in ``attrs["unplaced"]`` rather than
     guessed onto a slot. Empty slots are zeros with ``n_frames == 0``, never
-    NaN (AGIPD context file §3 rule 7).
+    NaN.
 
     ``n_frames`` is a non-dimension coordinate rather than a second variable,
     which keeps this a DataArray: DAMNIT renders a 3-D DataArray in the table
@@ -206,7 +204,7 @@ def per_cell(source: Any, *, dtype: Any = np.float32) -> Any:
         if not np.all(np.diff(train_ids.astype(np.int64)) > 0):
             raise ValueError("the train table is not strictly increasing")
         # Inside the ``with``: an AttributeManager kept past it returns the
-        # default rather than raising (CLAUDE.md pitfall 13).
+        # default rather than raising.
         data_check = handle["provenance"].attrs.get("data_check", "")
 
         placeable = status == FrameStatus.OK

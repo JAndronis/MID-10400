@@ -1,9 +1,8 @@
-"""Trains, frame counts, row offsets, blocks and run checks (context file §6.8).
+"""Trains, frame counts, row offsets, blocks and run checks.
 
 The plan is the run's identity table. Every row of the output file is addressed
 by the train it belongs to, never by its position in an array: a dropped train
-would otherwise shift every later frame onto the wrong trainId (CLAUDE.md
-pitfall 4).
+would otherwise shift every later frame onto the wrong trainId.
 
 ``build_plan`` takes an optional ``DataCollection`` so callers can supply a run
 that is already open — or a mock one — instead of going through ``open_run``.
@@ -38,13 +37,9 @@ def _open_detector(cfg: AgipdSaxsConfig, dc: Any):
 def _open_control(cfg: AgipdSaxsConfig) -> Any:
     """Open the raw location, which is where the control sources live.
 
-    ``open_run(..., data="proc")`` opens one location, and proc holds only the
-    corrected detector files: no timeserver, no XGM, no motors. Every check in
-    :func:`run_checks` is therefore unavailable against the collection the
-    frames are read from, so the checks get their own collection. The plan
-    itself deliberately stays on proc: opening ``data="all"`` would put trains
-    that exist only in raw into the ledger and make a complete proc run look
-    incomplete.
+    Proc holds only the corrected detector files, so :func:`run_checks` needs
+    its own collection. The plan itself stays on proc: ``data="all"`` would put
+    raw-only trains into the ledger and make a complete run look incomplete.
     """
     from extra_data import open_run
 
@@ -52,7 +47,7 @@ def _open_control(cfg: AgipdSaxsConfig) -> Any:
 
 
 def build_plan(cfg: AgipdSaxsConfig, dc: Any = None, control_dc: Any = None) -> RunPlan:
-    """Build the run plan (context file §6.8).
+    """Build the run plan.
 
     :param dc: an open ``DataCollection``. When ``None``, the proc run named by
         ``cfg`` is opened.
@@ -166,7 +161,7 @@ def _modules_present(dc: Any, det: Any) -> dict[int, int]:
 def run_checks(
     dc: Any, det: Any, counts: Any, cfg: AgipdSaxsConfig | None = None
 ) -> dict[str, Any]:
-    """Provenance flags for the run (context file §6.8).
+    """Provenance flags for the run.
 
     None of these select frames in v1 (integrator I1); each is recorded and a
     disagreement is flagged. Every check is best-effort: a missing source makes
@@ -219,7 +214,7 @@ def run_checks(
         ``pulseEnergy.wavelengthUsed``, in nm, and tags the result keV), so
         there is no eV to divide out.
 
-        No tolerance is invented here (CLAUDE.md working rule 2): the two are
+        No tolerance is invented here: the two are
         called equal only within the float32 precision the XGM value carries,
         and any wider gap is reported for a person to settle. It matters
         because q scales with the energy, so a disagreement of x is a

@@ -77,17 +77,16 @@ def file_sha256(path: str | Path) -> str:
 
 
 def set_thread_env() -> None:
-    """Pin every numerical library to one thread.
+    """Pin every numerical library to one thread, before the pool is built.
 
-    Called by the parent *before* the pool is constructed, so spawned children
-    inherit it at process start (AGIPD context file §3 rule 3).
+    Spawned children inherit the environment at process start.
     """
     for name in THREAD_ENV:
         os.environ[name] = "1"
 
 
 def default_pool(n_workers: int, **kwargs: Any) -> ProcessPoolExecutor:
-    """The real pool: spawned processes only (AGIPD context file §3 rule 6)."""
+    """The real pool: spawned processes only, never forked."""
     return ProcessPoolExecutor(
         max_workers=n_workers, mp_context=get_context("spawn"), **kwargs
     )
@@ -97,10 +96,9 @@ def default_pool(n_workers: int, **kwargs: Any) -> ProcessPoolExecutor:
 def phase(into: dict[str, float], name: str) -> Iterator[None]:
     """Time one parent-side setup phase into ``into``.
 
-    Everything before the pool starts is serial, so it is subtracted from the
-    whole run's parallel budget. Without this the only thing the output file
-    says about it is the gap between the wall time and the workers' own
-    timings, which is a number with no explanation attached.
+    Everything before the pool starts is serial, and recording it is what keeps
+    that time attributable instead of leaving it as the unexplained gap between
+    the wall time and the workers' own timings.
     """
     started = time.perf_counter()
     try:

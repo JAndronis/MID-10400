@@ -1,24 +1,19 @@
-"""Geometry, the cached pyFAI engine and the q axis (WAXS context file §5 R4).
+"""Geometry, the cached pyFAI engine and the q axis.
 
 **Why there is no sparse kernel here.** The AGIPD pass lifts pyFAI's CSC matrix
 out of the engine and integrates over photon hits, because its frames are
 0.7–1.8 % non-zero. JUNGFRAU frames are dense — 0.005 % of pixels are exactly
-zero and a fifth are negative — so §3 D1 calls for dense pyFAI per frame.
+zero and a fifth are negative — so this pass runs dense pyFAI per frame.
 
-**Why the dynamic mask is a NaN, not a ``mask=`` argument.** §3 D5 as written
-passes ``static | dynamic`` to ``integrate1d(mask=)`` each frame. pyFAI keys its
+**Why the dynamic mask is a NaN, not a ``mask=`` argument.** pyFAI keys its
 cached sparse matrix on a checksum of the mask, so a mask that changes per frame
-rebuilds the full-split CSC matrix every frame — its own docstring calls that
-"a very time consuming operation" (``pyFAI/integrator/common.py``,
-``setup_sparse_integrator``). Measured on r0423: 16.8 ms/frame.
-
-Building the engine **once** with the ``.edf`` static mask and carrying the
-per-frame mask as NaN in the data and variance arrays gives **bit-identical**
-sums — max relative difference 0.0 on ``sum_signal``, ``sum_normalization`` and
-``sum_variance``, over all 500 bins on both detectors — at 3.7 ms/frame with a
-single cached engine. pyFAI's preprocessing drops a non-finite pixel from the
-numerator *and* the normalisation, which is exactly the exact-denominator
-property AGIPD has to reconstruct sparsely.
+rebuilds the full-split CSC matrix every frame, which its own docstring calls
+"a very time consuming operation". Building the engine **once** with the ``.edf``
+static mask and carrying the per-frame mask as NaN in the data and variance
+arrays is several times faster and gives bit-identical sums: pyFAI's
+preprocessing drops a non-finite pixel from the numerator *and* the
+normalisation, which is the exact-denominator property AGIPD has to reconstruct
+sparsely.
 
 That option exists here and not there because JUNGFRAU frames are ``float32``.
 AGIPD's ``int16`` cannot carry NaN, which is what forced the sparse correction.
@@ -53,15 +48,9 @@ __all__ = [
 def _frozen(array: np.ndarray, dtype: Any) -> np.ndarray:
     """A contiguous, read-only **copy**.
 
-    The copy is the point. ``np.ascontiguousarray(x, dtype)`` returns ``x``
-    itself when it is already contiguous and of that dtype, so freezing the
-    result would freeze an array pyFAI still owns — its ``_dssa`` solid-angle
-    cache, or an engine's ``bin_centers``. pyFAI's Cython kernels acquire
-    writable buffers and reject a read-only one with
-    ``ValueError: buffer source array is read-only``, so that reaches the user
-    as a failure in an unrelated later call. ``analysis.saxs.operator._readonly``
-    has always copied for this reason; this module did not, which is the bug
-    this function exists to close.
+    The copy is the point: ``np.ascontiguousarray(x, dtype)`` returns ``x``
+    itself when it already matches, so freezing the result would freeze an array
+    pyFAI still owns and its Cython kernels would later reject as read-only.
     """
     out = np.array(array, dtype=dtype, copy=True, order="C")
     out.flags.writeable = False
@@ -108,7 +97,7 @@ class WaxsOperator:
 
 
 def resolved_method(result: object) -> tuple[str, str, str]:
-    """The method pyFAI actually ran, as a tuple (CLAUDE.md pitfall 1)."""
+    """The method pyFAI actually ran, as a tuple."""
     method = result.method  # type: ignore[attr-defined]
     return (method.split_lower, method.algo_lower, method.impl_lower)
 
@@ -160,8 +149,7 @@ def build_operator(
     :raises WavelengthMismatch: the PONI's wavelength and
         ``cfg.photon_energy_kev`` disagree by more than float32 precision. The
         PONI carries its own wavelength and a mismatch means it was refined at
-        a different energy, so neither value may silently win: q scales with it
-        (§5 R4, CLAUDE.md open task 15).
+        a different energy, so neither value may silently win: q scales with it.
     """
     path = Path(poni_file if poni_file is not None else cfg.poni_file or "")
     if not path.name:

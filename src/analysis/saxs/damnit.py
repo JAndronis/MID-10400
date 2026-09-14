@@ -1,9 +1,8 @@
-"""The DAMNIT-facing surface of ``agipd_saxs`` (context file §9, phase P5).
+"""The DAMNIT-facing surface of ``agipd_saxs``.
 
-Everything the DAMNIT context file needs lives here rather than in the context
-file itself. DAMNIT ``exec``s that file into a dict, so a function defined
-there cannot be pickled to a spawned worker — and this spawns one worker per
-physical core (CLAUDE.md, Project).
+Everything the DAMNIT variable needs lives here rather than in
+``src/amore/context.py``. DAMNIT ``exec``s that file into a dict, so a function defined
+there cannot be pickled to the spawned workers this pass runs.
 
 The context-file variable is therefore two lines: call :func:`agipd_saxs` and
 hand DAMNIT the result. Nothing here imports DAMNIT, so the same functions
@@ -46,20 +45,13 @@ def config_for(proposal: int, run_no: int, **overrides: Any) -> AgipdSaxsConfig:
 def agipd_saxs(proposal: int, run_no: int, **overrides: Any) -> Any:
     """Integrate a whole run and return ``I(q)`` per ``(trainId, pulseId)``.
 
-    The per-frame sums stay in the output file under ``cfg.output_root``; what
-    comes back is the intensity grid, which is what DAMNIT stores and what the
-    overview plots read.
-
-    DAMNIT's own ``run`` object is deliberately not used. A ``data="proc"``
-    variable is handed a proc-only collection, and proc holds corrected
-    detector files alone — no timeserver, no XGM, no motors — so every run
-    check in ``plan.run_checks`` would come back unavailable. Passing only the
-    proposal and run number lets the pass open proc for the frames and raw for
-    the checks.
+    The per-frame sums stay under ``cfg.output_root``; what comes back is the
+    intensity grid DAMNIT stores. DAMNIT's own ``run`` object is not used — it
+    would be a proc-only collection, leaving every check in ``plan.run_checks``
+    unavailable — so the pass opens proc and raw itself.
 
     :raises IncompleteRun: some frame did not reach ``OK``. Deliberately not
-        caught: a partial I(q) that looks like a whole one is worse than a
-        failed variable (context file §10, P5).
+        caught: a partial I(q) that looks whole is worse than a failed variable.
     """
     from analysis.saxs.run import run_agipd_saxs
 
@@ -93,7 +85,7 @@ def overview_figure(grid: Any, title: str = "") -> Any:
     from extra.utils import imshow2
     from matplotlib.gridspec import GridSpec
 
-    # Slots holding no frame are stored as zeros (context file §3 rule 7);
+    # Slots holding no frame are stored as zeros;
     # NaN is what makes xarray's mean skip them and what imshow2 leaves blank.
     # The copy is skipped when every slot holds a frame — the usual case, and
     # ~0.9 GB of it.

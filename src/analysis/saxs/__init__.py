@@ -1,12 +1,8 @@
 """AGIPD SAXS loader and integrator — the ``agipd_saxs`` DAMNIT variable.
 
-Supersedes ``amore/analysis_helpers.integrate_run`` in place: the DAMNIT
-variable keeps its name, and what it computes moves here.
-
-See ``context/agipd-saxs-integrator.md`` for the design. P1 provides the
-operator, the sparse kernels, the pure per-frame integration and the
-sparse-vs-pyFAI gate; P2 adds the static and per-cell base masks;
-P3 the plan, worker, writer and orchestration. DAMNIT integration is P5.
+The pass is a sparse full-split operator, per-cell base masks, and a plan,
+worker and writer that address every row by label. See
+``context/agipd-saxs-integrator.md`` for the design.
 """
 
 from __future__ import annotations

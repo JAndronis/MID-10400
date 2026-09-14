@@ -1,11 +1,9 @@
 """Gather/bincount kernels and the pure per-frame integration.
 
-``gather`` is the kernel of context file §6.2; :func:`integrate_frame` is the
-per-frame computation of §6.4. The context file places §6.4 in ``worker.py``;
-it lives here instead so that it stays a pure function with no I/O and no
-EXtra-data import, and so that the self-test and the P1 unit tests can reach it
-before ``worker.py`` exists. ``worker.py`` becomes a read-and-loop wrapper that
-calls into this module.
+Kept here rather than in ``worker.py`` so that the per-frame computation stays
+a pure function with no I/O and no EXtra-data import, which is what lets the
+self-test and the unit tests reach it without a run. ``worker.py`` is the
+read-and-loop wrapper around it.
 
 Everything here works on the flattened pixel order module × ss × fs, i.e. a
 1-D array of ``NPIX`` entries, and accumulates in float64.
@@ -42,7 +40,7 @@ def gather(
         ``weights``.
     :param weights: per-pixel weight, same length as ``cols``.
     :param squared: square the split coefficients (``p = 2``), which turns
-        ``Σ c·x`` into the ``Σ c²·x`` variance of context file §6.4.
+        ``Σ c·x`` into the ``Σ c²·x`` variance.
     :returns: float64 array of length ``op.npt``.
 
     Index arithmetic is done in int64 throughout: ``indptr`` is int32 and the
@@ -79,10 +77,10 @@ def gather(
 
 
 def denominator(op: SparseOperator, bad: np.ndarray) -> np.ndarray:
-    """``Σ c·Ω`` over the pixels *not* flagged by ``bad`` (context file §6.3).
+    """``Σ c·Ω`` over the pixels *not* flagged by ``bad``.
 
-    This is the ``D`` of the per-cell base masks, and also the
-    ``base_denominator`` argument of :func:`integrate_frame`.
+    The ``D`` of the per-cell base masks, and :func:`integrate_frame`'s
+    ``base_denominator``.
     """
     good = np.flatnonzero(~bad)
     return gather(op, good, op.omega[good])
@@ -92,7 +90,7 @@ def frame_data_status(x: np.ndarray) -> FrameStatus:
     """Classify a frame's counts as ``OK`` or ``DATA_CHECK_FAILED``.
 
     The ledger-facing counterpart of the check inside :func:`integrate_frame`,
-    for callers that need the §8 code rather than an exception.
+    for callers that need the status code rather than an exception.
     """
     if not np.issubdtype(x.dtype, np.integer):
         return FrameStatus.DATA_CHECK_FAILED
@@ -104,7 +102,7 @@ def frame_data_status(x: np.ndarray) -> FrameStatus:
 
 @dataclass(frozen=True, slots=True)
 class FrameResult:
-    """Per-frame sufficient statistics and scalars (context file §6.4, §7)."""
+    """Per-frame sufficient statistics and scalars."""
 
     signal: np.ndarray  # float64 (npt,)  Σ c·x
     normalization: np.ndarray  # float64 (npt,)  Σ c·Ω over valid pixels
@@ -122,7 +120,7 @@ def integrate_frame(
     base_bad: np.ndarray,
     base_denominator: np.ndarray,
 ) -> FrameResult:
-    """Integrate one frame over its photon hits (context file §6.4).
+    """Integrate one frame over its photon hits.
 
     :param x: flattened integer photon counts, ``(NPIX,)``.
     :param bad: this frame's bad-pixel mask, ``((m & mask_bits) != 0) |

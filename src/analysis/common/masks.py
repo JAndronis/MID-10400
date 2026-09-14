@@ -96,7 +96,7 @@ def frame_bad(
 
     ``mask_frame`` is one frame of the correction pipeline's mask, in any shape
     that flattens to the static mask's length. A blanket ``mask_bits`` is only
-    correct while every bit present marks an unusable pixel (CLAUDE.md pitfall
+    correct while every bit present marks an unusable pixel (see
     6), which is why both passes record the bit set actually seen.
     """
     flat = mask_frame.reshape(-1)

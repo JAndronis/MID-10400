@@ -6,7 +6,7 @@ amended by measurement during implementation and the modules that carry them
 say so: the per-frame mask is a NaN rather than an ``integrate1d(mask=)``
 argument (:mod:`analysis.waxs.operator`), and the variance is stored unclamped
 (:mod:`analysis.waxs.integrate`). :mod:`analysis.waxs.combine` puts the two
-detectors on one scale by fitting a factor over their overlap (§6 O5).
+detectors on one scale by fitting a factor over their overlap.
 """
 
 from __future__ import annotations

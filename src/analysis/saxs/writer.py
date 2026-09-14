@@ -1,11 +1,11 @@
-"""Output file, ledger and resume (context file §7).
+"""Output file, ledger and resume.
 
 The AGIPD schema and the two AGIPD-specific stores. Everything detector-
 agnostic — the layout, the ledger, resume, the label checks, ``mark`` and
 ``pooled_per_train`` — is :class:`analysis.common.writer.FrameTableWriter`.
 
 There are no NaN sentinels anywhere in the file. A frame that was not
-integrated carries a status code and zeros (§3 rule 7); ``status`` is what
+integrated carries a status code and zeros; ``status`` is what
 distinguishes the two, and pooling must select on it.
 """
 
@@ -105,7 +105,7 @@ class AgipdSaxsWriter(FrameTableWriter):
 
 
 def per_pulse(source: Any, *, dtype: Any = np.float32, chunk_rows: int = 20_000) -> Any:
-    """Per-frame ``I(q)`` as a ``(trainId, pulseId, q)`` DataArray (§9).
+    """Per-frame ``I(q)`` as a ``(trainId, pulseId, q)`` DataArray.
 
     A ``DataArray`` rather than a ``Dataset``, matching what
     ``analysis_helpers.integrate_run`` returned, with ``n_frames`` carried as a
@@ -113,7 +113,7 @@ def per_pulse(source: Any, *, dtype: Any = np.float32, chunk_rows: int = 20_000)
 
     Every frame placed on the grid is placed by its *stored* trainId and
     pulseId, never by its position in the frame table, so a dropped train or a
-    short one cannot slide frames onto the wrong train (CLAUDE.md pitfall 4).
+    short one cannot slide frames onto the wrong train.
     The pulse axis is the sorted set of pulse ids actually seen.
 
     Only ``OK`` frames carry trustworthy labels — a frame whose train failed
@@ -121,7 +121,7 @@ def per_pulse(source: Any, *, dtype: Any = np.float32, chunk_rows: int = 20_000)
     zeros — so those are counted in ``attrs["unplaced"]`` rather than guessed
     onto a slot. Slots that received no frame are zero with ``n_frames == 0``,
     the same selection idiom as :func:`pooled_per_train` and, like it, free of
-    NaN sentinels (context file §3 rule 7).
+    NaN sentinels.
 
     :param dtype: storage for the intensity grid. The default f4 costs ~0.9 GB
         for a 3000-train, 155-pulse run at ``npt`` 500; f8 doubles that.

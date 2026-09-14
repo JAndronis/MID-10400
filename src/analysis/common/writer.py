@@ -1,13 +1,13 @@
 """The frame table: output file, ledger and resume.
 
-Only the parent process opens an output file for writing (AGIPD context file §3
-rule 8). Rows are addressed by label: :meth:`FrameTableWriter.write_block`
+Only the parent process opens an output file for writing. Rows are addressed
+by label: :meth:`FrameTableWriter.write_block`
 checks every frame's trainId and every train's frame count against the plan
 before anything is stored, so a dropped train can never shift frames onto the
-wrong train (CLAUDE.md pitfall 4).
+wrong train.
 
 There are no NaN sentinels anywhere in a file written here. A frame that was
-not integrated carries a status code and zeros (§3 rule 7); ``status`` is what
+not integrated carries a status code and zeros; ``status`` is what
 distinguishes the two, and pooling must select on it.
 
 What differs between passes is only the *schema*: which per-frame scalars a
@@ -364,7 +364,7 @@ class FrameTableWriter:
 # the run that produced it and any post hoc analysis of it months later. They
 # read the ``/trains`` table for the row-to-train map: ``frames/trainId`` is
 # only filled for blocks that were actually written, so a run with an
-# unprocessed block has rows carrying trainId 0 (CLAUDE.md pitfall 4).
+# unprocessed block has rows carrying trainId 0.
 
 
 @contextmanager
