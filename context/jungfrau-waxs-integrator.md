@@ -270,7 +270,7 @@ path. The parent still pins `EXTRA_NUM_THREADS=1` before the pool exists.
   A related trap the config now refuses outright: `dataclasses.replace(cfg, detector="jf2")` keeps
   jf1's `detector_name`, PONI and mask, and integrating one detector's frames through the other's
   geometry yields a plausible-looking I(q) and no error anywhere — the AGIPD beam-centre trap
-  (CLAUDE.md pitfall 14) in another guise. Use `config_for(proposal, run, detector)`.
+  (CLAUDE.md pitfall 15) in another guise. Use `config_for(proposal, run, detector)`.
 - **O2 — Resolved 2026-09-13: non-zero = excluded.** `jf1_mask.edf` and `jf2_mask.edf` are native
   **pyFAI** masks written from silx view, so they carry pyFAI's own polarity, which the installed
   source states twice — `integrate1d_ng`: *"array with 0 for valid pixels, all other are masked"*;
@@ -444,7 +444,7 @@ dark cell. Invariants: rows written by label, no NaN anywhere in the file.
 
 *First cluster run, 2026-09-13:* both scripts failed immediately on max-exfl484 with
 `ValueError: buffer source array is read-only`, in `build_operator`, for every run and detector.
-The cause is CLAUDE.md pitfall 17 — the static mask was frozen read-only and handed straight to
+The cause is CLAUDE.md pitfall 18 — the static mask was frozen read-only and handed straight to
 `integrate1d(mask=)`, which the Linux pyFAI wheels reject and the macOS ones accept, so the whole
 local suite passed. Fixed by copying before freezing and keeping a writable `static_mask_2d` on the
 operator; `tests/waxs/test_waxs_operator.py` now pins both. The scripts recorded only `repr(error)`

@@ -7,10 +7,8 @@ with their own phases.
 
 from __future__ import annotations
 
-import hashlib
-import json
 import os
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 
 from pyFAI.units import hc  # keV·Å, derived from scipy CODATA (pyFAI/units.py:66)
@@ -18,6 +16,7 @@ from pyFAI.units import hc  # keV·Å, derived from scipy CODATA (pyFAI/units.py
 # Re-exported: the whole package and its tests reach these through
 # ``analysis.saxs.config``, and ``test_config`` calls ``physical_cores`` with a
 # fixture topology root.
+from analysis.common.config import config_sha256
 from analysis.common.cpu import file_sha256, physical_cores
 
 __all__ = [
@@ -207,19 +206,13 @@ class AgipdSaxsConfig:
         return hc / self.photon_energy_kev * 1e-10
 
     def config_hash(self) -> str:
-        """sha256 over every field plus the sha256 of each input file.
+        """sha256 over the result-affecting fields plus each input file's sha256.
 
-        The ``<pkg>`` git commit and the package versions join this in the
-        provenance record written by ``writer.finalise`` (context file §7);
-        they are deliberately not folded in here, so that a rerun of the same
-        configuration can still resume.
+        Purely operational fields — worker count, block size, output root,
+        ``allow_incomplete``, ``overwrite``, ``selftest_frames`` — are
+        deliberately **excluded**: they change how the pass runs, never what it
+        stores, and covering them made a rerun at a different worker count
+        refuse its own output. See :mod:`analysis.common.config`. They are still
+        recorded in full in the provenance record.
         """
-        payload: dict[str, object] = asdict(self)
-        payload["method"] = list(self.method)
-        payload["expected_bits"] = sorted(self.expected_bits)
-        payload["input_file_sha256"] = {
-            name: file_sha256(path) if path else None
-            for name, path in self.input_files.items()
-        }
-        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-        return hashlib.sha256(canonical.encode()).hexdigest()
+        return config_sha256(self, self.input_files)

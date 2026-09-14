@@ -8,14 +8,13 @@ D2).
 
 from __future__ import annotations
 
-import hashlib
-import json
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 
 from pyFAI.units import hc  # keV·Å, derived from scipy CODATA (pyFAI/units.py:66)
 
-from analysis.common.cpu import file_sha256, physical_cores
+from analysis.common.config import config_sha256
+from analysis.common.cpu import physical_cores
 
 __all__ = [
     "DETECTORS",
@@ -238,7 +237,7 @@ class JungfrauWaxsConfig:
         set, so it would read jf2's frames through jf1's source name, geometry
         and mask. Nothing downstream would raise — a wrong PONI still yields a
         plausible-looking I(q), which is the AGIPD beam-centre trap (CLAUDE.md
-        pitfall 14) in another guise — so it is caught here.
+        pitfall 15) in another guise — so it is caught here.
 
         Only an unambiguous mix-up is refused: a field naming the *other*
         detector and not this one. Deliberately pointing a run at an unrelated
@@ -313,17 +312,16 @@ class JungfrauWaxsConfig:
         return hc / self.photon_energy_kev * 1e-10
 
     def config_hash(self) -> str:
-        """sha256 over every field plus the sha256 of each input file."""
-        payload: dict[str, object] = asdict(self)
-        payload["method"] = list(self.method)
-        payload["expected_bits"] = sorted(self.expected_bits)
-        payload["expected_lit_cells"] = list(self.expected_lit_cells)
-        payload["input_file_sha256"] = {
-            name: file_sha256(path) if path else None
-            for name, path in self.input_files.items()
-        }
-        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-        return hashlib.sha256(canonical.encode()).hexdigest()
+        """sha256 over the result-affecting fields plus each input file's sha256.
+
+        Purely operational fields — worker count, block size, output root,
+        ``allow_incomplete``, ``overwrite``, ``selftest_frames`` — are
+        deliberately **excluded**: they change how the pass runs, never what it
+        stores, and covering them made a rerun at a different worker count
+        refuse its own output. See :mod:`analysis.common.config`. They are still
+        recorded in full in the provenance record.
+        """
+        return config_sha256(self, self.input_files)
 
 
 def config_for(proposal: int, run: int, detector: str, **overrides: object):

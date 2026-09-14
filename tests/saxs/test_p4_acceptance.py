@@ -273,10 +273,16 @@ def test_configuration_rejects_a_mismatched_worker_count(p4, finished_run, monke
 
 
 def test_configuration_notices_a_different_config_hash(p4, finished_run, monkeypatch):
-    """--skip-run would otherwise grade a file written under another config."""
+    """--skip-run would otherwise grade a file written under another config.
+
+    The differing field must be one the hash actually covers. ``trains_per_block``
+    used to serve here and no longer does: it schedules the work and changes no
+    stored value, so it is excluded from ``config_hash``
+    (:mod:`analysis.common.config`). ``npt`` changes every row.
+    """
     pipeline, output = finished_run
     monkeypatch.setattr(p4, "P4_WORKERS", pipeline.cfg.workers)
-    other = replace(pipeline.cfg, trains_per_block=pipeline.cfg.trains_per_block + 1)
+    other = replace(pipeline.cfg, npt=pipeline.cfg.npt // 2)
     result = p4.stage_configuration(other, output, run_dir=pipeline.run.path)
     assert result["config_hash_matches"] is False
     assert result["passed"] is False

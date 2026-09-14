@@ -28,6 +28,7 @@ from typing import Any, Protocol, runtime_checkable
 import h5py
 import numpy as np
 
+from analysis.common.config import OPERATIONAL_FIELDS
 from analysis.common.plan import Block, RunPlan
 from analysis.common.status import FrameStatus
 
@@ -200,6 +201,12 @@ class FrameTableWriter:
         provenance.attrs["config_hash"] = config_hash
         provenance.attrs["config"] = json.dumps(
             config_payload(cfg), sort_keys=True, default=str
+        )
+        # Which fields the hash covers, so a stored file explains its own
+        # compatibility rules rather than requiring the reader to have the
+        # matching source version to hand.
+        provenance.attrs["config_operational_fields"] = json.dumps(
+            sorted(OPERATIONAL_FIELDS)
         )
         provenance.attrs["detector_name"] = plan.detector_name
         provenance.attrs["run_checks"] = json.dumps(plan.checks, default=str)

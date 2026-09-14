@@ -325,24 +325,36 @@ statistics (open task 6). Integer data cannot carry NaN, so bad pixels must come
     `"'var#x'"` — quotes included — the prefix no longer matches and every dependency silently
     resolves to nothing. Never add that import to `src/amore/context.py`, and pass
     `dont_inherit=True` when compiling it (`compile()` inherits the caller's future flags).
-12. **h5py attrs outlive their file.** An `AttributeManager` kept past its `with` block does not
+12. **A config hash must cover only what changes a stored number.**
+    `config_hash` gates resume and gates reopening a file. It originally covered `n_workers`,
+    `trains_per_block`, `selftest_frames`, `output_root`, `allow_incomplete` and `overwrite`, none
+    of which can change a value in `/frames` — so a pass run at 36 workers wrote a file the same
+    pass at the default worker count refused, and a file written with `overwrite=True` could never
+    match a later `overwrite=False` run and was refused every time. `analysis.common.config`
+    now excludes exactly those six for both passes; everything else stays in, including
+    `base_mask_trains` and `cell_sample_trains`, which look operational but choose which trains are
+    sampled and so change the masks and the measured readout noise. The operational values are
+    still recorded in provenance, along with the list itself, so a stored file explains its own
+    compatibility rules. **Files written before 2026-09-13 carry the old hash and must be
+    reprocessed**, not resumed.
+13. **h5py attrs outlive their file.** An `AttributeManager` kept past its `with` block does not
     raise on `.get`; it returns the default, so a provenance value reads as absent. Read every
     attribute inside the block.
-13. **Silent failures in the old pipeline.** pasha forks from a non-main thread; `ThreadPoolExecutor`
+14. **Silent failures in the old pipeline.** pasha forks from a non-main thread; `ThreadPoolExecutor`
     futures are never checked; `mp.Queue.empty()` is racy. Failures end as NaN rows.
-14. **A beam centre only means something in its own corner-array frame.**
+15. **A beam centre only means something in its own corner-array frame.**
     `geom.to_pyfai_detector()` and `geom.to_distortion_array()` place the same pixels at different
     coordinates — origins 138.4 mm / 121.6 mm apart — and `setFit2D` interprets its `centerX` /
     `centerY` in whichever array the detector currently holds. So `setFit2D(sdd, px, py)` on a bare
     `to_pyfai_detector()` silently puts the beam somewhere neither convention intends (1.0 nm⁻¹
     off, measured). Replace the corners and set the centre together, or do neither. Nothing raises
     either way: both give a plausible q range and a plausible-looking I(q).
-15. **`extra_speckle.Setup(geom=None)` builds geometry from motor encoders.**
+16. **`extra_speckle.Setup(geom=None)` builds geometry from motor encoders.**
     `DetectorAGIPD1M._init_geom` falls through to `geometry_from_encoders(run)`, whose three
     nested bare `except:` clauses end in `"Encoder positions not found, setting all values to 0"`
     and hardcoded quad positions. A `Setup` that looks configured can be running nominal geometry.
     Read its printed output; pass `geom=` to mean a specific file.
-16. **pyFAI rebuilds its sparse matrix whenever the mask changes.** `setup_sparse_integrator`
+17. **pyFAI rebuilds its sparse matrix whenever the mask changes.** `setup_sparse_integrator`
     keys the cached matrix on a checksum of the mask and its own docstring calls the rebuild "a
     very time consuming operation". So a *per-frame* mask passed to `integrate1d(mask=)` rebuilds
     the full-split matrix every frame — measured 16.8 vs 2.3–2.9 ms/frame on a JUNGFRAU module. On
@@ -351,7 +363,7 @@ statistics (open task 6). Integer data cannot carry NaN, so bad pixels must come
     from the numerator *and* the normalisation, giving bit-identical sums (measured 0.0e+00 max
     relative difference on all three sums, both detectors, all 500 bins). Integer data cannot carry
     NaN, which is why AGIPD needs its sparse denominator correction instead.
-17. **Never freeze an array pyFAI might own, and never hand it a read-only one.**
+18. **Never freeze an array pyFAI might own, and never hand it a read-only one.**
     `np.ascontiguousarray(x, dtype)` returns `x` *itself* when it is already contiguous and of
     that dtype, so `arr = np.ascontiguousarray(ai.solidAngleArray(shape), np.float64);
     arr.flags.writeable = False` freezes pyFAI's own `_dssa` cache. Separately, pyFAI's Cython
@@ -361,7 +373,7 @@ statistics (open task 6). Integer data cannot carry NaN, so bad pixels must come
     do not, so this passes every local test and fails on the cluster. Copy before freezing
     (`analysis.saxs.operator._readonly`, `analysis.waxs.operator._frozen`) and keep one writable
     mask on the operator for the hot loop.
-18. **`extra_speckle.saxs.get` hard-wires npt and the split scheme.** `_apply_pyfai` passes
+19. **`extra_speckle.saxs.get` hard-wires npt and the split scheme.** `_apply_pyfai` passes
     `npt=300`, so `get(..., npt=500)` raises on the duplicate keyword rather than rebinning; and
     `get` consumes `method` for its own `"1d"`/`"2d"` switch, so pyFAI's method can never be passed
     through and it always runs the default `("bbox","csr","cython")`. Its default unit is `q_A^-1`.
@@ -373,7 +385,7 @@ statistics (open task 6). Integer data cannot carry NaN, so bad pixels must come
 | # | Task | Next step / gate |
 |---|---|---|
 | 1 | AGIPD SAXS integrator (`agipd_saxs`) | **P1–P4 done.** P4 accepted on r0423 2026-09-11: 465 000/465 000 frames OK, pooled I(q) within 4.9e-8 of a dense pyFAI reference, 6.29 min on 36 workers against > 1 h for `analysis_helpers.integrate_run`. **P5 implemented**: `agipd_saxs` / `agipd_iq_overview` in `src/amore/context.py` keep their names and columns, now backed by `analysis.saxs.damnit` instead of `analysis_helpers.integrate_run` — the column's contents change from Å⁻¹ I0-divided to nm⁻¹ undivided, so clear it for runs processed before this. **The beam centre moved on 2026-09-13** (open task 4), which moves the q axis again and changes every stored operator hash — anything integrated before that date must be reprocessed, not merged. Next: run it on r0423 and r0426, then P6 (36 vs 72 workers) |
-| 2 | WAXS JUNGFRAU integrator (`<pkg>.waxs`) | **W0, W2, W3 and W5 done 2026-09-13; W1 and W4 need the cluster.** `analysis.common` extracted (SAXS suite passes unedited, `config_hash` byte-identical); `analysis.waxs` implemented and gated on the real r0423 train of both detectors — σ_read 0.3230/0.3175 keV, lit cells (0…7), and the D5′ NaN path **exactly** equal to the per-frame-mask reference on all 500 bins. 105 WAXS tests, 334 in the suite. Two spec decisions were amended by measurement (context file §3 D3 and D5′) and one general pyFAI trap recorded (pitfall 16). Three DAMNIT variables wired: `jungfrau_waxs_jf1`, `jungfrau_waxs_jf2`, `jungfrau_waxs_overview`. **O5 resolved and O6 closed 2026-09-13.** `analysis.waxs.combine` fits a scale factor for jf2 against jf1 over their overlap and merges the two into one curve (`damnit.combined_curve`, DAMNIT variable `jungfrau_waxs_combined`); its χ²ᵣ is a cross-check on the two PONIs **only when the overlap carries a feature** — a q error is degenerate with a scale factor on a featureless curve (measured: 5 % q shift gives χ²ᵣ 0.22 smooth, 776 with a peak), so it bites on r0426 and not on r0423. O6 is closed by decision: no combined SAXS+WAXS curve is planned. **W1 O1 done 2026-09-13:** source names, module numbers and the legacy-alias behaviour settled from `lsxfel` (see the JUNGFRAU row) and wired into `config.DETECTOR_NAMES`/`DETECTOR_MODNOS`; the mock now reproduces the real `/CORR/` layout with its soft-linked `/DET/` alias, and `config_for(proposal, run, detector)` needs no arguments beyond those. **W1 complete 2026-09-13** (`scripts/w1_facts.py` on max-exfl484, r0423 + r0426 × jf1 + jf2): files confirmed, sources confirmed, q ranges 11.53–23.68 / 9.80–18.46 nm⁻¹ from the real PONIs, O4 settled (lit set invariant, and `{0…6,15}` not `{0…7}` — `expected_lit_cells` corrected), `data.mask` train-invariant over sampled trains, `roi` ruled out by the chunk layout, and D6's premise corrected. The first cluster run also surfaced CLAUDE.md pitfall 17. **W4 accepted on r0423, both detectors, 2026-09-13** (max-exfl484, 36 workers): 24 000/24 000 frames OK each, self-test exactly 0.0, dense reference 6.5e-08 / 8.0e-08, **17.5 / 20.1 s** wall. Per frame per core read_data 11.6/11.9, read_mask 5.0/5.2, integrate 3.0/2.7 ms — `integrate` did **not** degrade under load, unlike every AGIPD stage, so that warning does not transfer. The read is dominated by `data.adc` (uncompressed) not `data.mask` (gzipped), so the mask train-invariance would save ~25 % of worker time, not half — 4 s on a 17.5 s run, not worth the risk of a stale mask. Per-frame non-positive variance bins: 2.1 % of frames on jf1 but **38.2 % on jf2**, because jf2's larger mask leaves ~164 kept pixels per q bin against 252 — pooled σ is unaffected, per-frame σ is not usable there. **Detector cross-check, r0423:** `combine_files` fits jf2 onto jf1 at **0.98823 ± 0.00005** over 11.53–18.44 nm⁻¹ — the two independent PONIs and masks agree on absolute I(q) to 1.2 %, which validates the Σc·Ω normalisation chain. χ²ᵣ 54 with a 0.74 % rms residual against a claimed 0.10 % error: a real sub-percent systematic, not a disagreement. Claimed error vs the 0.066 % Poisson floor is the first independent check that D3's error model is calibrated. Leading suspect for the 0.74 % is the un-applied polarisation correction (open task 5). **Next:** W5, run the DAMNIT variables on r0423 and r0426 |
+| 2 | WAXS JUNGFRAU integrator (`<pkg>.waxs`) | **W0–W4 done and accepted; W5 implemented but never run on the cluster.** `analysis.common` carries the detector-agnostic layer (status, row model, mask vocabulary, CPU/pool helpers, frame-table writer); `analysis.waxs` the pass; `analysis.waxs.combine` the two-detector scaling. 438 tests. **Three spec decisions were changed by measurement:** D5′ — the per-frame mask is a NaN, not an `integrate1d(mask=)` argument (8× faster, bit-identical, pitfall 17); D3 — the variance is stored unclamped; D6 — its stated premise was wrong (see the JUNGFRAU row). **O1–O6 all resolved or closed.** **W1** (`scripts/w1_facts.py`, r0423 + r0426 × jf1 + jf2): files, sources and q ranges confirmed; O4 settled — the lit set is invariant and is `{0…6,15}`, not `{0…7}`; `data.mask` train-invariant; `roi` ruled out by the chunk layout. **W4** (`scripts/w4_acceptance.py`, max-exfl484, 36 workers, r0423, both detectors): 24 000/24 000 frames OK each, self-test exactly 0.0, independent reference 6.5e-08 / 8.0e-08, **17.5 / 20.1 s** wall. **Detector cross-check:** `combine_files` fits jf2 onto jf1 at **0.98823 ± 0.00005**, so the two independent PONIs and masks agree on absolute I(q) to 1.2 % — χ²ᵣ 54 is a 0.74 % systematic against a 0.10 % claimed error, not a disagreement; leading suspect is polarisation (open task 5). **Next: W5** — run the four DAMNIT variables on r0423, then r0426, then in bulk. Pre-flight `scripts/w1_facts.py` over the full run list first: D4 fails loudly on any run whose cell pattern differs, and only r0423 and r0426 have been checked |
 | 3 | Lit-frame selection | LITFRM source/keys from `lsxfel`; compare with `XrayPulses` counts per train |
 | 4 | AGIPD geometry source of truth | **Beam centre wired, not settled.** `agipd_saxs` now applies the agreed `(607.46, 672.08)` via `set_pixel_corners(to_distortion_array())` + `setFit2D`, paired with `geom_latest.geom`. That pairing merges the r488 fcc doublet (0.584 + 0.633 → 0.610 nm⁻¹), so it is the pairing that needs confirming, not the code. Note the old pipeline and `extra_speckle.Setup` agree with each other because they share this construction — and `Setup` with `geom=None` silently builds from motor encoders (`geometry_from_encoders`, bare `except:`, falls back to hardcoded quad positions), so it may not be the same geometry at all. Decisive test: `integrate2d` and check whether I(q,χ) on the 0.633 nm⁻¹ ring is flat in χ or sinusoidal — amplitude and phase give the displacement and its direction. Then resolve the encoder source (absent in r0500) and CrystFEL file vs `geom.offset()` |
 | 5 | Polarisation correction | Confirm detector-frame ↔ lab-horizontal orientation and factor with MID. **The ≤ 5.4e-4 figure is the AGIPD one and does not transfer to WAXS**: pyFAI's azimuthal modulation amplitude is sin²(2θ)/2, which over the JUNGFRAU overlap runs 3.1 % at q = 11.5 nm⁻¹ to 7.8 % at 18.4 — two orders of magnitude larger, and the leading suspect for the 0.74 % shape difference between the two detectors on r0423 (`analysis.waxs.combine`). Applying it and watching that residual is now a concrete test |

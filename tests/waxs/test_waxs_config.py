@@ -127,7 +127,7 @@ def test_the_filled_source_name_enters_the_hash():
 
 
 def test_swapping_only_the_detector_is_refused():
-    """It would keep the other detector's name, PONI and mask (pitfall 14)."""
+    """It would keep the other detector's name, PONI and mask (pitfall 15)."""
     jf1 = config_for(10400, 423, "jf1")
     with pytest.raises(ValueError, match="belongs to 'jf1'"):
         dataclasses.replace(jf1, detector="jf2")
