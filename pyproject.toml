@@ -32,7 +32,8 @@ euxfel = [
     "matplotlib<3.9",
     "ipympl",
     "scikit-image",
-    "damnit"
+    "damnit",
+    "pybaselines"
 ]
 
 [dependency-groups]
