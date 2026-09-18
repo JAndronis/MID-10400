@@ -383,12 +383,38 @@ wheels = [
 ]
 
 [[package]]
+name = "cmasher"
+version = "1.9.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "colorspacious" },
+    { name = "matplotlib" },
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/2f/ca/39152b506133881be74bd46cced27ec10d9bbc85db5bdfc22c8f8e4011f9/cmasher-1.9.2.tar.gz", hash = "sha256:6c90c2cec87146e3210d3e7f2321fceee38ac7d87c136cd0de25160a14f57ff5", size = 520860, upload-time = "2024-11-19T11:17:02.084Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/91/d2/6fcb93a60777fef7662d84ba60846d2dee9b6b70b4a62472515110f79cee/cmasher-1.9.2-py3-none-any.whl", hash = "sha256:2fe45fde06051050dda5c023a527ba9066ca21f161c793f22839a6ebe6e4bbbb", size = 506496, upload-time = "2024-11-19T11:16:58.549Z" },
+]
+
+[[package]]
 name = "colorama"
 version = "0.4.6"
 source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/d8/53/6f443c9a4a8358a93a6792e2acffb9d9d5cb0a5cfd8802644b7b1c9a02e4/colorama-0.4.6.tar.gz", hash = "sha256:08695f5cb7ed6e0531a20572697297273c47b8cae5a63ffc6d6ed5c201be6e44", size = 27697, upload-time = "2022-10-25T02:36:22.414Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d1/d6/3965ed04c63042e047cb6a3e6ed1a63a35087b6a609aa3a15ed8ac56c221/colorama-0.4.6-py2.py3-none-any.whl", hash = "sha256:4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6", size = 25335, upload-time = "2022-10-25T02:36:20.889Z" },
+]
+
+[[package]]
+name = "colorspacious"
+version = "1.1.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/75/e4/aa41ae14c5c061205715006c8834496d86ec7500f1edda5981f0f0190cc6/colorspacious-1.1.2.tar.gz", hash = "sha256:5e9072e8cdca889dac445c35c9362a22ccf758e97b00b79ff0d5a7ba3e11b618", size = 688573, upload-time = "2018-04-08T04:27:30.83Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ab/a1/318b9aeca7b9856410ededa4f52d6f82174d1a41e64bdd70d951e532675a/colorspacious-1.1.2-py2.py3-none-any.whl", hash = "sha256:c78befa603cea5dccb332464e7dd29e96469eebf6cd5133029153d1e69e3fd6f", size = 37735, upload-time = "2018-04-08T04:27:22.143Z" },
 ]
 
 [[package]]
@@ -1772,11 +1798,15 @@ euxfel = [
     { name = "extra-proposal" },
     { name = "extra-speckle" },
     { name = "fabio" },
-    { name = "ipympl" },
-    { name = "matplotlib" },
     { name = "pybaselines" },
     { name = "pyfai" },
     { name = "scikit-image" },
+]
+plotting = [
+    { name = "cmasher" },
+    { name = "ipympl" },
+    { name = "matplotlib" },
+    { name = "scienceplots" },
 ]
 
 [package.dev-dependencies]
@@ -1788,6 +1818,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "cmasher", marker = "extra == 'plotting'" },
     { name = "damnit", marker = "extra == 'euxfel'", git = "https://github.com/European-XFEL/DAMNIT.git" },
     { name = "dask", extras = ["complete"], marker = "extra == 'euxfel'" },
     { name = "dask-jobqueue", marker = "extra == 'euxfel'" },
@@ -1797,15 +1828,16 @@ requires-dist = [
     { name = "extra-proposal", marker = "extra == 'euxfel'" },
     { name = "extra-speckle", marker = "extra == 'euxfel'", git = "https://git.xfel.eu/dataAnalysis/extra-speckle.git" },
     { name = "fabio", marker = "extra == 'euxfel'" },
-    { name = "ipympl", marker = "extra == 'euxfel'" },
-    { name = "matplotlib", marker = "extra == 'euxfel'", specifier = "<3.9" },
+    { name = "ipympl", marker = "extra == 'plotting'" },
+    { name = "matplotlib", marker = "extra == 'plotting'", specifier = "<3.9" },
     { name = "pybaselines", marker = "extra == 'euxfel'" },
     { name = "pybeamtime", editable = "extern/pybeamtime" },
     { name = "pyfai", marker = "extra == 'euxfel'" },
+    { name = "scienceplots", marker = "extra == 'plotting'" },
     { name = "scikit-image", marker = "extra == 'euxfel'" },
     { name = "xarray" },
 ]
-provides-extras = ["euxfel"]
+provides-extras = ["euxfel", "plotting"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -3010,6 +3042,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/42/f2/05f29bc3913aea15eb670be136045bf5c5bbf4b99ecb839da9b422bb2c85/requests-oauthlib-2.0.0.tar.gz", hash = "sha256:b3dffaebd884d8cd778494369603a9e7b58d29111bf6b41bdc2dcd87203af4e9", size = 55650, upload-time = "2024-03-22T20:32:29.939Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/3b/5d/63d4ae3b9daea098d5d6f5da83984853c1bbacd5dc826764b249fe119d24/requests_oauthlib-2.0.0-py2.py3-none-any.whl", hash = "sha256:7dd8a5c40426b779b0868c404bdef9768deccf22749cde15852df527e6269b36", size = 24179, upload-time = "2024-03-22T20:32:28.055Z" },
+]
+
+[[package]]
+name = "scienceplots"
+version = "2.2.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "matplotlib" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/50/05/73a19270d548caadf145b0fc8ab94a8c716faeca528c254a4192676e048b/scienceplots-2.2.2.tar.gz", hash = "sha256:d46ce7170b4160265c777a48f73a0db1fdff8460f59a0ded0e364acb139ab115", size = 19692, upload-time = "2026-06-23T07:32:50.693Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5d/ff/6469a5cabf230ebc94f927246874136098dde1aacc9328bc40dceb24ba13/scienceplots-2.2.2-py3-none-any.whl", hash = "sha256:f63d04e6ec11fe2036ec120feb6c2f1d84b7c38e96cc7edcde7208064653af98", size = 33394, upload-time = "2026-06-23T07:32:49.594Z" },
 ]
 
 [[package]]
