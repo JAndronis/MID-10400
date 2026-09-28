@@ -7,6 +7,13 @@ acoustically levitated droplets, MID instrument, cycle 202601).
 data-format facts and the pitfalls; the per-task design guides live in
 [`context/`](context/).
 
+[`context/repository-overview.md`](context/repository-overview.md) is the
+extended version of this README: the same layout in full, module by module,
+plus what each pass computes, the output-file schema and the invariants that
+hold across the codebase. It is written to stand alone, so it is also the file
+to paste into a conversation with an assistant that cannot read the repository.
+Unlike `CLAUDE.md` it describes only what exists and works — no open tasks.
+
 ## Layout
 
 ```
