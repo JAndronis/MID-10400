@@ -1,32 +1,12 @@
-import os, sys
-from pathlib import Path
-import functools
-from typing import (
-    Literal,
-    NamedTuple,
-    get_args
-)
+from typing import Literal, NamedTuple, get_args
 
 import extra_data as ex
-from extra_data.components import AGIPD1M
-from extra_geom import AGIPD_1MGeometry
-from extra_data import by_index
-import extra_speckle as esp
-from extra_speckle.setup import Setup
-import damnit
-
-import numpy as np
-from numpy.typing import ArrayLike, NDArray
 import matplotlib.pyplot as plt
-from matplotlib import rcParams
-import h5py
+import numpy as np
 import xarray as xr
-from scipy.ndimage import gaussian_filter1d
-from scipy.optimize import curve_fit
+from numpy.typing import ArrayLike, NDArray
 from scipy.interpolate import interp1d
-from pybaselines import Baseline
-from pyFAI.integrator.azimuthal import AzimuthalIntegrator
-
+from scipy.optimize import curve_fit
 
 N_A: float = 6.02214076e23
  
