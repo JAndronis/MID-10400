@@ -18,6 +18,21 @@ RHO_CORE: float = 4.1  # g/mL, ferritin ferrihydrite core
 D_FERRITIN_NM: float = 12.0  # outer diameter of the cage
 V_BAR_PEG: float = 0.833  # mL/g
 RHO_WATER_25C: float = 0.99705  # g/mL
+M_NACL: float = 58.44  # g/mol
+
+# Mass attenuation coefficients mu/rho [cm^2/g] at 9.04 keV, the photon energy the
+# SAXS pass integrates with; the XGM reports 9.00 keV (CLAUDE.md open task 15), where
+# they are ~1.3 % higher. xraydb 4.5.8 (Elam, Ravel & Sieber 2002); "protein" is
+# C5H8NO2S0.05 and the ferritin core is FeOOH, as in holoferritin_properties.
+MU_RHO_9P04_KEV: dict[str, float] = {
+    "H2O": 7.1949,
+    "NaCl": 54.5082,
+    "PEG": 4.6956,
+    "FeOOH": 143.142,
+    "protein": 5.4658,
+}
+# Droplet camera pixel size: droplet_fit(px=13.9) in src/amore/context.py.
+DROPLET_PX_MM: float = 13.9e-3
 
 DB_VARIABLES = Literal["agipd_saxs", "jungfrau_waxs_jf1", "jungfrau_waxs_jf2", "jungfrau_waxs_combined"]
 
@@ -180,6 +195,205 @@ def droplet_composition(
         volume_dry=volume_dry,
         ferritin=fer,
     )
+
+
+class DropletAttenuation(NamedTuple):
+    """Arrays broadcast to the shape of `volume`."""
+
+    v_over_v0: NDArray[np.float64]
+    mu_per_mm: NDArray[np.float64]
+    droplet_transmission: NDArray[np.float64]  # exp(-mu * chord)
+    path_mm: NDArray[np.float64]  # chord * exp(-mu * chord)
+    phi_ferritin: NDArray[np.float64]  # buffer volume fraction the ferritin displaces
+
+
+def droplet_attenuation(
+    volume: ArrayLike,
+    volume_initial: float,
+    chord_mm: ArrayLike,
+    *,
+    ferritin_mg_per_ml_initial: float = 50.0,
+    peg_percent_wv_initial: float = 5.0,
+    nacl_mM_initial: float = 150.0,
+    n_fe: float = 1800.0,
+) -> DropletAttenuation:
+    """X-ray attenuation along the beam's path through an evaporating droplet.
+
+    Every photon scattered at small angle inside a path of length t travels t through
+    the droplet in total, so the droplet's measured I(q) is its cross-section per unit
+    volume times `path_mm` = t * exp(-mu * t). That factor peaks at t = 1/mu, so a
+    droplet thicker than one attenuation length scatters *less* per unit flux as it
+    grows, and a subtraction between two droplets must scale each by its own.
+
+    mu sums water, apoferritin, the FeOOH core, PEG and NaCl at the concentrations of
+    `droplet_composition`, using MU_RHO_9P04_KEV. Every field is NaN where `volume` is
+    below the dry volume.
+
+    Parameters
+    ----------
+    volume, volume_initial
+        Droplet volume and its value at injection, in the same unit.
+    chord_mm
+        Beam path through the droplet [mm], broadcast against `volume`.
+    ferritin_mg_per_ml_initial, peg_percent_wv_initial, nacl_mM_initial
+        Composition at `volume_initial`; ferritin on the whole-particle basis.
+    n_fe
+        Fe atoms per ferritin (see `holoferritin_properties`). The core dominates the
+        attenuation, so this is the largest uncertainty in mu.
+    """
+    comp = droplet_composition(
+        volume,
+        volume_initial,
+        ferritin_mg_per_ml_initial=ferritin_mg_per_ml_initial,
+        peg_percent_wv_initial=peg_percent_wv_initial,
+        n_fe=n_fe,
+    )
+    c_ferritin = comp.ferritin_mg_per_ml * 1e-3  # g/mL
+    c_apo = c_ferritin * comp.ferritin.protein_mass_fraction
+    c_nacl = nacl_mM_initial * 1e-6 * M_NACL * comp.concentration_factor  # g/mL
+    mu_per_cm = (
+        comp.water_volume_fraction * RHO_WATER_25C * MU_RHO_9P04_KEV["H2O"]
+        + c_apo * MU_RHO_9P04_KEV["protein"]
+        + (c_ferritin - c_apo) * MU_RHO_9P04_KEV["FeOOH"]
+        + comp.peg_mg_per_ml * 1e-3 * MU_RHO_9P04_KEV["PEG"]
+        + c_nacl * MU_RHO_9P04_KEV["NaCl"]
+    )
+    mu = mu_per_cm / 10.0
+    chord = np.asarray(chord_mm, dtype=np.float64)
+    transmission = np.exp(-mu * chord)
+    return DropletAttenuation(
+        v_over_v0=1.0 / comp.concentration_factor,
+        mu_per_mm=mu,
+        droplet_transmission=transmission,
+        path_mm=chord * transmission,
+        phi_ferritin=comp.ferritin_volume_fraction_mass,
+    )
+
+
+def train_pulse_energy(raw, n_pulses: int) -> xr.DataArray:
+    """XGM pulse energy [uJ] per train, averaged over the first `n_pulses` pulses.
+
+    Per train, not per frame, on purpose: at 2.26 MHz the per-pulse XGM reads the first
+    ~20 pulses of a train 15-20 % high while the detector's own signal per pulse is
+    flat (r370, r464), so dividing frame by frame writes that ramp into I(q). Two runs
+    with different pulse counts therefore share a flux scale only over the same pulse
+    ranks, which is what `n_pulses` fixes. A train missing any of those pulses is NaN
+    rather than an average over fewer.
+
+    `raw` is a raw (or "all") DataCollection: the XGM is a control source, which proc
+    does not carry.
+    """
+    from extra.components import XGM
+
+    pulse_energy = XGM(raw).pulse_energy()
+    n_available = pulse_energy.sizes["pulseIndex"]
+    if n_available < n_pulses:
+        raise ValueError(
+            f"the XGM has {n_available} pulses per train, fewer than {n_pulses=}"
+        )
+    first = pulse_energy.isel(pulseIndex=slice(0, n_pulses))
+    return first.mean("pulseIndex", skipna=False)
+
+
+def droplet_scaling(
+    run_nr: int,
+    db,
+    *,
+    proposal: int = 10400,
+    trains=None,
+    n_pulses: int = 155,
+    v0_run: int | None = None,
+    raw=None,
+    ferritin_mg_per_ml_initial: float = 50.0,
+    peg_percent_wv_initial: float = 5.0,
+    nacl_mM_initial: float = 150.0,
+    n_fe: float = 1800.0,
+) -> xr.Dataset:
+    """Per-train factors that put one droplet's I(q) on a common scale.
+
+    I(q) * scale is proportional to the droplet's scattering cross-section per unit
+    volume, so a buffer droplet is subtracted from a sample droplet as
+
+        D(q) = I_s(q) * scale_s - (1 - phi_ferritin_s) * I_b(q) * scale_b
+
+    with both I(q) averaged over the same pulses, the first `n_pulses` of each train.
+    Equivalently, the buffer's factor on unscaled curves is
+    alpha = (1 - phi_s) * flux_s * path_s / (flux_b * path_b).
+
+    Parameters
+    ----------
+    run_nr, db
+        Run number and `damnit.Damnit` database (total_transmission, droplet_fit).
+    trains
+        Optional positional selection (int, slice, list) over the run's trains,
+        applied after aligning every input on trainId. The result keeps its trainId
+        labels, so arithmetic with an intensity grid aligns by label, not position.
+    n_pulses
+        Pulses per train the XGM is averaged over; see `train_pulse_energy`.
+    v0_run
+        Run whose first droplet volume is V0, i.e. the run the droplet was injected
+        in. Defaults to `run_nr`, which is only right if that run starts a fresh
+        droplet.
+    raw
+        An already-open raw DataCollection of `run_nr`; opened if not given.
+    ferritin_mg_per_ml_initial, peg_percent_wv_initial, nacl_mM_initial, n_fe
+        Composition at V0, as in `droplet_attenuation`. DAMNIT's `sample` label is
+        not reliable for this; for a buffer droplet pass ferritin_mg_per_ml_initial=0.
+
+    Returns
+    -------
+    Dataset over trainId: xgm_uJ, total_transmission, flux (their product),
+    volume_mm3, chord_mm, the `DropletAttenuation` fields and scale. Trains missing
+    any input are dropped; the inputs are recorded in attrs.
+    """
+    if raw is None:
+        raw = ex.open_run(proposal, run_nr, data="raw")
+    fit = xr.open_dataset(db[run_nr].file, group="droplet_fit")
+    ds = xr.Dataset(
+        {
+            "xgm_uJ": train_pulse_energy(raw, n_pulses),
+            "total_transmission": db[run_nr]["total_transmission"].read(),
+            "volume_mm3": fit.volume,
+            # Through an oblate droplet whose symmetry axis is vertical, assuming the
+            # beam crosses its centre: twice the horizontal semi-axis (4/3 pi a_x^2 a_y
+            # reproduces droplet_fit's volume).
+            "chord_mm": 2 * fit.radius.sel(dim="x") * DROPLET_PX_MM,
+        }
+    ).drop_vars("dim", errors="ignore")
+    ds = ds.dropna("trainId", how="any")  # the Dataset aligned with an outer join
+    if trains is not None:
+        ds = ds.isel(trainId=[trains] if np.isscalar(trains) else trains)
+
+    if v0_run is None or v0_run == run_nr:
+        v0_fit = fit
+    else:
+        v0_fit = xr.open_dataset(db[v0_run].file, group="droplet_fit")
+    v0 = float(v0_fit.volume.dropna("trainId")[0])
+
+    att = droplet_attenuation(
+        ds.volume_mm3.values,
+        v0,
+        ds.chord_mm.values,
+        ferritin_mg_per_ml_initial=ferritin_mg_per_ml_initial,
+        peg_percent_wv_initial=peg_percent_wv_initial,
+        nacl_mM_initial=nacl_mM_initial,
+        n_fe=n_fe,
+    )
+    for name, values in att._asdict().items():
+        ds[name] = ("trainId", values)
+    ds["flux"] = ds.xgm_uJ * ds.total_transmission
+    ds["scale"] = 1.0 / (ds.flux * ds.path_mm)
+    ds.attrs.update(
+        run=run_nr,
+        v0_run=run_nr if v0_run is None else v0_run,
+        v0_mm3=v0,
+        n_pulses=n_pulses,
+        ferritin_mg_per_ml_initial=ferritin_mg_per_ml_initial,
+        peg_percent_wv_initial=peg_percent_wv_initial,
+        nacl_mM_initial=nacl_mM_initial,
+        n_fe=n_fe,
+    )
+    return ds
 
 
 def volume_to_deff_sq(V):
