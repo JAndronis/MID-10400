@@ -5,7 +5,6 @@ description = "EuXFEL MID (proposal 10400) raw-data reader plugin for pyBeamtime
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "pybeamtime",
     "xarray",
 ]
 
@@ -37,7 +36,11 @@ plotting = [
     "matplotlib<3.9",
     "ipympl",
     "SciencePlots",
-    "cmasher"
+    "cmasher",
+    # The shared Jupyter kernel runs from this environment
+    # (scripts/shared_env.sh). Previously present only transitively, via
+    # pyBeamtime.
+    "ipykernel",
 ]
 
 [dependency-groups]
@@ -48,9 +51,6 @@ dev = [
 ]
 
 [tool.uv.sources]
-# pyBeamtime is developed locally; consume it as an editable path dependency so
-# reader changes here can be upstreamed into its io/readers/ package later.
-pybeamtime = { path = "./extern/pybeamtime", editable = true }
 extra-speckle = { git = "https://git.xfel.eu/dataAnalysis/extra-speckle.git" }
 pixel-masker = { git = "https://git.xfel.eu/leonaual/pixel-masker.git" }
 damnit = { git = "https://github.com/European-XFEL/DAMNIT.git" }
@@ -60,7 +60,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/readers", "src/analysis"]
+# src/readers (the pyBeamtime reader plugin) is not packaged while pyBeamtime
+# is dropped as a dependency: it cannot be imported without it.
+packages = ["src/analysis"]
 
 [tool.ruff]
 line-length = 88

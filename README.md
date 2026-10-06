@@ -24,14 +24,15 @@ src/analysis/           analysis package (<pkg>)
     saxs/               AGIPD SAXS loader and integrator (`agipd_saxs`)
     waxs/               JUNGFRAU WAXS integrator (`jungfrau_waxs_*`)
     threadenv.py        thread pinning, importable before the numerical stack
-src/readers/            pyBeamtime reader plugin (EuXFELMIDRawReader)
+src/readers/            pyBeamtime reader plugin (EuXFELMIDRawReader), dormant
     io/readers/euxfel.py
 src/amore/              DAMNIT deployment: context file + droplet helpers (not packaged)
 scripts/                acceptance and probe scripts, run on a node
 tests/                  pytest suite
 ```
 
-Only `src/analysis` and `src/readers` are packaged. `src/amore` is the DAMNIT
+Only `src/analysis` is packaged. `src/readers` is kept but neither packaged nor
+tested while pyBeamtime is dropped as a dependency. `src/amore` is the DAMNIT
 context directory, mirroring its name on the cluster; heavy code must **not**
 live there, because DAMNIT `exec`s the context file into a dict and functions
 defined that way cannot be pickled to spawned workers.
@@ -42,14 +43,38 @@ defined that way cannot be pickled to spawned workers.
 uv sync --extra euxfel
 ```
 
-`uv sync` alone gives the core environment: pyBeamtime (editable) plus pytest,
-on Python 3.12. The `euxfel` extra adds the EXtra-data / EXtra-geom / pyFAI
-stack, which the reader's `load_run` and both integrators need. Versions are
+`uv sync` alone gives the core environment plus pytest, on Python 3.12. The
+`euxfel` extra adds the EXtra-data / EXtra-geom / pyFAI stack, which both
+integrators need; `plotting` adds matplotlib and `ipykernel`. Versions are
 pinned in `uv.lock`; the "Measured stack" table in `CLAUDE.md` is the set every
 benchmark was taken against.
 
-`pyBeamtime` is consumed as an **editable path dependency** pointing at a local
-checkout (see `[tool.uv.sources]`; the path is machine-specific).
+### On Maxwell: the shared environment
+
+uv installs its Python into `~/.local/share/uv/python`, and a venv's
+`bin/python` is only a symlink to it. Home directories are private, so a venv
+built that way works for its builder alone: for everyone else, `activate` falls
+through to `/usr/bin/python` without a word, and DAMNIT jobs (run as
+`xdamnprd`) cannot start. `scripts/shared_env.sh` keeps everything in
+`usr/Software/` instead:
+
+| What | Where |
+|---|---|
+| Interpreter (CPython 3.12.11) | `usr/Software/uv-python/` |
+| Deploy clone, tracking this clone's `main` | `usr/Software/MID-10400/` |
+| Its environment (DAMNIT's `context_python`, the kernel) | `usr/Software/MID-10400/.venv/` — no dev group |
+| Kernelspec `mid-10400` | `usr/Software/jupyter/share/jupyter/kernels/` |
+
+Git hooks in this clone run `scripts/shared_env.sh update` after every commit,
+merge or rewrite on `main`: the deploy clone moves to the new commit (the
+install is editable, so code changes need only a kernel restart), and the
+environment re-syncs when `pyproject.toml` or `uv.lock` changed. Uncommitted
+edits never reach it.
+
+```bash
+scripts/shared_env.sh link-kernel   # once per user: add the kernel to your Jupyter
+scripts/shared_env.sh venv          # (re)build a clone's own .venv on the shared Python
+```
 
 ## The two integrator passes
 
@@ -126,6 +151,9 @@ Variables: `agipd_saxs`, `agipd_iq_overview`, `jungfrau_waxs_jf1`,
 `jungfrau_waxs_jf2`, `jungfrau_waxs_overview`, `jungfrau_waxs_combined`.
 
 ## Using the reader
+
+Dormant: pyBeamtime is not a dependency for now, so this section describes how
+the reader works once it is restored.
 
 Because this is a plugin (not built into pyBeamtime), **import the package once**
 so it registers with `ReaderRegistry`:

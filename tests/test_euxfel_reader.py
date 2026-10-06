@@ -15,6 +15,10 @@ import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
+
+# pyBeamtime is dropped as a dependency for now; the reader returns with it.
+pytest.importorskip("pyBeamtime")
+
 from pyBeamtime.core.run import RunMetadata
 from pyBeamtime.io.readers import ReaderRegistry
 

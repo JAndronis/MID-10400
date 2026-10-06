@@ -82,10 +82,10 @@ scripts/                acceptance and probe scripts, run by hand on a cluster n
 tests/                  pytest suite (~480 tests), split common/ saxs/ waxs/
 notebooks/              exploratory notebooks (damnit, dask, waxs, extra-speckle masking)
 data/                   local exported detector slices and mask files for offline work (untracked)
-extern/pybeamtime/      local editable checkout of the pyBeamtime dependency
 ```
 
-Only `src/analysis` and `src/readers` are packaged into the wheel. `src/amore` mirrors the DAMNIT
+Only `src/analysis` is packaged into the wheel; `src/readers` stays in the tree but is neither
+packaged nor tested while pyBeamtime is dropped as a dependency. `src/amore` mirrors the DAMNIT
 context directory on the cluster: DAMNIT `exec`s that context file into a dict, so functions
 defined there cannot be pickled to spawned worker processes — which is why every DAMNIT variable
 body is just an import plus a call into `analysis.*`.
