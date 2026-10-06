@@ -26,6 +26,9 @@ euxfel = [
     "fabio",
     "extra_proposal",
     "extra-speckle",
+    # Imported at module level by extra_speckle.xcca (so by the DAMNIT context
+    # file) but not declared by it. Previously present only via pyBeamtime.
+    "numba",
     "dask[complete]",
     "dask_jobqueue",
     "scikit-image",

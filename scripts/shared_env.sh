@@ -47,7 +47,8 @@ die() {
 sync_deploy() { (cd "$DEPLOY" && "$UV" sync "${DEPLOY_SYNC[@]}" --python "$PYTHON"); }
 
 cmd_build() {
-    "$UV" python install "$PYTHON_VERSION"
+    # --no-bin: leave the builder's ~/.local/bin/python3.12 alone.
+    "$UV" python install --no-bin "$PYTHON_VERSION"
     [ -x "$PYTHON" ] || die "expected interpreter missing: $PYTHON"
     [ -d "$DEPLOY/.git" ] || git clone --branch main "$SOURCE" "$DEPLOY"
     sync_deploy
