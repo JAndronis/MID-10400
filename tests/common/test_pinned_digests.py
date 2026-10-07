@@ -34,6 +34,7 @@ SAXS_FIELDS = (
     "expected_bits", "use_asic_seams", "pixel_mask_file", "base_mask_trains",
     "detector_name", "min_modules", "trains_per_block", "n_workers",
     "selftest_frames", "output_root", "allow_incomplete", "overwrite",
+    "pixel_sum_trains", "pixel_sums_root",
 )  # fmt: skip
 
 WAXS_FIELDS = (
@@ -188,11 +189,14 @@ EXPECTED_ALL: dict[str, tuple[str, ...]] = {
     # METHOD, NPIX, SHAPE and DEFAULT_OUTPUT_ROOT were missing here while
     # three modules imported them by name; the pass-throughs are gone.
 
+    # DEFAULT_PIXEL_SUMS_ROOT and SAXS_OPERATIONAL_FIELDS added for the window
+    # sums (context file §15); the operator, masks and frame table are unchanged.
     "analysis.saxs.config": (
         "AgipdSaxsConfig", "DEFAULT_BEAM_CENTER_PX",
         "DEFAULT_BEAM_CENTER_PY", "DEFAULT_GEOMETRY_FILE",
         "DEFAULT_OUTPUT_ROOT", "DEFAULT_PIXEL_MASK_FILE",
-        "EXPECTED_BITS", "METHOD", "NPIX", "SHAPE",
+        "DEFAULT_PIXEL_SUMS_ROOT", "EXPECTED_BITS", "METHOD", "NPIX",
+        "SAXS_OPERATIONAL_FIELDS", "SHAPE",
     ),
     "analysis.saxs.operator": (
         "SparseOperator", "build_operator", "geometry_from_config",

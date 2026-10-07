@@ -1,0 +1,68 @@
+{
+  "generated_at": "2026-10-07T15:52:55.322432+00:00",
+  "host": "max-cfel029.desy.de",
+  "platform": "Linux-5.14.0-687.25.1.el9_8.x86_64-x86_64-with-glibc2.34",
+  "python": "3.12.11",
+  "git_commit": "c59bccc72dba008eb0eba4130dd0a3c6550a7f36",
+  "thread_env": {
+    "EXTRA_NUM_THREADS": "1",
+    "OMP_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1"
+  },
+  "run": 423,
+  "proposal": 10400,
+  "mode": "sums_only",
+  "pixel_sum_trains": 10,
+  "window_sums_file": "/gpfs/exfel/exp/MID/202601/p010400/scratch/agipd_saxs_s2/sums_only/agipd_pixel_sums.h5",
+  "gates": {
+    "E_window_sums": {
+      "passed": true,
+      "window_trains": 10,
+      "n_windows": 301,
+      "windows_written": 301,
+      "windows_compared": 300,
+      "windows_mismatched": 0,
+      "mismatched": [],
+      "spot_checks_with_detector_sums": [
+        {
+          "window": 0,
+          "equal": true
+        },
+        {
+          "window": 150,
+          "equal": true
+        },
+        {
+          "window": 299,
+          "equal": true
+        }
+      ],
+      "train_status": {
+        "OK": 3000,
+        "NO_FRAMES": 1
+      },
+      "trains_summed": 3000,
+      "frames_summed": 465000,
+      "reference_wall_s": 141.58301003091037
+    }
+  },
+  "sums_timing": {
+    "passed": null,
+    "frames": 465000,
+    "n_workers": 36,
+    "wall_s": 115.73043195717037,
+    "stages_ms_per_frame_per_core": {
+      "read_data": 2.363772626773965,
+      "read_mask": 4.380721313516379,
+      "pixel_sums": 1.2448249571405912
+    },
+    "total_ms_per_frame_per_core": 7.989318897430935,
+    "setup_s": {
+      "plan": 2.827275240793824,
+      "write_blocks": 15.763035890646279
+    },
+    "parallel_efficiency": 0.891687409669454
+  },
+  "passed": true
+}

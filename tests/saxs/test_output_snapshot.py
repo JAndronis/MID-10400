@@ -20,9 +20,14 @@ from test_run import InlinePool, run_on_mock  # noqa: E402  (tests/saxs is on sy
 #: (platform.system(), platform.machine()). Linux x86_64 is the locked
 #: environment on Maxwell, where it is stable across SIMD level, OpenMP threads
 #: and BLAS kernel; the pre-cleanup tree produces the same value.
+#:
+#: Re-pinned 2026-10-07 for the window sums (context file §15): the recorded
+#: config gained ``pixel_sum_trains`` and ``pixel_sums_root`` and the recorded
+#: operational set gained both. With those two attributes left out, the file
+#: digests to 9c3ca19e…f2e6 before and after, so no dataset moved.
 EXPECTED_DIGEST = {
     ("Linux", "x86_64"): (
-        "5a818eaaffabfdd917b7edc761d7d43b0945bc2d981e3a194b64b5a9efb7b21f"
+        "65182c6646ac8354113a1d76b8faeae9511995dfbde03ebc10388d98af91cdc6"
     ),
 }
 

@@ -33,8 +33,9 @@ from analysis.saxs.operator import (
     load_operator,
     save_operator,
 )
+from analysis.saxs.pixel_sums import PixelSumWriter, WindowSpec
 from analysis.saxs.plan import build_plan
-from analysis.saxs.run import run_agipd_saxs
+from analysis.saxs.run import run_agipd_saxs, run_pixel_sums
 from analysis.saxs.selftest import SelfTestFailed, SelfTestReport, run_selftest
 from analysis.saxs.sparse import (
     FrameResult,
@@ -63,6 +64,7 @@ __all__ = [
     "FrameStatus",
     "IncompleteRun",
     "MaskSource",
+    "PixelSumWriter",
     "RunPlan",
     "SelfTestFailed",
     "SelfTestReport",
@@ -70,6 +72,7 @@ __all__ = [
     "StaticMask",
     "TrainRecord",
     "UnexpectedMaskBits",
+    "WindowSpec",
     "WorkerPaths",
     "build_operator",
     "build_plan",
@@ -85,6 +88,7 @@ __all__ = [
     "load_operator",
     "load_pixel_mask",
     "run_agipd_saxs",
+    "run_pixel_sums",
     "run_selftest",
     "save_masks",
     "save_operator",

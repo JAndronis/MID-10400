@@ -177,9 +177,28 @@ def test_result_affecting_fields_move_the_waxs_hash(waxs, field, value):
     ],
 )
 def test_result_affecting_fields_move_the_agipd_hash(agipd, field, value):
+    changes = {field: value}
+    if field == "min_modules":
+        # window sums need all 16 modules; they do not enter this hash either way
+        changes["pixel_sum_trains"] = None
+    assert dataclasses.replace(agipd, **changes).config_hash() != agipd.config_hash()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"), [("pixel_sum_trains", 50), ("pixel_sums_root", "/tmp/x")]
+)
+def test_the_window_sum_fields_leave_the_agipd_hash_alone(agipd, field, value):
+    """The window sums are a separate file with a hash of their own (§15.3).
+
+    So neither field can change a number in ``agipd_saxs.h5``, and adding them
+    must not refuse a file written before they existed.
+    """
     assert (
         dataclasses.replace(agipd, **{field: value}).config_hash()
-        != agipd.config_hash()
+        == agipd.config_hash()
+    )
+    assert dataclasses.replace(agipd, pixel_sum_trains=None).config_hash() == (
+        agipd.config_hash()
     )
 
 

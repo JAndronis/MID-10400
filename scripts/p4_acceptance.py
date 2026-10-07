@@ -10,6 +10,11 @@ without rerunning the pass.
     B  pooled I(q) for N trains matches a dense pyFAI reference to < tolerance
     C  per-stage timing against the §2 budget, and wall time
     D  every non-OK status accounted for
+    E  every per-pixel window sum equals ``analysis.cache.detector_sums`` over
+       the window's trains, exactly (context file §15; skipped when
+       ``--pixel-sum-trains none``)
+    E2 the frame table pooled over each window equals the window sums gathered
+       through the operator off the static mask (§15), to < tolerance
 
 What gate B does and does not add over gate A. The self-test compares the
 sparse path against the pyFAI engine frame by frame, in memory, in the parent.
@@ -28,6 +33,11 @@ Usage on a DAMNIT-partition node, from the uv environment:
 To check an output file that already exists, without reintegrating:
 
     python scripts/p4_acceptance.py --run 423 --skip-run --output <path.h5>
+
+The window-sum overhead (S2 of §15) is the difference between two runs of this
+script on one node, ``--pixel-sum-trains none`` and ``--pixel-sum-trains 10``.
+``--sums-only`` instead times ``run_pixel_sums``, the backfill, and grades its
+file with gate E; ``--output`` is then the window-sums file itself.
 """
 
 from __future__ import annotations
@@ -59,6 +69,7 @@ from analysis.common.status import FrameStatus  # noqa: E402
 from analysis.saxs import masks as masks_module  # noqa: E402
 from analysis.saxs import operator as operator_module  # noqa: E402
 from analysis.saxs.config import AgipdSaxsConfig  # noqa: E402
+from analysis.saxs.pixel_sums import FILE_NAME, window_sums  # noqa: E402
 from analysis.saxs.selftest import SelfTestFailed, reference_frame  # noqa: E402
 
 #: Per-frame, per-core cost measured in the stage benchmark (context file §2).
@@ -360,6 +371,16 @@ def stage_timing(output: Path, measured_wall_s: float | None) -> dict[str, Any]:
             "budget_ms": budget,
             "ratio": per_frame_ms / budget,
         }
+    # Stages with no measured budget — the window sums' ``pixel_sums`` — are
+    # reported beside the others and enter the total, but have no ratio.
+    for name in sorted(set(timings) - set(BUDGET_MS)):
+        cpu_s = float(timings[name])
+        stages[name] = {
+            "cpu_s": cpu_s,
+            "ms_per_frame_per_core": cpu_s * 1e3 / ok_frames,
+            "budget_ms": None,
+            "ratio": None,
+        }
     total_cpu_s = sum(float(v) for v in timings.values())
     total_ms = total_cpu_s * 1e3 / ok_frames
     total_budget = sum(BUDGET_MS.values())
@@ -489,6 +510,304 @@ def stage_ledger(output: Path, max_listed: int = 20) -> dict[str, Any]:
     }
 
 
+# ── gate E: window sums against the cache ─────────────────────────────────────
+def _window_members(sums_path: Path) -> dict[int, list[int]]:
+    """Each written window's summed trains, by label."""
+    with h5py.File(sums_path, "r") as handle:
+        train_ids = handle["trains/trainId"][:]
+        window = handle["trains/window"][:]
+        status = handle["trains/status"][:]
+        written = handle["windows/written"][:].astype(bool)
+    members: dict[int, list[int]] = {}
+    for index in np.flatnonzero(written):
+        trains = train_ids[(window == index) & (status == FrameStatus.OK)]
+        if trains.size:
+            members[int(index)] = [int(t) for t in trains]
+    return members
+
+
+def stage_window_sums(
+    cfg: AgipdSaxsConfig,
+    sums_path: Path,
+    run_dir: str | None,
+    n_workers: int,
+    spot_checks: int = 3,
+    max_listed: int = 10,
+) -> dict[str, Any]:
+    """Every window against ``analysis.cache.detector_sums``, exactly.
+
+    ``detector_sums`` spawns a pool per call, and r0423 has 300 windows, so the
+    comparison for *every* window runs its kernel, ``cache._sum_job``, in one
+    pool over the same five-train chunks and modules ``cache._read_sums``
+    hands it, and adds the parts the same way. ``spot_checks`` windows — the
+    first, last and evenly between — then go through the public
+    ``detector_sums`` itself, so the shortcut is checked against the function
+    it stands in for.
+    """
+    from analysis import cache
+    from analysis.common.cpu import default_pool
+
+    with h5py.File(sums_path, "r") as handle:
+        written = handle["windows/written"][:].astype(bool)
+        n_frames = handle["windows/n_frames"][:]
+        status = handle["trains/status"][:]
+        provenance = handle["provenance"].attrs
+        window_trains = int(provenance["window_trains"])
+    ledger = {
+        code.name: int((status == code).sum())
+        for code in FrameStatus
+        if (status == code).any()
+    }
+    members = _window_members(sums_path)
+    proc_dir = Path(run_dir) if run_dir else cache.PROC_ROOT / f"r{cfg.run:04d}"
+
+    jobs, owners = [], []
+    for index, trains in members.items():
+        for start in range(0, len(trains), cache.SUM_CHUNK):
+            for module in range(cache.N_MODULES):
+                jobs.append(
+                    (str(proc_dir), trains[start : start + cache.SUM_CHUNK], module)
+                )
+                owners.append(index)
+    remaining = {index: owners.count(index) for index in members}
+    parts: dict[int, list[np.ndarray]] = {}
+    mismatched: list[dict[str, Any]] = []
+    checked = 0
+    started = time.perf_counter()
+    with default_pool(n_workers) as pool:
+        for index, (module, counts, valid, frames) in zip(
+            owners, pool.map(cache._sum_job, jobs, chunksize=8), strict=True
+        ):
+            total = parts.setdefault(
+                index,
+                [
+                    np.zeros((cache.N_MODULES, *cache.MODULE_SHAPE), np.int64),
+                    np.zeros((cache.N_MODULES, *cache.MODULE_SHAPE), np.int64),
+                    np.zeros(cache.N_MODULES, np.int64),
+                ],
+            )
+            total[0][module] += counts
+            total[1][module] += valid
+            total[2][module] += frames
+            remaining[index] -= 1
+            if remaining[index]:
+                continue
+            ref_counts, ref_valid, ref_frames = parts.pop(index)
+            ours = window_sums(sums_path, [index])
+            same = (
+                np.unique(ref_frames).size == 1
+                and int(ref_frames[0]) == int(n_frames[index])
+                and np.array_equal(ours.counts.values, ref_counts)
+                and np.array_equal(ours.valid_frames.values, ref_valid)
+            )
+            checked += 1
+            if not same:
+                mismatched.append(
+                    {
+                        "window": index,
+                        "frames_ours": int(n_frames[index]),
+                        "frames_reference": ref_frames.tolist(),
+                        "max_abs_counts": int(
+                            np.abs(ours.counts.values - ref_counts).max()
+                        ),
+                        "max_abs_valid": int(
+                            np.abs(ours.valid_frames.values - ref_valid).max()
+                        ),
+                    }
+                )
+    reference_s = time.perf_counter() - started
+
+    spots = []
+    if members and spot_checks > 0:
+        chosen = evenly_spaced(np.array(sorted(members), dtype=np.uint64), spot_checks)
+        for index in chosen.tolist():
+            ref = cache.detector_sums(
+                cfg.run,
+                members[index],
+                proposal=cfg.proposal,
+                run_dir=run_dir,
+                n_workers=n_workers,
+                cache_dir=sums_path.parent / "detector_sums_reference",
+                refresh=True,
+            )
+            ours = window_sums(sums_path, [index])
+            spots.append(
+                {
+                    "window": int(index),
+                    "equal": bool(
+                        np.array_equal(ours.counts.values, ref.counts.values)
+                        and np.array_equal(
+                            ours.valid_frames.values, ref.valid_frames.values
+                        )
+                        and np.array_equal(ours.train_id.values, ref.train_id.values)
+                        and ours.attrs["n_frames"] == ref.attrs["n_frames"]
+                    ),
+                }
+            )
+
+    failed = {
+        name: n
+        for name, n in ledger.items()
+        if name
+        in {"LABEL_MISMATCH", "DATA_CHECK_FAILED", "WORKER_ERROR", "NOT_PROCESSED"}
+    }
+    return {
+        "passed": bool(
+            written.all()
+            and not failed
+            and checked == len(members)
+            and not mismatched
+            and all(spot["equal"] for spot in spots)
+        ),
+        "window_trains": window_trains,
+        "n_windows": int(written.size),
+        "windows_written": int(written.sum()),
+        "windows_compared": checked,
+        "windows_mismatched": len(mismatched),
+        "mismatched": mismatched[:max_listed],
+        "spot_checks_with_detector_sums": spots,
+        "train_status": ledger,
+        "trains_summed": int(sum(len(t) for t in members.values())),
+        "frames_summed": int(n_frames.sum()),
+        "reference_wall_s": reference_s,
+    }
+
+
+# ── gate E2: the frame table and the window sums tell one story ───────────────
+def stage_window_identity(
+    output: Path, sums_path: Path, work_dir: Path, tolerance: float
+) -> dict[str, Any]:
+    """Pooled S, N and V per window against the window sums through the operator.
+
+    Σ S = Σ c·counts, Σ N = Σ c·Ω·valid_frames and Σ V = Σ c²·counts over the
+    pixels off the static mask (context file §15). It holds only with every
+    mask bit in ``mask_bits``, which is the default, and it is what makes the
+    window sums a record the 1D result can be rebuilt from under any geometry.
+    The products go through a scipy CSC matrix rather than ``sparse.gather``,
+    so the pass's own kernel is not grading itself.
+    """
+    from scipy.sparse import csc_matrix
+
+    op = operator_module.load_operator(work_dir / "operator.npz")
+    static = masks_module.load_masks(work_dir / "masks.npz").static_bad
+
+    with h5py.File(output, "r") as handle:
+        stored_operator = str(handle["operator"].attrs["sha256"])
+        mask_bits = int(json.loads(handle["provenance"].attrs["config"])["mask_bits"])
+        train_ids = handle["trains/trainId"][:]
+        first = handle["trains/first"][:]
+        count = handle["trains/count"][:]
+        frame_status = handle["frames/status"][:]
+    if stored_operator != op.sha256:
+        return {"passed": False, "reason": "operator.npz is not the file's operator"}
+    if mask_bits != 0xFFFFFFFF:
+        return {
+            "passed": None,
+            "reason": f"mask_bits {mask_bits:#x}: the identity needs every bit",
+        }
+
+    npix = op.indptr.size - 1
+    matrix = csc_matrix(
+        (op.coef.astype(np.float64), op.bins, op.indptr), shape=(op.npt, npix)
+    )
+    squared = matrix.multiply(matrix).tocsc()
+    keep = (~static).astype(np.float64)
+    row_of = {
+        int(t): (int(f), int(c))
+        for t, f, c in zip(train_ids, first, count, strict=True)
+    }
+
+    worst = {"signal": 0.0, "normalization": 0.0, "variance": 0.0}
+    bins_agree = True
+    skipped = []
+    compared = 0
+    with h5py.File(output, "r") as handle:
+        frames = handle["frames"]
+        for index, trains in _window_members(sums_path).items():
+            start = row_of[trains[0]][0]
+            stop = sum(row_of[trains[-1]])
+            if not (frame_status[start:stop] == FrameStatus.OK).all():
+                skipped.append(index)  # rows of a train the window did sum
+                continue
+            pooled = {
+                name: frames[name][start:stop].astype(np.float64).sum(axis=0)
+                for name in worst
+            }
+            sums = window_sums(sums_path, [index])
+            counts = sums.counts.values.reshape(-1) * keep
+            valid = sums.valid_frames.values.reshape(-1) * keep
+            expected = {
+                "signal": matrix @ counts,
+                "normalization": matrix @ (op.omega * valid),
+                "variance": squared @ counts,
+            }
+            agree = np.array_equal(
+                pooled["normalization"] > 0, expected["normalization"] > 0
+            )
+            bins_agree = bins_agree and agree
+            both = (pooled["normalization"] > 0) & (expected["normalization"] > 0)
+            for name in worst:
+                worst[name] = max(
+                    worst[name],
+                    float(
+                        relative_difference(
+                            pooled[name][both], expected[name][both]
+                        ).max(initial=0.0)
+                    ),
+                )
+            compared += 1
+
+    return {
+        "passed": bool(
+            compared and not skipped and bins_agree and max(worst.values()) < tolerance
+        ),
+        "tolerance": tolerance,
+        "windows_compared": compared,
+        "windows_skipped_for_non_ok_rows": skipped,
+        "empty_bins_agree": bins_agree,
+        "max_rel": worst,
+        "float32_eps": float(np.finfo(np.float32).eps),
+    }
+
+
+# ── the window sums' own timing ───────────────────────────────────────────────
+def stage_sums_timing(sums_path: Path, measured_wall_s: float | None) -> dict[str, Any]:
+    """Per-stage cost per summed frame, from the window-sums file alone."""
+    with h5py.File(sums_path, "r") as handle:
+        provenance = handle["provenance"].attrs
+        timings = json.loads(provenance["timings"])
+        setup = json.loads(provenance.get("setup_timings", "{}"))
+        wall_s = float(provenance.get("wall_s", 0.0)) or (measured_wall_s or 0.0)
+        n_workers = int(provenance["n_workers"])
+        frames = int(handle["windows/n_frames"][:].sum())
+    if frames == 0:
+        return {"passed": None, "reason": "no frames summed"}
+    total_cpu_s = sum(float(v) for v in timings.values())
+    return {
+        "passed": None,  # a measurement for the decision, not a gate
+        "frames": frames,
+        "n_workers": n_workers,
+        "wall_s": wall_s,
+        "stages_ms_per_frame_per_core": {
+            name: float(v) * 1e3 / frames for name, v in timings.items()
+        },
+        "total_ms_per_frame_per_core": total_cpu_s * 1e3 / frames,
+        "setup_s": setup,
+        "parallel_efficiency": (total_cpu_s / n_workers / wall_s) if wall_s else None,
+    }
+
+
+def run_sums_only(cfg: AgipdSaxsConfig, sums_path: Path, run_dir: str | None) -> float:
+    """``run_pixel_sums`` on the whole run; returns its wall time."""
+    from analysis.saxs.run import run_pixel_sums
+
+    started = time.perf_counter()
+    run_pixel_sums(
+        cfg, run_dir=Path(run_dir) if run_dir else None, pixel_sums_path=sums_path
+    )
+    return time.perf_counter() - started
+
+
 # ── driver ────────────────────────────────────────────────────────────────────
 
 
@@ -518,6 +837,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="check an existing output file instead of integrating",
     )
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument(
+        "--pixel-sum-trains",
+        default=None,
+        help="window length for the per-pixel sums, or 'none' to write none "
+        "(default: the config's)",
+    )
+    parser.add_argument(
+        "--sums-only",
+        action="store_true",
+        help="run run_pixel_sums instead of the pass; --output is then the "
+        "window-sums file, and only gate E and the timing are graded",
+    )
     parser.add_argument("--json", type=Path, default=None)
     return parser.parse_args(argv)
 
@@ -538,6 +869,13 @@ def main(argv: list[str] | None = None) -> int:
         cfg = replace(cfg, geometry_file=args.geometry_file)
     if args.pixel_mask_file:
         cfg = replace(cfg, pixel_mask_file=args.pixel_mask_file)
+    if args.pixel_sum_trains is not None:
+        trains = args.pixel_sum_trains
+        cfg = replace(
+            cfg, pixel_sum_trains=None if trains.lower() == "none" else int(trains)
+        )
+    if args.sums_only:
+        return main_sums_only(cfg, args)
     output = Path(args.output) if args.output else cfg.output_file
 
     report: dict[str, Any] = report_header(
@@ -568,6 +906,17 @@ def main(argv: list[str] | None = None) -> int:
     )
     report["gates"]["C_timing"] = stage_timing(output, measured_wall_s)
     report["gates"]["D_ledger"] = stage_ledger(output)
+    report["pixel_sum_trains"] = cfg.pixel_sum_trains
+    if cfg.pixel_sum_trains is not None:
+        # run_agipd_saxs puts them beside the output it is given
+        sums_path = output.parent / FILE_NAME
+        report["window_sums_file"] = str(sums_path)
+        report["gates"]["E_window_sums"] = stage_window_sums(
+            cfg, sums_path, args.run_dir, cfg.workers
+        )
+        report["gates"]["E2_window_identity"] = stage_window_identity(
+            output, sums_path, output.parent, args.tolerance
+        )
 
     verdicts = {name: gate.get("passed") for name, gate in report["gates"].items()}
     report["passed"] = all(v is not False for v in verdicts.values())
@@ -600,12 +949,50 @@ def main(argv: list[str] | None = None) -> int:
         f"(P4 asks for the full run on {P4_WORKERS})"
     )
     print(f"  ledger: {report['gates']['D_ledger']['frame_status']}")
+    if "pixel_sums" in timing.get("stages", {}):
+        print(
+            "  window sums: "
+            f"{timing['stages']['pixel_sums']['ms_per_frame_per_core']:.2f} "
+            "ms/frame/core in the workers"
+        )
     return 0 if report["passed"] else 1
 
 
-def _write(report: dict[str, Any], args: Any) -> None:
+def main_sums_only(cfg: AgipdSaxsConfig, args: Any) -> int:
+    """Time ``run_pixel_sums`` and grade its file with gate E."""
+    if cfg.pixel_sum_trains is None:
+        log.error("--sums-only needs windows; --pixel-sum-trains is none")
+        return 2
+    sums_path = Path(args.output) if args.output else cfg.pixel_sums_file
+    report: dict[str, Any] = report_header(
+        run=args.run,
+        proposal=args.proposal,
+        mode="sums_only",
+        pixel_sum_trains=cfg.pixel_sum_trains,
+        window_sums_file=str(sums_path),
+        gates={},
+    )
+    measured = None if args.skip_run else run_sums_only(cfg, sums_path, args.run_dir)
+    report["gates"]["E_window_sums"] = stage_window_sums(
+        cfg, sums_path, args.run_dir, cfg.workers
+    )
+    report["sums_timing"] = stage_sums_timing(sums_path, measured)
+    report["passed"] = report["gates"]["E_window_sums"]["passed"] is not False
+    _write(report, args, suffix="_sums_only")
+    timing = report["sums_timing"]
+    print(f"\nsums only — run {args.run:04d}")
+    print(f"  {'PASS' if report['passed'] else 'FAIL'}  E_window_sums")
+    if "wall_s" in timing:
+        print(
+            f"  wall {timing['wall_s']:.1f} s on {timing['n_workers']} workers, "
+            f"{timing['total_ms_per_frame_per_core']:.2f} ms/frame/core"
+        )
+    return 0 if report["passed"] else 1
+
+
+def _write(report: dict[str, Any], args: Any, suffix: str = "") -> None:
     """Write the report beside this script, stamped with the time."""
-    write_report(report, args.json, f"p4_acceptance_r{args.run:04d}")
+    write_report(report, args.json, f"p4_acceptance_r{args.run:04d}{suffix}")
 
 
 if __name__ == "__main__":

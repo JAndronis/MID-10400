@@ -24,14 +24,19 @@ __all__ = [
     "DEFAULT_GEOMETRY_FILE",
     "DEFAULT_OUTPUT_ROOT",
     "DEFAULT_PIXEL_MASK_FILE",
+    "DEFAULT_PIXEL_SUMS_ROOT",
     "EXPECTED_BITS",
     "METHOD",
     "NPIX",
+    "SAXS_OPERATIONAL_FIELDS",
     "SHAPE",
 ]
 
+#: Modules of the AGIPD-1M.
+N_MODULES = 16
+
 #: Flattened AGIPD-1M pixel grid, module × slow-scan × fast-scan.
-SHAPE: tuple[int, int] = (16 * 512, 128)
+SHAPE: tuple[int, int] = (N_MODULES * 512, 128)
 NPIX: int = SHAPE[0] * SHAPE[1]
 
 #: The only integration method this pipeline accepts.
@@ -55,6 +60,21 @@ DEFAULT_PIXEL_MASK_FILE = f"{_PROPOSAL_ROOT}/usr/masks/mask_2026-09-08_AGIPD_SAX
 
 #: Where the per-run output file is written.
 DEFAULT_OUTPUT_ROOT = f"{_PROPOSAL_ROOT}/scratch/agipd_saxs"
+
+#: Where the per-pixel window sums are written (context file §15).
+#:
+#: Not scratch: scratch does not survive the move to tape, and once proc is
+#: taped these sums are the only 2D record of a run left on disk.
+DEFAULT_PIXEL_SUMS_ROOT = f"{_PROPOSAL_ROOT}/usr/cached_files/agipd_pixel_sums"
+
+#: Fields the frame table's hash excludes. The shared operational set, plus the
+#: two window-sum fields: those sums go to a separate file with a hash of its
+#: own, so neither field can change a number in ``agipd_saxs.h5`` — and adding
+#: them left the hash of every file already written unchanged.
+SAXS_OPERATIONAL_FIELDS: frozenset[str] = OPERATIONAL_FIELDS | {
+    "pixel_sum_trains",
+    "pixel_sums_root",
+}
 
 #: Beam centre in Fit2D pixel coordinates, agreed with the beamline scientist.
 #:
@@ -119,6 +139,12 @@ class AgipdSaxsConfig(PassConfigMembers):
     output_root: str = DEFAULT_OUTPUT_ROOT
     allow_incomplete: bool = False
     overwrite: bool = False
+    # ── per-pixel window sums (context file §15) ──────
+    #: Trains per window of per-pixel photon sums, or ``None`` for none. A
+    #: window is a range of train ids from the run's first train, not a count
+    #: of trains. ``overwrite`` never applies to these: see §15.3.
+    pixel_sum_trains: int | None = 10
+    pixel_sums_root: str = DEFAULT_PIXEL_SUMS_ROOT
 
     def __post_init__(self) -> None:
         if self.npt < 1:
@@ -162,6 +188,19 @@ class AgipdSaxsConfig(PassConfigMembers):
             raise ValueError(
                 f"selftest_frames must be positive, got {self.selftest_frames}"
             )
+        if self.pixel_sum_trains is not None:
+            if self.pixel_sum_trains < 1:
+                raise ValueError(
+                    "pixel_sum_trains must be positive or None, got "
+                    f"{self.pixel_sum_trains}"
+                )
+            if self.min_modules != N_MODULES:
+                raise ValueError(
+                    f"window sums need all {N_MODULES} modules, but min_modules is "
+                    f"{self.min_modules}: a missing module reads as fill values "
+                    "that pass image.mask == 0. Set pixel_sum_trains=None to "
+                    "integrate with fewer modules"
+                )
 
     def __getstate__(self) -> dict[str, Any]:
         """Pickle by field name, not by position — see :mod:`analysis.common.config`."""
@@ -181,6 +220,11 @@ class AgipdSaxsConfig(PassConfigMembers):
         return Path(self.output_root) / f"r{self.run:04d}" / "agipd_saxs.h5"
 
     @property
+    def pixel_sums_file(self) -> Path:
+        """``{pixel_sums_root}/r{run:04d}/agipd_pixel_sums.h5``."""
+        return Path(self.pixel_sums_root) / f"r{self.run:04d}" / "agipd_pixel_sums.h5"
+
+    @property
     def input_files(self) -> dict[str, str | None]:
         """The input files whose sha256 enters :meth:`config_hash`."""
         return {
@@ -198,4 +242,4 @@ class AgipdSaxsConfig(PassConfigMembers):
     @property
     def operational_fields(self) -> frozenset[str]:
         """Which fields :meth:`config_hash` excludes, for the provenance record."""
-        return OPERATIONAL_FIELDS
+        return SAXS_OPERATIONAL_FIELDS

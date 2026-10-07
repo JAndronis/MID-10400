@@ -117,6 +117,7 @@ Modules under `src/<pkg>/saxs/`:
 | `writer.py` | HDF5 schema, ledger, resume |
 | `selftest.py` | Sparse vs pyFAI gate |
 | `status.py` | Frame status codes (§8) and the data-check exception |
+| `pixel_sums.py` | Per-pixel window sums: window spec, per-train kernel, writer, reader (§15) |
 | `run.py` | Orchestration |
 | `cli.py` | Standalone entry point |
 
@@ -152,6 +153,8 @@ input file.
 | `output_root` | `/gpfs/exfel/exp/MID/202601/p010400/scratch/agipd_saxs` | file `r{run:04d}/agipd_saxs.h5` |
 | `allow_incomplete` | `False` | if `False`, raise when any frame status ≠ OK |
 | `overwrite` | `False` | if `False`, refuse an existing file with a different config hash |
+| `pixel_sum_trains` | 10 | trains per window of per-pixel sums (§15); `None` writes none. Operational for the frame table, hashed by the window sums; needs `min_modules == 16` |
+| `pixel_sums_root` | `/gpfs/exfel/exp/MID/202601/p010400/usr/cached_files/agipd_pixel_sums` | file `r{run:04d}/agipd_pixel_sums.h5`; not scratch, which does not survive the move to tape |
 
 ---
 
@@ -481,7 +484,8 @@ gates is caught by running the script on a node, not by pytest. Gate B re-reads 
 the way §9 does, so the row-to-train map, the `f4` storage and `pooled_per_train` are all inside
 the comparison; the per-frame kernel is the self-test's job. It needs a DAMNIT-partition node, the
 real geometry and mask files, and r0423. **Rerun it whenever the frame loop, the masks or the
-geometry change** — including the 2026-09-13 beam-centre change, which has not been re-gated.
+geometry change** — including the 2026-09-13 beam-centre change, re-gated 2026-10-07 on max-cfel029
+(EPYC 9374F): all gates pass, gate B 4.5e-8, wall 157–179 s on 36 workers (§15.5).
 
 The run also settled that every run check resolves (constant pulse pattern, 155 frames = 155 X-ray
 pulses on all 3000 trains, quadrants stationary) and surfaced the XGM photon-energy disagreement
@@ -594,3 +598,160 @@ to be re-measured before it can be reused.
 First step, per CLAUDE.md open task 2: adapt benchmark stages 1 and 7 to JUNGFRAU and get the
 value distribution, occupancy, dtype and gain/mask semantics. The sparse-vs-dense fork and the
 error model both hang on that measurement, so it comes before any spec.
+
+---
+
+## 15. Per-pixel window sums (`pixel_sums.py`)
+
+**Why.** Low-q studies (stray-light lobes, droplet shadow, slice-wise buffer subtraction, mask
+optimisation) need per-pixel photon sums. `analysis.cache.detector_sums` re-reads proc for them,
+~80 CPU-s per 50-train block. The pass already decompresses every frame once, and proc moves to
+tape (memory `storage-tiers-red-box`), after which these sums are the only 2D record of a run. They
+also keep the 1D result recomputable: with the default `mask_bits`, over the frames of one window
+
+```
+Σ_f S_f = Σ_{j ∉ static} c_j · counts_j      Σ_f V_f = Σ_{j ∉ static} c_j² · counts_j
+Σ_f N_f = Σ_{j ∉ static} c_j · Ω_j · valid_frames_j
+```
+
+so window-pooled I(q) can be rebuilt under any geometry, beam centre or photon energy (CLAUDE.md
+open tasks 4 and 15) without proc.
+
+**Decided 2026-10-07 (user):** window length 10 trains; a separate file; stored under
+`usr/cached_files`, not scratch, because scratch does not survive the move to tape; a sums-only
+mode to backfill the runs whose 1D file already exists.
+
+### 15.1 Definition
+
+For each window, per pixel `(module, slow, fast)`:
+
+- `counts` = Σ of `image.data` over the frames whose `image.mask` is 0 for that pixel;
+- `valid_frames` = how many such frames.
+
+All mask bits, independent of `cfg.mask_bits`; no static mask, no seams, no normalisation (the
+stored data are raw, with metadata only). This is `analysis.cache.detector_sums` exactly, and every
+window equals `detector_sums(run, <its member trains>)` bit for bit.
+
+**Windows are train-id ranges**, anchored at the run's first train t₀ (the first entry of the plan's
+train table): window k holds `t₀ + k·L ≤ trainId < t₀ + (k+1)·L`, `L = cfg.pixel_sum_trains`. A
+window is therefore a fixed span of time, membership comes from the label (CLAUDE.md pitfall 4), and
+a dropped or failed train never shifts a later window. The last window is partial and stored with
+its range like any other.
+
+**Which trains are summed.** A train is summed whole or not at all. It is summed when the worker's
+label check passes (as for the frame table), `image.data` has an integer dtype and no value in the
+train is negative. Otherwise it is left out and the train table records the `FrameStatus` that left
+it out. Trains that own no rows (`MISSING_MODULES`, `NO_FRAMES`) keep their plan status. Window sums
+need all 16 modules — a missing module would read as fill values that pass `mask == 0` — so the
+config refuses `pixel_sum_trains` with `min_modules != 16`.
+
+### 15.2 Where it accumulates
+
+In the worker, per train, right after the label check, on the arrays already read (before the
+frame loop, which does not modify them):
+
+```
+for m in range(16):
+    valid = mask[m] == 0
+    counts[m] += where(valid, data[m], 0).sum(0, dtype=int32)    # one train: < 2^31
+    valid_frames[m] += valid.sum(0, dtype=int32)
+```
+
+Per module, so the temporaries are ~20 MB on top of a worker's ~1 GB. A worker returns, per
+scheduling block, one partial per window it touched (int32 after a range check, ~8.4 MB pickled)
+plus the trains it left out. The parent adds partials into int64 accumulators and writes a window
+when the last scheduling block touching it has returned or failed; values are range-checked before
+the int32 cast. A partial for a window already written (resume) is ignored.
+
+### 15.3 File, hash and resume
+
+`{pixel_sums_root}/r{run:04d}/agipd_pixel_sums.h5`, default root
+`/gpfs/exfel/exp/MID/202601/p010400/usr/cached_files/agipd_pixel_sums`. When `run_agipd_saxs` is
+given an `output_path`, the file goes beside it instead.
+
+```
+/windows/start_trainId   (W,)              u8   t₀ + k·L
+/windows/n_trains        (W,)              u4   trains summed
+/windows/n_frames        (W,)              u4   frames summed
+/windows/written         (W,)              u1   1 once the window is final
+/windows/counts          (W, 16, 512, 128) i4   chunks (1, 1, 512, 128), shuffle + gzip 1
+/windows/valid_frames    (W, 16, 512, 128) i4   same
+/trains/trainId          (T,)              u8   the plan's train table
+/trains/window           (T,)              i4
+/trains/status           (T,)              u1   OK = summed, else why not; NOT_PROCESSED until written
+/provenance              attrs: config_hash, config, hash_fields, detector_name, window_trains,
+                         window_origin_trainId, n_windows, definition, bits_present, host,
+                         package_versions, timings, wall_s, status_summary, block_errors
+```
+
+Measured on two cached `detector_sums` files, int32 + shuffle + gzip-1 stores a window in
+0.75–1.3 MB against 8.4 MB raw.
+
+**Two hashes, each over its own numbers (CLAUDE.md pitfall 12).** `pixel_sum_trains` and
+`pixel_sums_root` are operational for the frame table (`SAXS_OPERATIONAL_FIELDS`), so adding them
+left every existing `agipd_saxs.h5` hash unchanged. The window sums' hash covers only the proposal,
+the run, the *resolved* detector name, `min_modules` and `pixel_sum_trains` — not geometry, beam
+centre, photon energy, `npt` or any mask, none of which changes a stored count.
+
+**Never truncated by the pass.** `cfg.overwrite` recreates the frame table only. A window-sums file
+whose hash differs is refused even with `overwrite=True`: once proc is on tape it cannot be rebuilt,
+so removing one is a decision made by hand.
+
+**Resume.** A written window is final. The blocks to process are those with `NOT_PROCESSED` frames
+plus those touching an unwritten window; a block wanted only for its windows runs with integration
+skipped (read and sum, no frame-table write). A killed job leaves its open windows unwritten, and a
+rerun rebuilds them from scratch, never half-filled. A failed block's trains are recorded as
+`WORKER_ERROR`, the window is written and the run raises `IncompleteRun`; but unlike the frame
+table, where `WORKER_ERROR` stays until the rows are reset, such a window is **not** final. A worker
+error says nothing about the data, so the next run reopens every window holding one and rebuilds it
+from scratch (sums only for blocks the frame table already holds). That is also how a backfill
+retries a transient read failure: run it again. `DATA_CHECK_FAILED` and `LABEL_MISMATCH` are
+properties of the data and stay final. Writing a window updates only its own rows of
+`/trains/status`, so a run that dies mid-rebuild leaves the file as it found it.
+
+### 15.4 Entry points and reader
+
+| Call | Does |
+|---|---|
+| `run_agipd_saxs(cfg)` | the pass; writes the window sums too unless `pixel_sum_trains is None` |
+| `run_pixel_sums(cfg)` | sums only: plan, read, sum. Never opens `agipd_saxs.h5` and builds no operator, masks or self-test, so it is independent of that file's hash — all 459 existing ones were written with `npt=2000`, which a full pass at the default config refuses. For backfilling runs whose 1D file exists |
+| `pixel_sums.window_table(path)` | one row per window: range start, trains, frames, written |
+| `pixel_sums.window_sums(path, windows)` | the sum over those windows |
+| `pixel_sums.detector_sums(run, train_ids=None, *, windows=None)` | the same Dataset `analysis.cache.detector_sums` returns. `train_ids` must be exactly a union of whole windows; otherwise it raises and names the windows that cover them, rather than summing more trains than asked |
+
+Notebook switch: `cache.detector_sums(run, tids, label=…)` → `pixel_sums.detector_sums(run, tids)`.
+
+### 15.5 Phases
+
+- **S1 — code and tests.** `tests/saxs/test_pixel_sums.py` on the mock run: every window equals
+  `cache.detector_sums` of its member trains on a run with a dropped train, a short-module train, a
+  zero-frame train, a partial last window and scheduling blocks straddling windows; left-out trains
+  (negative counts, worker error); resume after a killed pool; windows added to a complete frame
+  table without reintegration; the sums-only mode writes the same data; the window-pooled S, N, V
+  of the frame table equal the gather over the window sums (1e-6, the P4 gate-B tolerance); hashes;
+  the reader. The frame table's datasets are byte-identical before and after.
+- **S2 — on a node — done 2026-10-07** (Slurm 25172553, max-cfel029, EPYC 9374F in DAMNIT's
+  `allcpu` partition, exclusive, 36 workers, r0423; every Gold-6140/6240 node was allocated). Four
+  runs in order, JSONs `scripts/p4_acceptance_r0423_20261007T15*.json`:
+
+  | Run | Wall | Worker ms/frame/core | `pixel_sums` | Parent `write_blocks` | Gates |
+  |---|---|---|---|---|---|
+  | sums off, cold | 178.7 s | 10.39 | — | 64.0 s | A 0 B C D pass |
+  | sums on, warm | 174.7 s | 11.31 | 1.25 | 78.9 s | A 0 B C D **E E2** pass |
+  | sums off, warm | 156.7 s | 9.99 | — | 64.7 s | A 0 B C D pass |
+  | sums only, warm | 115.7 s | 7.99 | 1.25 | 15.8 s | **E** pass |
+
+  The overhead is on − warm off: **+18.0 s wall (+11.5 %)**, +1.3 ms/frame/core in the workers (the
+  other stages moved by < 0.07 ms), +14 s of parent write time. **Gate E:** all 300 non-empty
+  windows of 301 equal the `cache._sum_job` reference exactly, and the three spot checks through
+  `cache.detector_sums` itself; 3000 trains, 465 000 frames summed, one `NO_FRAMES` train.
+  **Gate E2:** max relative difference 1.8e-8 (S), 3.5e-8 (N), 3.2e-8 (V) over 300 windows, all
+  empty bins agree. The sums-only file is identical to the full pass's, dataset by dataset;
+  280 MB for r0423, 0.93 MB per window. The absolute times are this node's, not P4's Gold-6140
+  (377.6 s); the A/B is the measurement. Gate B passing on all three full runs also re-gates the
+  2026-09-13 beam-centre change (4.5e-8).
+- **S3 — backfill** of the runs whose 1D file exists, with `run_pixel_sums`, before proc is taped.
+  Size, from the 459 existing 1D files: 1.49e8 frames (320 × r0423), 619 175 trains, ~62 100
+  windows, so ~58 GB at the measured 0.93 MB per window. At the measured sums-only rate on the S2
+  node that is ~10.7 h of pool time plus per-run start-up; cold reads cost ~14 % more there (cold
+  vs warm sums-off). Not yet run.

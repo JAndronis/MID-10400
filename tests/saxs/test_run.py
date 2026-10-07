@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from concurrent.futures import BrokenExecutor, Future
 from dataclasses import replace
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -190,6 +191,14 @@ def test_incomplete_run_raises_unless_allowed(pipeline, tmp_path, monkeypatch):
 
 # ── resume ────────────────────────────────────────────────────────────────────
 def test_resume_processes_only_the_missing_blocks(pipeline, tmp_path, monkeypatch):
+    """The frame table's resume, with window sums off.
+
+    With them on, the rerun would also rebuild the window that lost the failed
+    block's trains, reading its other blocks for their sums — covered in
+    ``test_pixel_sums.py``.
+    """
+    pipeline = SimpleNamespace(**vars(pipeline))
+    pipeline.cfg = replace(pipeline.cfg, pixel_sum_trains=None)
     real = worker.process_block
     monkeypatch.setattr(
         worker,

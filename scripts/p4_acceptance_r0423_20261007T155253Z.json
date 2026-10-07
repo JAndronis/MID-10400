@@ -1,0 +1,193 @@
+{
+  "generated_at": "2026-10-07T15:49:55.532298+00:00",
+  "host": "max-cfel029.desy.de",
+  "platform": "Linux-5.14.0-687.25.1.el9_8.x86_64-x86_64-with-glibc2.34",
+  "python": "3.12.11",
+  "git_commit": "c59bccc72dba008eb0eba4130dd0a3c6550a7f36",
+  "thread_env": {
+    "EXTRA_NUM_THREADS": "1",
+    "OMP_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1"
+  },
+  "run": 423,
+  "proposal": 10400,
+  "config_hash": "65a4ac3e11991e944910a63f31003ced8b960aab0e5dedc89e64b36c96fdfc16",
+  "output": "/gpfs/exfel/exp/MID/202601/p010400/scratch/agipd_saxs_s2/off2/agipd_saxs.h5",
+  "gates": {
+    "A_selftest": {
+      "passed": true,
+      "selftest_frames": 8,
+      "max_rel_signal": 0.0,
+      "max_rel_normalization": 1.4762498406701002e-08,
+      "max_rel_variance": 0.0,
+      "wall_s": 168.0855325581506
+    },
+    "0_configuration": {
+      "passed": true,
+      "n_workers": 36,
+      "workers_expected": 36,
+      "trains_in_file": 3001,
+      "trains_in_run": 3001,
+      "frames_in_file": 465000,
+      "coverage": 1.0,
+      "full_run": true,
+      "config_hash_matches": true,
+      "file_config_hash": "65a4ac3e11991e944910a63f31003ced8b960aab0e5dedc89e64b36c96fdfc16",
+      "script_config_hash": "65a4ac3e11991e944910a63f31003ced8b960aab0e5dedc89e64b36c96fdfc16"
+    },
+    "B_dense_reference": {
+      "passed": true,
+      "tolerance": 1e-06,
+      "trains": [
+        2637695397,
+        2637696897,
+        2637698396
+      ],
+      "empty_bins_agree": true,
+      "max_rel_intensity": 4.463709860243343e-08,
+      "max_rel_signal": 2.0077769343890578e-08,
+      "max_rel_normalization": 4.223930155002177e-08,
+      "float32_eps": 1.1920928955078125e-07,
+      "per_train": [
+        {
+          "trainId": 2637695397,
+          "n_frames": 155,
+          "populated_bins": 500,
+          "empty_bins_agree": true,
+          "max_rel_intensity": 4.215480740908292e-08,
+          "max_rel_signal": 7.530065815078607e-09,
+          "max_rel_normalization": 4.215480928076673e-08
+        },
+        {
+          "trainId": 2637696897,
+          "n_frames": 155,
+          "populated_bins": 500,
+          "empty_bins_agree": true,
+          "max_rel_intensity": 4.463709860243343e-08,
+          "max_rel_signal": 2.0077769343890578e-08,
+          "max_rel_normalization": 4.215480928076673e-08
+        },
+        {
+          "trainId": 2637698396,
+          "n_frames": 155,
+          "populated_bins": 500,
+          "empty_bins_agree": true,
+          "max_rel_intensity": 4.2239299699686495e-08,
+          "max_rel_signal": 8.65637491801754e-09,
+          "max_rel_normalization": 4.223930155002177e-08
+        }
+      ]
+    },
+    "C_timing": {
+      "passed": true,
+      "reason": "",
+      "ok_frames": 465000,
+      "n_workers": 36,
+      "n_blocks": 750,
+      "busy_workers": 36,
+      "wall_s": 156.71170173864812,
+      "wall_target_s": 600,
+      "stages": {
+        "read_data": {
+          "cpu_s": 1096.3258439339697,
+          "ms_per_frame_per_core": 2.3576899869547736,
+          "budget_ms": 4.6,
+          "ratio": 0.5125413015119074
+        },
+        "read_mask": {
+          "cpu_s": 2039.168664233759,
+          "ms_per_frame_per_core": 4.385308955341418,
+          "budget_ms": 8.2,
+          "ratio": 0.5347937750416364
+        },
+        "integrate": {
+          "cpu_s": 1510.0857181986794,
+          "ms_per_frame_per_core": 3.247496168169203,
+          "budget_ms": 6.2,
+          "ratio": 0.5237897045434198
+        }
+      },
+      "total_ms_per_frame_per_core": 9.990495110465394,
+      "total_budget_ms": 19.0,
+      "total_ratio": 0.5258155321297576,
+      "worker_cpu_s": 4645.580226366408,
+      "setup_s": {
+        "plan": 3.2846844596788287,
+        "operator": 0.5811514668166637,
+        "static_mask": 0.003181546926498413,
+        "base_masks": 11.009090849198401,
+        "selftest": 2.4171152198687196,
+        "save_operator_and_masks": 0.0810694731771946,
+        "write_blocks": 64.67381575889885
+      },
+      "setup_total_s": 82.05010877456516,
+      "ideal_wall_s": 129.04389517684467,
+      "parallel_efficiency": 0.8234477307384122,
+      "untimed_wall_s": 27.667806561803445
+    },
+    "D_ledger": {
+      "passed": true,
+      "n_frames": 465000,
+      "frame_status": {
+        "OK": 465000
+      },
+      "train_status": {
+        "OK": 3000,
+        "NO_FRAMES": 1
+      },
+      "non_ok": {},
+      "non_ok_trains": {
+        "NO_FRAMES": {
+          "n_trains": 1,
+          "trains": [
+            2637698397
+          ],
+          "n_rows_owned": 0,
+          "truncated": false
+        }
+      },
+      "reconciles": true,
+      "block_errors": {},
+      "unseen_cell_frames": 0,
+      "bits_present": 13187,
+      "bits_present_named": "0 OFFSET_OUT_OF_THRESHOLD, 1 NOISE_OUT_OF_THRESHOLD, 7 FF_GAIN_EVAL_ERROR, 8 FF_GAIN_DEVIATION, 9 FF_NO_ENTRIES, 12 VALUE_OUT_OF_RANGE, 13 GAIN_THRESHOLDING_ERROR",
+      "unexpected_bits": 0,
+      "static_mask_sources": [
+        {
+          "name": "asic_seams",
+          "path": null,
+          "sha256": null,
+          "n_excluded": 28672
+        },
+        {
+          "name": "pixel_mask",
+          "path": "/gpfs/exfel/exp/MID/202601/p010400/usr/masks/mask_2026-09-08_AGIPD_SAXS.npy",
+          "sha256": "6fc2079490fb2945c82e77fd09e29c64381df7626aabefdbc9ee34bfee5e276d",
+          "n_excluded": 171739
+        }
+      ],
+      "run_checks": {
+        "xray_pulses": {
+          "constant_pattern": true,
+          "trains_compared": 3000,
+          "frames_ne_xray_pulses": 0
+        },
+        "quadrant_motors": {
+          "n_positions": 1,
+          "quadrants_moved": false
+        },
+        "xgm_photon_energy": {
+          "available": true,
+          "mean_kev": 9.000000953674316,
+          "spread_fraction": 0.0,
+          "config_kev": 9.04,
+          "rel_difference": 0.004424673266115348,
+          "agrees": false
+        }
+      }
+    }
+  },
+  "pixel_sum_trains": null,
+  "passed": true
+}

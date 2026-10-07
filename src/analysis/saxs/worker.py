@@ -2,7 +2,11 @@
 
 One single-threaded worker per core, spawned. The worker owns nothing but its
 own reads: the operator and the masks come from files written by the parent,
-and the results go back as plain arrays. Only the parent writes the output file.
+and the results go back as plain arrays. Only the parent writes the output files.
+
+The same read feeds the per-pixel window sums (context file §15) when the
+parent asks for them, so they cost an add per train rather than a second read.
+A block the parent needs only for its windows skips the integration.
 
 Thread limits are inherited from the parent's environment — a
 spawned child has already imported numpy by the time an initializer runs, so
@@ -26,6 +30,7 @@ from analysis.common.status import DataCheckFailed, FrameStatus
 from analysis.saxs.config import AgipdSaxsConfig
 from analysis.saxs.masks import BaseMasks, load_masks
 from analysis.saxs.operator import SparseOperator, load_operator
+from analysis.saxs.pixel_sums import BlockSums, WindowSpec
 from analysis.saxs.sparse import integrate_frame
 
 __all__ = [
@@ -42,34 +47,50 @@ class WorkerPaths:
 
     ``run_dir`` opens a run by directory instead of by proposal and run number,
     which is how the mock run is reached; ``None`` uses ``open_run``.
+    ``operator`` and ``masks`` are ``None`` for a pass that only sums pixels,
+    which integrates nothing.
     """
 
-    operator: str
-    masks: str
+    operator: str | None
+    masks: str | None
     run_dir: str | None = None
 
 
 @dataclass(slots=True)
 class _WorkerState:
     cfg: AgipdSaxsConfig
-    op: SparseOperator
-    masks: BaseMasks
+    op: SparseOperator | None
+    masks: BaseMasks | None
     detector: Any
+    windows: WindowSpec | None = None
+    skip_integration: frozenset[int] = frozenset()
 
 
 _STATE: _WorkerState | None = None
 
 
-def init(paths: WorkerPaths, cfg: AgipdSaxsConfig) -> None:
-    """Process initializer: load the operator and masks, open the run."""
+def init(
+    paths: WorkerPaths,
+    cfg: AgipdSaxsConfig,
+    windows: WindowSpec | None = None,
+    skip_integration: frozenset[int] = frozenset(),
+) -> None:
+    """Process initializer: load the operator and masks, open the run.
+
+    :param windows: sum pixels into these windows; ``None`` sums nothing.
+    :param skip_integration: blocks to read and sum without integrating —
+        those whose frames the output file already holds.
+    """
     set_thread_env()
 
     from extra_data import RunDirectory, open_run
     from extra_data.components import AGIPD1M
 
-    op = load_operator(Path(paths.operator))
-    masks = load_masks(Path(paths.masks))
-    if masks.operator_sha256 != op.sha256:
+    op = load_operator(Path(paths.operator)) if paths.operator else None
+    masks = load_masks(Path(paths.masks)) if paths.masks else None
+    if (op is None) != (masks is None):
+        raise ValueError("the operator and the masks come together or not at all")
+    if op is not None and masks.operator_sha256 != op.sha256:
         raise ValueError(
             f"masks were built against operator {masks.operator_sha256}, "
             f"but the loaded operator is {op.sha256}"
@@ -82,15 +103,34 @@ def init(paths: WorkerPaths, cfg: AgipdSaxsConfig) -> None:
     )
     detector = AGIPD1M(dc, detector_name=cfg.detector_name, min_modules=cfg.min_modules)
     global _STATE
-    _STATE = _WorkerState(cfg=cfg, op=op, masks=masks, detector=detector)
+    _STATE = _WorkerState(
+        cfg=cfg,
+        op=op,
+        masks=masks,
+        detector=detector,
+        windows=windows,
+        skip_integration=frozenset(skip_integration),
+    )
 
 
 def init_from_detector(
-    cfg: AgipdSaxsConfig, op: SparseOperator, masks: BaseMasks, detector: Any
+    cfg: AgipdSaxsConfig,
+    op: SparseOperator | None,
+    masks: BaseMasks | None,
+    detector: Any,
+    windows: WindowSpec | None = None,
+    skip_integration: frozenset[int] = frozenset(),
 ) -> None:
     """In-process initializer for tests and single-process runs."""
     global _STATE
-    _STATE = _WorkerState(cfg=cfg, op=op, masks=masks, detector=detector)
+    _STATE = _WorkerState(
+        cfg=cfg,
+        op=op,
+        masks=masks,
+        detector=detector,
+        windows=windows,
+        skip_integration=frozenset(skip_integration),
+    )
 
 
 @dataclass(slots=True)
@@ -112,6 +152,13 @@ class BlockResult:
     bits_present: int = 0
     unseen_cells: int = 0
     timings: dict[str, float] = field(default_factory=dict)
+    #: False when the block was read only for its window sums: its frame rows
+    #: are then still ``NOT_PROCESSED`` zeros and must not be written.
+    integrated: bool = True
+    #: Window index → this block's partial sums for it (``pixel_sums``).
+    pixel_partials: dict[int, Any] = field(default_factory=dict)
+    #: Train id → the ``FrameStatus`` that kept it out of the window sums.
+    pixel_excluded: dict[int, int] = field(default_factory=dict)
 
     @property
     def n_frames(self) -> int:
@@ -137,22 +184,34 @@ def _empty_result(block: Block, npt: int) -> BlockResult:
 
 
 def process_block(block: Block) -> BlockResult:
-    """Read and integrate one block.
+    """Read and integrate one block, and sum its pixels if asked to.
 
     Every frame's identity comes from the reader's coordinates, never from its
     position in the array. A train whose labels or frame
     count disagree with the plan is marked ``LABEL_MISMATCH`` and none of its
-    frames are integrated.
+    frames are integrated or summed.
     """
     if _STATE is None:
         raise RuntimeError("worker.init has not run in this process")
     state = _STATE
     op, cfg, masks = state.op, state.cfg, state.masks
+    integrate = block.index not in state.skip_integration
+    if integrate and (op is None or masks is None):
+        raise RuntimeError(
+            f"block {block.index} is to be integrated, but this worker was "
+            "initialised without an operator"
+        )
+    sums = BlockSums(state.windows) if state.windows is not None else None
 
     from extra_data import by_id
 
-    result = _empty_result(block, op.npt)
-    timings = {"read_data": 0.0, "read_mask": 0.0, "integrate": 0.0}
+    result = _empty_result(block, op.npt if op is not None else 0)
+    result.integrated = integrate
+    timings = {"read_data": 0.0, "read_mask": 0.0}
+    if integrate:
+        timings["integrate"] = 0.0
+    if sums is not None:
+        timings["pixel_sums"] = 0.0
     bits_present = 0
     unseen_cells = 0
     offset = 0
@@ -184,12 +243,21 @@ def process_block(block: Block) -> BlockResult:
             or not np.all(train_ids == train_id)
         ):
             result.status[rows] = FrameStatus.LABEL_MISMATCH
+            if sums is not None:
+                sums.exclude(train_id, FrameStatus.LABEL_MISMATCH)
             continue
 
         result.train_id[rows] = train_ids
         result.pulse_id[rows] = pulse_ids
         result.cell_id[rows] = cell_ids
         bits_present |= int(np.bitwise_or.reduce(mask, axis=None))
+
+        if sums is not None:
+            started = time.perf_counter()
+            sums.add_train(train_id, data, mask)
+            timings["pixel_sums"] += time.perf_counter() - started
+        if not integrate:
+            continue
 
         started = time.perf_counter()
         for frame in range(expected):
@@ -220,4 +288,7 @@ def process_block(block: Block) -> BlockResult:
     result.bits_present = bits_present
     result.unseen_cells = unseen_cells
     result.timings = timings
+    if sums is not None:
+        result.pixel_partials = sums.packed()
+        result.pixel_excluded = sums.excluded
     return result
