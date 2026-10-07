@@ -1,10 +1,12 @@
 """On-disk cache of per-train SAXS inputs, so notebooks re-run without re-reading runs.
 
-Only what the sources hold is stored, reduced by averaging over pulses and nothing else.
-The pulse-averaged I(q) is DAMNIT's ``agipd_saxs`` grid, neither scaled nor background
-subtracted; the droplet scale factors, the droplet fit and the D^2-law fit sit beside it
-as variables and attributes and are never applied. Subtraction, normalisation and every
-other operation belong in the notebook or script that loads the cache.
+Only what the sources hold is stored, reduced by averaging or summing over frames and
+nothing else. The pulse-averaged I(q) is DAMNIT's ``agipd_saxs`` grid, neither scaled
+nor background subtracted; the droplet scale factors, the droplet fit and the D^2-law
+fit sit beside it as variables and attributes and are never applied; the 2D detector
+sums are photon counts per pixel with no mask beyond the frame's own. Subtraction,
+normalisation and every other operation belong in the notebook or script that loads
+the cache.
 
 A cache file is rebuilt when its inputs, the DAMNIT files it was read from or
 `CACHE_VERSION` change, and on ``refresh=True``. Files are written under a temporary
@@ -26,13 +28,24 @@ import xarray as xr
 
 from analysis import utils
 
-__all__ = ["CACHE_VERSION", "DEFAULT_CACHE_DIR", "droplet_timeline", "saxs_run"]
+__all__ = [
+    "CACHE_VERSION",
+    "DEFAULT_CACHE_DIR",
+    "detector_sums",
+    "droplet_timeline",
+    "saxs_run",
+]
 
 DEFAULT_CACHE_DIR = Path("/gpfs/exfel/exp/MID/202601/p010400/scratch/saxs_cache")
+PROC_ROOT = Path("/gpfs/exfel/exp/MID/202601/p010400/proc")
 #: Bump when what a cache file holds changes; older files are then rebuilt.
 CACHE_VERSION = 1
 #: Trains read per chunk when averaging the pulse-resolved grid (bounds memory).
 TRAIN_CHUNK = 200
+#: Trains per worker job when summing detector frames (~0.7 GB at 350 frames/train).
+SUM_CHUNK = 5
+#: AGIPD module geometry: modules per detector and pixels per module.
+N_MODULES, MODULE_SHAPE = 16, (512, 128)
 
 
 def _normalised(obj):
@@ -321,3 +334,143 @@ def droplet_timeline(
     )
     _write(tl, path)
     return tl
+
+
+def _dir_source(path) -> dict:
+    """A proc run directory's identity: its file count, total size and newest mtime."""
+    stats = [os.stat(p) for p in sorted(Path(path).glob("*.h5"))]
+    if not stats:
+        raise FileNotFoundError(f"no .h5 files under {path}")
+    return {
+        "path": str(path),
+        "n_files": len(stats),
+        "size": sum(s.st_size for s in stats),
+        "mtime_ns": max(s.st_mtime_ns for s in stats),
+    }
+
+
+def _open_proc(run_dir):
+    import extra_data as ed
+
+    return ed.RunDirectory(str(run_dir))
+
+
+def _sum_job(args) -> tuple[int, np.ndarray, np.ndarray, int]:
+    """Worker: one module's counts and valid-frame counts over a few trains."""
+    run_dir, train_ids, modno = args
+    os.environ.setdefault("EXTRA_NUM_THREADS", "1")  # CLAUDE.md pitfall 3
+    from extra_data import by_id
+    from extra_data.components import AGIPD1M
+
+    det = AGIPD1M(
+        _open_proc(run_dir).select_trains(by_id[list(train_ids)]),
+        min_modules=N_MODULES,
+    )
+    source = det.modno_to_source[modno]
+    data = det.data[source, "image.data"].ndarray()
+    valid = det.data[source, "image.mask"].ndarray() == 0
+    counts = np.where(valid, data, 0).sum(axis=0, dtype=np.int64)
+    return modno, counts, valid.sum(axis=0, dtype=np.int64), data.shape[0]
+
+
+def _read_sums(run_dir, train_ids: list[int], n_workers: int | None):
+    """Sum each module over `train_ids` in a pool; all modules must be present."""
+    from extra_data import by_id
+    from extra_data.components import AGIPD1M
+
+    from analysis.common.cpu import default_pool, physical_cores
+
+    det = AGIPD1M(
+        _open_proc(run_dir).select_trains(by_id[train_ids]), min_modules=N_MODULES
+    )
+    missing = sorted(set(train_ids) - {int(t) for t in det.train_ids})
+    if missing:
+        raise ValueError(
+            f"{len(missing)} requested trains have no frames from all {N_MODULES} "
+            f"modules in {run_dir}: {missing[:10]}"
+        )
+    chunks = [train_ids[i : i + SUM_CHUNK] for i in range(0, len(train_ids), SUM_CHUNK)]
+    jobs = [(str(run_dir), chunk, m) for chunk in chunks for m in range(N_MODULES)]
+    workers = n_workers or min(len(jobs), physical_cores() or 8, 32)
+
+    counts = np.zeros((N_MODULES, *MODULE_SHAPE), np.int64)
+    valid = np.zeros_like(counts)
+    frames = np.zeros(N_MODULES, np.int64)
+    with default_pool(workers) as pool:
+        for modno, c, v, n in pool.map(_sum_job, jobs):
+            counts[modno] += c
+            valid[modno] += v
+            frames[modno] += n
+    if np.unique(frames).size != 1:
+        raise RuntimeError(f"modules returned different frame counts: {frames}")
+    return counts, valid, int(frames[0])
+
+
+def detector_sums(
+    run_nr: int,
+    train_ids,
+    *,
+    label: str = "",
+    proposal: int = 10400,
+    run_dir=None,
+    n_workers: int | None = None,
+    cache_dir=DEFAULT_CACHE_DIR,
+    refresh: bool = False,
+) -> xr.Dataset:
+    """Photon counts per AGIPD pixel, summed over every frame of `train_ids`, cached.
+
+    Returns a Dataset over (module, slow, fast):
+
+    ``counts``
+        Sum of ``image.data`` over the frames whose ``image.mask`` is 0 for that pixel.
+    ``valid_frames``
+        How many frames that is, per pixel; ``counts / valid_frames`` is the mean
+        count per frame.
+
+    Nothing else is applied: no static mask, no flux or path normalisation. The train
+    ids are stored as ``train_id``; every one must have frames from all 16 modules,
+    else this raises rather than summing fewer. `label` only names the file. The
+    corrected data come from the proposal's ``proc`` tree unless `run_dir` is given.
+    """
+    run_nr, proposal = int(run_nr), int(proposal)
+    train_ids = sorted({int(t) for t in train_ids})
+    if not train_ids:
+        raise ValueError("no train ids given")
+    run_dir = Path(run_dir) if run_dir is not None else PROC_ROOT / f"r{run_nr:04d}"
+    digest = hashlib.sha256(np.asarray(train_ids, np.uint64).tobytes()).hexdigest()
+    inputs = {
+        "kind": "detector_sums",
+        "proposal": proposal,
+        "run": run_nr,
+        "n_trains": len(train_ids),
+        "train_ids_sha256": digest,
+    }
+    sources = [_dir_source(run_dir)]
+    stem = f"sums_r{run_nr:04d}" + (f"_{label}" if label else "")
+    path = _cache_path(cache_dir, stem, inputs)
+    if not refresh and (cached := _load(path, inputs, sources)) is not None:
+        return cached
+
+    counts, valid, n_frames = _read_sums(run_dir, train_ids, n_workers)
+    dims = ("module", "slow", "fast")
+    ds = xr.Dataset(
+        {
+            "counts": (dims, counts.astype(np.int32)),
+            "valid_frames": (dims, valid.astype(np.int32)),
+            "train_id": ("train", np.asarray(train_ids, np.uint64)),
+        },
+        coords={"module": np.arange(N_MODULES)},
+    )
+    ds["counts"].attrs["description"] = (
+        "sum of image.data over the frames with image.mask == 0 for the pixel"
+    )
+    ds.attrs.update(
+        _attrs(
+            inputs, sources, "per-pixel photon sums; see analysis.cache.detector_sums"
+        ),
+        run=run_nr,
+        n_frames=n_frames,
+        label=label,
+    )
+    _write(ds, path)
+    return ds

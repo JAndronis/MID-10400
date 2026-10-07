@@ -374,3 +374,89 @@ def test_the_timeline_is_cached_and_reloaded(tmp_path, monkeypatch):
     assert len(fits) == 1
     assert second.attrs["t_star_s"] == first.attrs["t_star_s"]
     np.testing.assert_array_equal(second.time, first.time)
+
+
+# ── detector_sums ─────────────────────────────────────────────────────────────
+mockrun = pytest.importorskip("saxs.mockrun")  # tests/saxs, as a namespace package
+
+
+@pytest.fixture(scope="module")
+def proc_run(tmp_path_factory):
+    """A 16-module proc-like run: 7 trains of 4 frames; module 0 lacks train 10005."""
+    return mockrun.write_mock_run(
+        tmp_path_factory.mktemp("proc"),
+        train_ids=tuple(range(10000, 10007)),
+        frames_per_train=4,
+        short_module_trains=(10005,),
+    )
+
+
+def reference_sums(run, train_ids):
+    """Counts and valid frames per pixel, read straight from the files with h5py."""
+    import h5py
+
+    counts = np.zeros((16, 512, 128), np.int64)
+    valid = np.zeros_like(counts)
+    for m in range(16):
+        path = run.path / f"CORR-R0423-AGIPD{m:02d}-S00000.h5"
+        with h5py.File(path, "r") as f:
+            image = f[f"INSTRUMENT/{mockrun.source(m)}/image"]
+            rows = np.isin(image["trainId"][:].ravel(), train_ids)
+            ok = image["mask"][rows] == 0
+            counts[m] = np.where(ok, image["data"][rows], 0).sum(0)
+            valid[m] = ok.sum(0)
+    return counts, valid
+
+
+def test_sums_equal_an_independent_read_of_the_files(proc_run, tmp_path):
+    trains = [10003, 10000, 10002]
+    ds = cache.detector_sums(
+        1, trains, run_dir=proc_run.path, n_workers=2, cache_dir=tmp_path
+    )
+
+    counts, valid = reference_sums(proc_run, trains)
+    np.testing.assert_array_equal(ds.counts, counts)
+    np.testing.assert_array_equal(ds.valid_frames, valid)
+    assert ds.attrs["n_frames"] == 12
+    np.testing.assert_array_equal(ds.train_id, sorted(trains))
+    # the frame mask removed pixels from some frames, and photons were counted
+    assert int(ds.valid_frames.min()) < 12 and int(ds.counts.sum()) > 0
+
+
+def test_a_train_without_every_module_is_refused(proc_run, tmp_path):
+    with pytest.raises(ValueError, match="no frames from all 16 modules"):
+        cache.detector_sums(
+            1, [10004, 10005], run_dir=proc_run.path, n_workers=1, cache_dir=tmp_path
+        )
+
+
+def test_sums_are_cached_and_rebuilt_on_new_trains_a_changed_run_or_refresh(
+    proc_run, tmp_path, monkeypatch
+):
+    reads = []
+    real = cache._read_sums
+    monkeypatch.setattr(
+        cache, "_read_sums", lambda *a, **k: reads.append(1) or real(*a, **k)
+    )
+    kw = {"run_dir": proc_run.path, "n_workers": 1, "cache_dir": tmp_path}
+
+    first = cache.detector_sums(1, [10000, 10001], label="pair", **kw)
+    again = cache.detector_sums(1, [10001, 10000], label="pair", **kw)
+    assert len(reads) == 1
+    np.testing.assert_array_equal(again.counts, first.counts)
+
+    other = cache.detector_sums(1, [10002, 10003], label="pair", **kw)  # same size
+    assert len(reads) == 2
+    np.testing.assert_array_equal(
+        other.counts, reference_sums(proc_run, [10002, 10003])[0]
+    )
+
+    cache.detector_sums(1, [10000, 10001], label="pair", refresh=True, **kw)
+    assert len(reads) == 3
+
+    some_file = next(proc_run.path.glob("*.h5"))
+    stat = os.stat(some_file)
+    os.utime(some_file, ns=(stat.st_atime_ns, stat.st_mtime_ns + 10**9))
+    cache.detector_sums(1, [10000, 10001], label="pair", **kw)
+    assert len(reads) == 4
+    assert len(list(tmp_path.glob("sums_r0001_pair_*.nc"))) == 2
