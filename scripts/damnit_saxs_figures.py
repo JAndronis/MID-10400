@@ -11,6 +11,9 @@ records the run. The buffer's figure goes to ``figures/buffer/``.
 Then one overview per condition goes to ``figures/overview/``: a grid with one panel per
 droplet, all on the same axes and the same t/t* colour scale, read from the droplets'
 ``curves.nc``. Normalised (to the mean over q 0.80-0.95) and per flux*path versions.
+Beside them, per condition, its droplets side by side at matched t/t*
+(``saxs_matched_tstar_<sample>_norm.png``, a panel per t/t*, a line per droplet), with
+the blocks they used in one JSON.
 
 The droplets are the run triage's series after r338 (inventory of 2026-10-01), static
 droplets only. Left out: the silica references (r382-385, r389), r463 (exploded),
@@ -87,6 +90,29 @@ CONDITIONS = {
     "ferritin50-peg6k": r"ferritin 50 mg/ml + PEG 6K 5\,\% w/v",
 }
 OUTPUTS = ("saxs_subtracted_norm.png", "saxs_subtracted.png", "curves.nc")
+# the conditions compared at matched t/t*: a droplet shows its nearest block, and only
+# within MATCH_TOLERANCE of the target (about half the 0.13-0.18 spacing of the blocks).
+# Pure ferritin ends near t/t* = 2.1, hence 2.0 as the last.
+MATCH_T = (0.25, 0.5, 0.75, 1.0, 1.5, 2.0)
+MATCH_TOLERANCE = 0.08
+# blocks the matching passes over, (run, first trainId) -> why. Found 2026-10-08 as the
+# only blocks in any curves.nc whose mean I over q 0.3-0.4 is under a tenth of the
+# median of up to two blocks on each side; the droplet figures still show them.
+NEAR_ZERO_BLOCKS = {
+    (357, 2637483940): "near zero: I(q 0.3-0.4) 0.8 % of its neighbours'",
+    (477, 2637914817): "near zero: I(q 0.3-0.4) 1.3 % of its neighbours'",
+}
+# a condition's droplets, in DROPLETS order: Okabe & Ito's colour-blind-safe palette
+# without its yellow, which is too faint on white
+DROPLET_COLOURS = (
+    "#0072B2",  # blue
+    "#D55E00",  # vermillion
+    "#009E73",  # bluish green
+    "#CC79A7",  # reddish purple
+    "#E69F00",  # orange
+    "#56B4E9",  # sky blue
+    "#000000",  # black
+)
 
 HEADER = '''"""SAXS figures of droplet {id} ({sample}, runs {first}-{last}).
 
@@ -200,6 +226,28 @@ def run_one(droplet):
     }
 
 
+def load_curves(sample=None):
+    "(droplet id, sample, curves.nc) of every droplet made so far, or of `sample`'s."
+    import xarray as xr
+
+    return [
+        (droplet[0], droplet[1], xr.load_dataset(folder(droplet) / "curves.nc"))
+        for droplet in DROPLETS
+        if (sample is None or droplet[1] == sample)
+        and (folder(droplet) / "curves.nc").exists()
+    ]
+
+
+def q_axis(ax):
+    "The droplet figures' q range and ticks, on a log axis."
+    from matplotlib.ticker import FixedLocator, FuncFormatter, NullFormatter
+
+    ax.set_xlim(0.2, 1.0)
+    ax.xaxis.set_major_locator(FixedLocator([0.2, 0.3, 0.5, 1.0]))
+    ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}"))
+    ax.xaxis.set_minor_formatter(NullFormatter())
+
+
 def overview(sample):
     """One figure per normalisation: a panel per droplet of `sample`, shared axes and
     t/t* colour scale. Returns the files written."""
@@ -209,15 +257,9 @@ def overview(sample):
     import matplotlib.pyplot as plt
     import numpy as np
     import scienceplots  # noqa: F401  (registers the notebook's "science" style)
-    import xarray as xr
-    from matplotlib.ticker import FixedLocator, FuncFormatter, NullFormatter
 
     plt.style.use("science")
-    data = []
-    for droplet in DROPLETS:
-        path = folder(droplet) / "curves.nc"
-        if droplet[1] == sample and path.exists():
-            data.append((droplet[0], xr.load_dataset(path)))
+    data = [(droplet_id, ds) for droplet_id, _, ds in load_curves(sample)]
     if not data:
         return []
     norm = matplotlib.colors.Normalize(
@@ -255,10 +297,7 @@ def overview(sample):
             )
         for ax in axs.flat[len(data) :]:
             ax.set_visible(False)
-        axs[0, 0].set_xlim(0.2, 1.0)  # as the droplet figures
-        axs[0, 0].xaxis.set_major_locator(FixedLocator([0.2, 0.3, 0.5, 1.0]))
-        axs[0, 0].xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}"))
-        axs[0, 0].xaxis.set_minor_formatter(NullFormatter())
+        q_axis(axs[0, 0])
         if normalise:
             axs[0, 0].set_ylim(0.5, 25)
         else:  # the bulk of the curves; a stray near-zero block may run off the bottom
@@ -284,6 +323,141 @@ def overview(sample):
         fig.savefig(FIGURES / "overview" / name, dpi=200, bbox_inches="tight")
         plt.close(fig)
         written.append(name)
+    return written
+
+
+def match_block(ds, target):
+    """The block of `ds` to show at t/t* = `target`: the nearest one not in
+    NEAR_ZERO_BLOCKS, if within MATCH_TOLERANCE. Returns (index or None, record)."""
+    import numpy as np
+
+    t = ds.t_over_tstar.values
+    keys = [
+        (int(r), int(tid))
+        for r, tid in zip(ds.run.values, ds.first_trainId.values, strict=True)
+    ]
+    bad = np.array([key in NEAR_ZERO_BLOCKS for key in keys])
+    k = int(np.argmin(np.where(bad, np.inf, np.abs(t - target))))
+    entry = {"t_target": target, "id": ds.attrs["droplet_id"]}
+    near = [
+        f"r{keys[b][0]} {keys[b][1]}: {NEAR_ZERO_BLOCKS[keys[b]]}"
+        for b in np.flatnonzero(bad)
+        if abs(t[b] - target) <= MATCH_TOLERANCE
+    ]
+    if near:
+        entry["passed_over"] = near
+    if abs(t[k] - target) > MATCH_TOLERANCE:
+        entry["skipped"] = (
+            f"no block within {MATCH_TOLERANCE} (nearest t/t* {t[k]:.2f})"
+        )
+        return None, entry
+    entry |= {
+        "t_over_tstar": round(float(t[k]), 3),
+        "run": int(ds.run[k]),
+        "first_trainId": int(ds.first_trainId[k]),
+        "ferritin_mg_per_ml": round(float(ds.ferritin_mg_per_ml[k]), 1),
+        "q_min": round(float(ds.q_min[k]), 4),
+    }
+    return k, entry
+
+
+def matched(sample):
+    """`sample`'s droplets side by side at matched t/t*: a panel per MATCH_T, a line
+    per droplet in its own colour, normalised to the mean over q 0.80-0.95. Returns
+    the file written and, per panel and droplet, the block shown or why none."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import scienceplots  # noqa: F401  (registers the notebook's "science" style)
+
+    plt.style.use("science")
+    data = [(droplet_id, ds) for droplet_id, _, ds in load_curves(sample)]
+    if not data:
+        return None, []
+    ncols = 3
+    nrows = math.ceil(len(MATCH_T) / ncols)
+    fig, axs = plt.subplots(
+        nrows,
+        ncols,
+        figsize=(3.6 * ncols, 3.2 * nrows + 0.6),
+        sharex=True,
+        sharey=True,
+        squeeze=False,
+    )
+    record = []
+    handles = {}
+    for ax, target in zip(axs.flat, MATCH_T, strict=False):
+        concentrations = []
+        for (droplet_id, ds), colour in zip(data, DROPLET_COLOURS, strict=False):
+            k, entry = match_block(ds, target)
+            record.append({"sample": sample} | entry)
+            if k is None:
+                continue
+            iq = ds.intensity[k]
+            iq = iq / iq.sel(q=slice(0.80, 0.95)).mean()
+            iq = iq.where((iq > 0) & (ds.q >= ds.q_min[k]))
+            (handles[droplet_id],) = ax.loglog(ds.q, iq, color=colour, lw=1.0)
+            concentrations.append(entry["ferritin_mg_per_ml"])
+        title = f"$t/t^* = {target:g}$"
+        if concentrations:
+            low, high = (f"{f(concentrations):.0f}" for f in (min, max))
+            title += f", {low} mg/ml" if low == high else f", {low}-{high} mg/ml"
+        ax.set_title(title, fontsize=9)
+    for ax in axs.flat[len(MATCH_T) :]:
+        ax.set_visible(False)
+    q_axis(axs[0, 0])
+    axs[0, 0].set_ylim(0.5, 25)  # as the normalised overviews
+    for ax in axs[-1]:
+        ax.set_xlabel(r"$q$ (nm$^{-1}$)")
+    for ax in axs[:, 0]:
+        ax.set_ylabel(r"$I(q)\,/\,\langle I \rangle_{0.80-0.95}$")
+    shown = [(d, ds) for d, ds in data if d in handles]
+    fig.legend(
+        [handles[d] for d, _ in shown],
+        [
+            f"{d}: r{ds.attrs['droplet_runs'][0]}-{ds.attrs['droplet_runs'][-1]}"
+            for d, ds in shown
+        ],
+        loc="center left",
+        bbox_to_anchor=(0.91, 0.5),  # just right of the grid
+        frameon=False,
+    )
+    fig.suptitle(
+        f"{CONDITIONS[sample]} at matched $t/t^*$ (nearest block within "
+        f"$\\pm${MATCH_TOLERANCE:g}; ferritin range per panel)"
+    )
+    out = FIGURES / "overview"
+    out.mkdir(parents=True, exist_ok=True)
+    name = f"saxs_matched_tstar_{sample}_norm.png"
+    fig.savefig(out / name, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    return name, record
+
+
+def matched_all():
+    "matched() for every condition, and the blocks they showed as one JSON."
+    written = []
+    record = []
+    for sample in CONDITIONS:
+        name, blocks = matched(sample)
+        if name:
+            written.append(name)
+            record += blocks
+    if written:
+        blocks = "saxs_matched_tstar_blocks.json"
+        (FIGURES / "overview" / blocks).write_text(
+            json.dumps(
+                {
+                    "t_targets": list(MATCH_T),
+                    "tolerance": MATCH_TOLERANCE,
+                    "normalisation": "mean over q 0.80-0.95 nm^-1",
+                    "blocks": record,
+                },
+                indent=1,
+            )
+        )
+        written.append(blocks)
     return written
 
 
@@ -331,6 +505,8 @@ def main(argv=None):
     for sample in CONDITIONS:
         for name in overview(sample):
             print(f"overview: figures/overview/{name}", flush=True)
+    for name in matched_all():
+        print(f"matched t/t*: figures/overview/{name}", flush=True)
     return 0 if all(r["status"] == "ok" for r in results) else 1
 
 

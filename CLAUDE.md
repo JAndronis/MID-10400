@@ -15,6 +15,7 @@ CPU and pool helpers, the frame-table writer), `analysis.saxs` (AGIPD) and `anal
 | `context/agipd-saxs-integrator.md` | Working on the AGIPD SAXS loader/integrator (`agipd_saxs`, `<pkg>.saxs`) |
 | `context/jungfrau-waxs-integrator.md` | Working on the JUNGFRAU WAXS integrator (`<pkg>.waxs`). Written as a delta against the AGIPD file — read that one first |
 | `context/extra-toolkit-context.md` | Using EXtra components: XCCA toolbox, `XrayPulses`, `XGM`, calibration, quadrant motors |
+| `context/run-triage.md` | Working on the run triage (`<pkg>.triage`): per-run quality metrics from DAMNIT, mesh-scan characterisation, red-box ranking for the move to tape |
 
 Adjust the paths above if the context files live elsewhere.
 
@@ -199,6 +200,7 @@ nucleation?
 | `scripts/w4_acceptance.py` | W4 acceptance for `analysis.waxs` (**not unit-tested**) | one detector at a time: configuration, NaN-equivalence self-test, an independent per-frame-mask reference against the stored sums, timing, ledger. `--run 423 --detector jf1 --workers 36`; JSON beside itself |
 | `scripts/w6_data_check.py` | Why a run's frames reach `DATA_CHECK_FAILED` (**not unit-tested**) | reads the pass's own `.h5` for the failing `(trainId, cellId)` rows, re-reads those frames from proc, and reports per frame the max over the *union* mask against the max over the *static* one, each offending pixel's value, `data.mask` bits, q and distance to the `.edf` boundary, plus a control sample of passing frames. Separates D6′'s three causes; `--run 480 --detector jf1`; JSON beside itself |
 | `scripts/pixel_sums_audit.py` | S3 audit of the per-pixel window sums (`context/agipd-saxs-integrator.md` §15.5) (**not unit-tested**) | read-only, login node: per proc run, `complete` / `missing` / `incomplete` / `mismatch` against the frame table / `busy` (a DAMNIT job queued or running) / `no_agipd`; lists what `run_pixel_sums` must backfill. ~19 min over 461 runs. JSON beside itself |
+| `scripts/run_triage.py` | Run triage for the move to tape (`analysis.triage`; `context/run-triage.md`) (**not unit-tested**) | `--phase inventory` (T1): per-run class, effective sample, sizes, DAMNIT product status, droplet series with their flags, and the §9 checks. 39 s on a login node. JSON + CSV beside itself. T2–T4 (XPCS extractability, mesh classes, ranking) are to come |
 | `agipd_stage_rates.py` | 9-stage benchmark | run from the uv environment; writes JSON after each stage; `--train-offset` avoids page-cached trains |
 | pasha | legacy parallelism in `analysis_helpers.py` | fork-only; do not use in new code |
 | PyMuPDF | reading reference PDFs | rasterise at 2× (`fitz.Matrix(2, 2)`) before extraction |
@@ -434,8 +436,6 @@ statistics (open task 6). Integer data cannot carry NaN, so bad pixels must come
     `n_extreme_pixels > 0`, so filter on it before treating that bin quantitatively; and `max_kev`
     (over the union mask) beside `max_kev_static` (over the static mask) is what says which pixel
     went and what it held.
-
----
 22. **A uv venv works only for whoever can read its interpreter.** uv installs Python into
     `~/.local/share/uv/python` by default, and a venv holds no interpreter: `bin/python` is a
     symlink and `pyvenv.cfg` `home=` points at its standard library. Maxwell home directories are
@@ -449,6 +449,8 @@ statistics (open task 6). Integer data cannot carry NaN, so bad pixels must come
     dependency can drop an **undeclared** import of another package — `extra_speckle.xcca`
     imports `numba` without declaring it, and losing pyBeamtime (which brought numba) broke the
     DAMNIT context file. `damnit read-context` in the DAMNIT directory is the check.
+
+---
 
 ## Open tasks
 
