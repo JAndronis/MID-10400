@@ -37,3 +37,6 @@ data/
 
 # pybeamtime dependency build
 extern
+
+# Figures made by the notebooks (figures/droplets/... per droplet); not committed
+figures/
