@@ -714,7 +714,7 @@ properties of the data and stay final. Writing a window updates only its own row
 | Call | Does |
 |---|---|
 | `run_agipd_saxs(cfg)` | the pass; writes the window sums too unless `pixel_sum_trains is None` |
-| `run_pixel_sums(cfg)` | sums only: plan, read, sum. Never opens `agipd_saxs.h5` and builds no operator, masks or self-test, so it is independent of that file's hash — all 459 existing ones were written with `npt=2000`, which a full pass at the default config refuses. For backfilling runs whose 1D file exists |
+| `run_pixel_sums(cfg)` | sums only: plan, read, sum. Never opens `agipd_saxs.h5` and builds no operator, masks or self-test, so it is independent of that file's hash. For backfilling runs whose 1D file exists |
 | `pixel_sums.window_table(path)` | one row per window: range start, trains, frames, written |
 | `pixel_sums.window_sums(path, windows)` | the sum over those windows |
 | `pixel_sums.detector_sums(run, train_ids=None, *, windows=None)` | the same Dataset `analysis.cache.detector_sums` returns. `train_ids` must be exactly a union of whole windows; otherwise it raises and names the windows that cover them, rather than summing more trains than asked |
@@ -750,8 +750,12 @@ Notebook switch: `cache.detector_sums(run, tids, label=…)` → `pixel_sums.det
   280 MB for r0423, 0.93 MB per window. The absolute times are this node's, not P4's Gold-6140
   (377.6 s); the A/B is the measurement. Gate B passing on all three full runs also re-gates the
   2026-09-13 beam-centre change (4.5e-8).
-- **S3 — backfill** of the runs whose 1D file exists, with `run_pixel_sums`, before proc is taped.
-  Size, from the 459 existing 1D files: 1.49e8 frames (320 × r0423), 619 175 trains, ~62 100
-  windows, so ~58 GB at the measured 0.93 MB per window. At the measured sums-only rate on the S2
-  node that is ~10.7 h of pool time plus per-run start-up; cold reads cost ~14 % more there (cold
-  vs warm sums-off). Not yet run.
+- **S3 — every run — done 2026-10-07.** The `agipd_saxs` reprocess of all runs at `npt=500`
+  (DAMNIT, ~40 min, 509 jobs) wrote the window sums as part of the pass, so `run_pixel_sums` had
+  nothing left to do. `scripts/pixel_sums_audit.py` (read-only; `pixel_sums_audit_20261007T171830Z.json`)
+  then checked every proc run: **459 complete, 2 without AGIPD data (r356, r382), 0 to backfill.**
+  62 111 windows, 617 077 trains, 1.486e8 frames, 53 GB in `usr/cached_files/agipd_pixel_sums`.
+  In every run the summed trains are exactly the frame table's fully-OK trains and the summed
+  frames their frames; no train was left out for a failure (2029 `NO_FRAMES`, 69
+  `MISSING_MODULES`, which own no rows). Rerun the audit after any reprocess; anything it lists
+  under `backfill` goes through `run_pixel_sums`.

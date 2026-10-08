@@ -243,10 +243,9 @@ def run_pixel_sums(
 
     For runs whose frame table already exists: this never opens
     ``agipd_saxs.h5`` and builds no operator, masks or self-test, since nothing
-    is integrated. So the frame table's config hash does not matter here: the
-    existing files were written with ``npt=2000``, and a full pass at the
-    default config would refuse every one. A rerun resumes, doing only the
-    windows not yet written.
+    is integrated, so a frame table written under another config — another
+    ``npt``, say — neither blocks it nor is touched by it. A rerun resumes,
+    doing only the windows not yet written.
 
     :param dc: an already-open ``DataCollection``; ``None`` opens the proc run.
     :param run_dir: directory the workers open the run from.
