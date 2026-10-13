@@ -1,0 +1,496 @@
+{
+  "generated_at": "2026-10-13T15:21:46.637280+00:00",
+  "host": "max-cfel029.desy.de",
+  "platform": "Linux-5.14.0-687.56.1.el9_8.x86_64-x86_64-with-glibc2.34",
+  "python": "3.12.11",
+  "git_commit": "24347528c6f00f5dae40356f8427b0dbea1a781c",
+  "thread_env": {
+    "EXTRA_NUM_THREADS": "1",
+    "OMP_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1"
+  },
+  "run": 423,
+  "proposal": 10400,
+  "work_dir": "/gpfs/exfel/exp/MID/202601/p010400/scratch/s3_speed/cxi",
+  "phases": [
+    "build",
+    "identity",
+    "read",
+    "taped"
+  ],
+  "procs": [
+    1,
+    36
+  ],
+  "cpu": "AMD EPYC 9374F 32-Core Processor",
+  "package_versions": {
+    "numpy": "2.4.6",
+    "h5py": "3.16.0",
+    "EXtra-data": "1.24.0",
+    "EXtra-geom": "1.16.0",
+    "euxfel-EXtra": "2026.1.1",
+    "pyFAI": "2026.9.0",
+    "fabio": "2026.6.0"
+  },
+  "hdf5": "2.0.0",
+  "build": {
+    "agipd": {
+      "path": "/gpfs/exfel/exp/MID/202601/p010400/scratch/s3_speed/cxi/r0423_agipd.cxi",
+      "wall_s": 0.8223481450113468,
+      "size_bytes": 29954024,
+      "mode": "0o440",
+      "acl": "# file: /gpfs/exfel/exp/MID/202601/p010400/scratch/s3_speed/cxi/r0423_agipd.cxi\n# owner: andronis\n# group: upex\nuser::r--\ngroup::r--\nother::---\n\n",
+      "objects": [
+        "cxi_version",
+        "entry_1",
+        "entry_1/cellId",
+        "entry_1/experiment_identifier",
+        "entry_1/instrument_1",
+        "entry_1/instrument_1/detector_1",
+        "entry_1/instrument_1/detector_1/data",
+        "entry_1/instrument_1/detector_1/gain",
+        "entry_1/instrument_1/detector_1/mask",
+        "entry_1/instrument_1/detector_1/module_identifier",
+        "entry_1/pulseId",
+        "entry_1/trainId"
+      ],
+      "data": {
+        "shape": [
+          465000,
+          16,
+          512,
+          128
+        ],
+        "dtype": "int16",
+        "fillvalue": "np.int16(0)",
+        "n_mappings": 192,
+        "n_source_files": 192,
+        "source_files_absolute": true,
+        "source_file_examples": [
+          "/gpfs/exfel/exp/MID/202601/p010400/proc/r0423/CORR-R0423-AGIPD00-S00000.h5",
+          "/gpfs/exfel/exp/MID/202601/p010400/proc/r0423/CORR-R0423-AGIPD00-S00001.h5"
+        ],
+        "source_files_exist": true
+      },
+      "mask": {
+        "shape": [
+          465000,
+          16,
+          512,
+          128
+        ],
+        "dtype": "uint32",
+        "fillvalue": "np.uint32(4294967295)",
+        "n_mappings": 192,
+        "n_source_files": 192,
+        "source_files_absolute": true,
+        "source_file_examples": [
+          "/gpfs/exfel/exp/MID/202601/p010400/proc/r0423/CORR-R0423-AGIPD00-S00000.h5",
+          "/gpfs/exfel/exp/MID/202601/p010400/proc/r0423/CORR-R0423-AGIPD00-S00001.h5"
+        ],
+        "source_files_exist": true
+      },
+      "gain": {
+        "shape": [
+          465000,
+          16,
+          512,
+          128
+        ],
+        "dtype": "uint8",
+        "fillvalue": "np.uint8(0)",
+        "n_mappings": 192,
+        "n_source_files": 192,
+        "source_files_absolute": true,
+        "source_file_examples": [
+          "/gpfs/exfel/exp/MID/202601/p010400/proc/r0423/CORR-R0423-AGIPD00-S00000.h5",
+          "/gpfs/exfel/exp/MID/202601/p010400/proc/r0423/CORR-R0423-AGIPD00-S00001.h5"
+        ],
+        "source_files_exist": true
+      }
+    },
+    "jf1": {
+      "path": "/gpfs/exfel/exp/MID/202601/p010400/scratch/s3_speed/cxi/r0423_jf1.cxi",
+      "wall_s": 0.10341935999167617,
+      "size_bytes": 3084304,
+      "mode": "0o440",
+      "acl": "# file: /gpfs/exfel/exp/MID/202601/p010400/scratch/s3_speed/cxi/r0423_jf1.cxi\n# owner: andronis\n# group: upex\nuser::r--\ngroup::r--\nother::---\n\n",
+      "objects": [
+        "cxi_version",
+        "entry_1",
+        "entry_1/cellId",
+        "entry_1/experiment_identifier",
+        "entry_1/instrument_1",
+        "entry_1/instrument_1/detector_1",
+        "entry_1/instrument_1/detector_1/data",
+        "entry_1/instrument_1/detector_1/gain",
+        "entry_1/instrument_1/detector_1/mask",
+        "entry_1/instrument_1/detector_1/module_identifier",
+        "entry_1/memoryCell",
+        "entry_1/trainId"
+      ],
+      "data": {
+        "shape": [
+          48000,
+          1,
+          512,
+          1024
+        ],
+        "dtype": "float32",
+        "fillvalue": "np.float32(nan)",
+        "n_mappings": 6,
+        "n_source_files": 6,
+        "source_files_absolute": true,
+        "source_file_examples": [
+          "/gpfs/exfel/exp/MID/202601/p010400/proc/r0423/CORR-R0423-JNGFR01-S00000.h5",
+          "/gpfs/exfel/exp/MID/202601/p010400/proc/r0423/CORR-R0423-JNGFR01-S00001.h5"
+        ],
+        "source_files_exist": true
+      },
+      "mask": {
+        "shape": [
+          48000,
+          1,
+          512,
+          1024
+        ],
+        "dtype": "uint32",
+        "fillvalue": "np.uint32(4294967295)",
+        "n_mappings": 6,
+        "n_source_files": 6,
+        "source_files_absolute": true,
+        "source_file_examples": [
+          "/gpfs/exfel/exp/MID/202601/p010400/proc/r0423/CORR-R0423-JNGFR01-S00000.h5",
+          "/gpfs/exfel/exp/MID/202601/p010400/proc/r0423/CORR-R0423-JNGFR01-S00001.h5"
+        ],
+        "source_files_exist": true
+      },
+      "gain": {
+        "shape": [
+          48000,
+          1,
+          512,
+          1024
+        ],
+        "dtype": "uint8",
+        "fillvalue": "np.uint8(0)",
+        "n_mappings": 6,
+        "n_source_files": 6,
+        "source_files_absolute": true,
+        "source_file_examples": [
+          "/gpfs/exfel/exp/MID/202601/p010400/proc/r0423/CORR-R0423-JNGFR01-S00000.h5",
+          "/gpfs/exfel/exp/MID/202601/p010400/proc/r0423/CORR-R0423-JNGFR01-S00001.h5"
+        ],
+        "source_files_exist": true
+      }
+    }
+  },
+  "identity": {
+    "agipd": {
+      "trains_in_cxi": 3000,
+      "trains_in_extra_data": 3000,
+      "same_train_set": true,
+      "entry_1_datasets": [
+        "cellId",
+        "experiment_identifier",
+        "pulseId",
+        "trainId"
+      ],
+      "checks": [
+        {
+          "train_id": 2637695397,
+          "rows": 155,
+          "frames_match": true,
+          "pulse_ids_match": true,
+          "cell_ids_match": true,
+          "data_match": true,
+          "mask_match": true
+        },
+        {
+          "train_id": 2637696146,
+          "rows": 155,
+          "frames_match": true,
+          "pulse_ids_match": true,
+          "cell_ids_match": true,
+          "data_match": true,
+          "mask_match": true
+        },
+        {
+          "train_id": 2637696896,
+          "rows": 155,
+          "frames_match": true,
+          "pulse_ids_match": true,
+          "cell_ids_match": true,
+          "data_match": true,
+          "mask_match": true
+        },
+        {
+          "train_id": 2637697646,
+          "rows": 155,
+          "frames_match": true,
+          "pulse_ids_match": true,
+          "cell_ids_match": true,
+          "data_match": true,
+          "mask_match": true
+        },
+        {
+          "train_id": 2637698396,
+          "rows": 155,
+          "frames_match": true,
+          "pulse_ids_match": true,
+          "cell_ids_match": true,
+          "data_match": true,
+          "mask_match": true
+        }
+      ],
+      "all_match": true
+    },
+    "jf1": {
+      "trains_in_cxi": 3000,
+      "trains_in_extra_data": 3000,
+      "same_train_set": true,
+      "entry_1_datasets": [
+        "cellId",
+        "experiment_identifier",
+        "memoryCell",
+        "trainId"
+      ],
+      "checks": [
+        {
+          "train_id": 2637695397,
+          "rows": 16,
+          "memory_cells_match": true,
+          "data_match": true,
+          "mask_match": true
+        },
+        {
+          "train_id": 2637696146,
+          "rows": 16,
+          "memory_cells_match": true,
+          "data_match": true,
+          "mask_match": true
+        },
+        {
+          "train_id": 2637696896,
+          "rows": 16,
+          "memory_cells_match": true,
+          "data_match": true,
+          "mask_match": true
+        },
+        {
+          "train_id": 2637697646,
+          "rows": 16,
+          "memory_cells_match": true,
+          "data_match": true,
+          "mask_match": true
+        },
+        {
+          "train_id": 2637698396,
+          "rows": 16,
+          "memory_cells_match": true,
+          "data_match": true,
+          "mask_match": true
+        }
+      ],
+      "all_match": true
+    }
+  },
+  "read": {
+    "agipd": {
+      "extra@1": {
+        "processes": 1,
+        "frames": 620,
+        "data_ms_per_frame": 3.679784398381373,
+        "mask_ms_per_frame": 5.5739085548397735,
+        "wall_s": 5.7608654499053955,
+        "frames_per_s": 107.62271839037338,
+        "gb_decompressed": 3.90070272,
+        "max_open_fds": 204
+      },
+      "vds_train@1": {
+        "processes": 1,
+        "frames": 620,
+        "data_ms_per_frame": 45.28932249032228,
+        "mask_ms_per_frame": 49.71044030805182,
+        "wall_s": 58.906365394592285,
+        "frames_per_s": 10.525178320659336,
+        "gb_decompressed": 3.90070272,
+        "max_open_fds": 204
+      },
+      "vds_frame@1": {
+        "processes": 1,
+        "frames": 620,
+        "data_ms_per_frame": 2.6317881241641685,
+        "mask_ms_per_frame": 5.033318314540778,
+        "wall_s": 4.753211975097656,
+        "frames_per_s": 130.43811284836752,
+        "gb_decompressed": 3.90070272,
+        "max_open_fds": 204
+      },
+      "extra@36": {
+        "processes": 36,
+        "frames": 11160,
+        "data_ms_per_frame": 4.052813459313133,
+        "mask_ms_per_frame": 7.3836551934667805,
+        "wall_s": 4.617330551147461,
+        "frames_per_s": 2416.9809539034645,
+        "gb_decompressed": 70.21264896,
+        "max_open_fds": 204
+      },
+      "vds_train@36": {
+        "processes": 36,
+        "frames": 11160,
+        "data_ms_per_frame": 47.04951370438584,
+        "mask_ms_per_frame": 50.234785069355844,
+        "wall_s": 30.709730625152588,
+        "frames_per_s": 363.402731734139,
+        "gb_decompressed": 70.21264896,
+        "max_open_fds": 204
+      },
+      "vds_frame@36": {
+        "processes": 36,
+        "frames": 11160,
+        "data_ms_per_frame": 3.67821578028886,
+        "mask_ms_per_frame": 6.475074643811722,
+        "wall_s": 3.5726447105407715,
+        "frames_per_s": 3123.7363085876996,
+        "gb_decompressed": 70.21264896,
+        "max_open_fds": 204
+      }
+    },
+    "jf1": {
+      "extra@1": {
+        "processes": 1,
+        "frames": 128,
+        "data_ms_per_frame": 2.3035907657913413,
+        "mask_ms_per_frame": 2.6417692967015682,
+        "wall_s": 0.6423771381378174,
+        "frames_per_s": 199.25989329423882,
+        "gb_decompressed": 0.536870912,
+        "max_open_fds": 18,
+        "lit_frames": 64,
+        "data_ms_per_lit_frame": 4.6071815315826825,
+        "mask_ms_per_lit_frame": 5.2835385934031365,
+        "lit_frames_per_s": 99.62994664711941
+      },
+      "vds_train@1": {
+        "processes": 1,
+        "frames": 128,
+        "data_ms_per_frame": 25.99745269515097,
+        "mask_ms_per_frame": 25.45753414858609,
+        "wall_s": 6.589577913284302,
+        "frames_per_s": 19.424612878763842,
+        "gb_decompressed": 0.536870912,
+        "max_open_fds": 18,
+        "lit_frames": 64,
+        "data_ms_per_lit_frame": 51.99490539030194,
+        "mask_ms_per_lit_frame": 50.91506829717218,
+        "lit_frames_per_s": 9.712306439381921
+      },
+      "vds_lit@1": {
+        "processes": 1,
+        "frames": 128,
+        "data_ms_per_frame": 2.4030382658111193,
+        "mask_ms_per_frame": 15.966987835781765,
+        "wall_s": 2.356369972229004,
+        "frames_per_s": 54.320841594717244,
+        "gb_decompressed": 0.268435456,
+        "max_open_fds": 18,
+        "lit_frames": 64,
+        "data_ms_per_lit_frame": 4.806076531622239,
+        "mask_ms_per_lit_frame": 31.93397567156353,
+        "lit_frames_per_s": 27.160420797358622
+      },
+      "vds_lit_cache@1": {
+        "processes": 1,
+        "frames": 128,
+        "data_ms_per_frame": 1.5110346171240963,
+        "mask_ms_per_frame": 15.941810867275308,
+        "wall_s": 2.2386162281036377,
+        "frames_per_s": 57.17817926676541,
+        "gb_decompressed": 0.268435456,
+        "max_open_fds": 18,
+        "lit_frames": 64,
+        "data_ms_per_lit_frame": 3.0220692342481925,
+        "mask_ms_per_lit_frame": 31.883621734550616,
+        "lit_frames_per_s": 28.589089633382706
+      },
+      "extra@36": {
+        "processes": 36,
+        "frames": 1152,
+        "data_ms_per_frame": 5.587376397582172,
+        "mask_ms_per_frame": 3.7631145728988082,
+        "wall_s": 0.8535332679748535,
+        "frames_per_s": 1349.6837712410522,
+        "gb_decompressed": 4.831838208,
+        "max_open_fds": 18,
+        "lit_frames": 576,
+        "data_ms_per_lit_frame": 11.174752795164345,
+        "mask_ms_per_lit_frame": 7.5262291457976165,
+        "lit_frames_per_s": 674.8418856205261
+      },
+      "vds_train@36": {
+        "processes": 36,
+        "frames": 1152,
+        "data_ms_per_frame": 28.29048626729976,
+        "mask_ms_per_frame": 26.193072796824406,
+        "wall_s": 2.3225677013397217,
+        "frames_per_s": 496.0027642404113,
+        "gb_decompressed": 4.831838208,
+        "max_open_fds": 18,
+        "lit_frames": 576,
+        "data_ms_per_lit_frame": 56.58097253459952,
+        "mask_ms_per_lit_frame": 52.38614559364881,
+        "lit_frames_per_s": 248.00138212020565
+      },
+      "vds_lit@36": {
+        "processes": 36,
+        "frames": 1152,
+        "data_ms_per_frame": 2.3015844626444153,
+        "mask_ms_per_frame": 17.70510957204705,
+        "wall_s": 1.4320042133331299,
+        "frames_per_s": 804.4669067827722,
+        "gb_decompressed": 2.415919104,
+        "max_open_fds": 18,
+        "lit_frames": 576,
+        "data_ms_per_lit_frame": 4.603168925288831,
+        "mask_ms_per_lit_frame": 35.4102191440941,
+        "lit_frames_per_s": 402.2334533913861
+      },
+      "vds_lit_cache@36": {
+        "processes": 36,
+        "frames": 1152,
+        "data_ms_per_frame": 2.301212062497547,
+        "mask_ms_per_frame": 17.43237377945661,
+        "wall_s": 1.1888694763183594,
+        "frames_per_s": 968.9877845694758,
+        "gb_decompressed": 2.415919104,
+        "max_open_fds": 18,
+        "lit_frames": 576,
+        "data_ms_per_lit_frame": 4.602424124995094,
+        "mask_ms_per_lit_frame": 34.86474755891322,
+        "lit_frames_per_s": 484.4938922847379
+      }
+    }
+  },
+  "taped": {
+    "module_removed": 5,
+    "before": {
+      "data_nonzero": 3276,
+      "mask_nonzero": 45
+    },
+    "vds_after": {
+      "raised": false,
+      "data_dtype": "int16",
+      "data_all_zero": true,
+      "mask_all_ones": true,
+      "neighbour_module_still_read": true,
+      "missing_sources_detectable": 1
+    },
+    "extra_data_after": {
+      "raised": true,
+      "error": "ValueError('No data found with >= 16 modules present')"
+    }
+  }
+}

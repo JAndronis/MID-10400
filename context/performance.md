@@ -8,7 +8,7 @@ measured, where, with which versions, and what was decided. Read `CLAUDE.md` fir
 - (d) `fan_out` progress lines: done.
 - (a) pyFAI 2026.9: measured, **no speed gain, bit-identical results**. The lock is upgraded on
   branch `claude/s3-speed-tooling-*`; it merges only after the user's review.
-- (b) virtual CXI: §3.
+- (b) virtual CXI: measured, **not adopted** (§3). No pipeline change.
 
 ---
 
@@ -203,4 +203,128 @@ built on the same node.
 
 ## 3. Virtual CXI files
 
-PENDING (phase b).
+### 3.1 Verdict
+
+**Do not adopt virtual CXI files in either pass.**
+- **AGIPD:** read frame by frame, a virtual file is 10–30 % cheaper than our EXtra-data reads.
+  Read a train at a time, it is 12× dearer.
+- **JUNGFRAU:** it is slower however it is read.
+- **Tape:** it fails silently once proc is taped: an AGIPD module whose file is gone reads as
+  zero photons.
+- **When one is used** (e.g. an XCCA or XPCS prototype while proc is on disk):
+  - read it one frame per slice;
+  - check that every source file exists before trusting a value (§3.4);
+  - treat it as a disposable index, rebuilt in seconds, never as a product.
+
+The bigger lever for AGIPD read speed is still the bulk chunk reader (integrator I3: decode
+floor 0.9 + 1.6 ms/frame against the 2.4 + 4.7 the pass pays now). P6 (36 vs 72 workers) is
+the other.
+
+### 3.2 Measurement
+
+`scripts/bench_io.py`, job 25288100, max-cfel029 (AMD EPYC 9374F), r0423, 2026-10-13.
+EXtra-data 1.24.0, h5py 3.16.0, HDF5 2.0.0, the no-dev venv of §1.4. Data and mask are timed
+separately, at 1 and 36 processes. Every (variant, process count) reads its own trains, spread
+over the run, so the page cache favours none: 4 or 2 trains per process for AGIPD, 8 or 2 for
+jf1. JSON: `scripts/bench_io_r0423_20261013T152146Z.json`.
+
+**Build** (`write_virtual_cxi`, after the detector object exists):
+
+| | AGIPD | jf1 |
+|---|---|---|
+| wall | 0.82 s (opening the run and the detector: ~13 s more) | 0.10 s |
+| size | 30 MB (per-frame ids and `experiment_identifier` strings) | 3.1 MB |
+| shape | `(465000, 16, 512, 128)` | `(48000, 1, 512, 1024)`: all 16 cells, dark ones too |
+| virtual mappings | 192 per dataset (16 modules × 12 sequence files) | 6 |
+| datasets | `data`, `mask`, `gain` | `data`, `mask`, `gain` |
+| fill value | data `0` (int16), mask `0xFFFFFFFF`, gain `0` | data `NaN`, mask `0xFFFFFFFF` |
+
+EXtra-data writes `mask` only when the source group also has `gain`: it takes that as the sign of
+calibrated data. Our proc files have it, for both detectors. EXtra-data 1.24.0's
+`write_cxi.py` prints one `### Source: …` line per module and key; it ships that way (the
+installed file matches the wheel's RECORD).
+
+**Per-frame read cost, ms per frame per process:**
+
+| AGIPD | data, 1 proc | mask, 1 proc | data, 36 procs | mask, 36 procs | frames/s, 36 procs |
+|---|---|---|---|---|---|
+| EXtra-data `["image.*"].ndarray(decompress_threads=1)` per train (the pass) | 3.68 | 5.57 | 4.05 | 7.38 | 2417 |
+| VDS, one slice per train (`ds[r0:r1]`) | **45.3** | **49.7** | 47.1 | 50.2 | 363 |
+| VDS, one slice per frame (`ds[r]`, 16 chunks) | 2.63 | 5.03 | 3.68 | 6.48 | 3124 |
+
+| jf1, per *lit* frame (8 of 16 per train) | data, 1 proc | mask, 1 proc | data, 36 procs | mask, 36 procs | lit frames/s, 36 procs |
+|---|---|---|---|---|---|
+| EXtra-data `["data.*"].ndarray()` per train (the pass; reads all 16) | 4.61 | 5.28 | 11.2 | 7.53 | 675 |
+| VDS, one slice per train (16 rows, one source chunk) | 52.0 | 50.9 | 56.6 | 52.4 | 248 |
+| VDS, the lit rows one at a time | 4.81 | **31.9** | 4.60 | 35.4 | 402 |
+| … with a 256 MiB chunk cache on the VDS file | 3.02 | 31.9 | 4.60 | 34.9 | 484 |
+
+The EXtra-data rows sit above P4's in-pass figures (read_data 2.44, read_mask 4.68 ms under 36
+workers). The benchmark reads isolated trains spread over the run, where P4 reads blocks of
+consecutive trains and GPFS read-ahead helps. Compare the rows of one table with each other, not
+with P4.
+
+What the numbers say:
+- **Multi-frame slices of the virtual dataset are an order of magnitude slower** than the same
+  bytes read frame by frame, on both detectors and at both process counts. The cause was not
+  isolated. Its practical form is that a reader must loop over frames.
+- **AGIPD frame by frame** beats the pass's EXtra-data read by 1.0 / 0.5 ms (1 process) and
+  0.4 / 0.9 ms (36) for data / mask. Taking the 36-process figures, that is 1.3 ms of P4's
+  11.6 ms/frame/core, at most ~10 % of the pass's wall time.
+- **JUNGFRAU** stores `data/adc` *uncompressed* (float32, chunks `(1, 16, 512, 1024)`), while
+  `mask` and `gain` are gzip over the same 32 MiB chunk. Read one cell at a time, every lit cell
+  decompresses the whole mask chunk again: 31.9 against 5.28 ms. A 256 MiB `rdcc_nbytes` on the
+  VDS file changes nothing for the mask, so the cache set there does not reach the source datasets.
+  The pass's whole-train read is already the right shape for these chunks.
+
+### 3.3 Frame identity
+
+Checked on 5 trains spread over r0423, each against EXtra-data's coordinates and frame data:
+
+- **AGIPD:** `entry_1/trainId`, `entry_1/pulseId` and `entry_1/cellId` (virtual, per module,
+  identical across modules), plus `experiment_identifier` (`"train:pulse"` strings). All
+  equal to EXtra-data's `train_id_` / `pulse_id_` / `cell_id_coordinates()`. Data and mask are
+  bit-identical. Same 3000 trains. The `pulseId` is the detector's own numbering (2, 4, 6, … on
+  r0423), the same as our pass stores, **not** the X-ray pulse IDs `XrayPulses` reports (200, 202,
+  …). Match the two by order (`transfer_context/03`).
+- **JUNGFRAU:** `entry_1/trainId` and `entry_1/memoryCell` (plus a virtual `cellId` of the same
+  values). **No pulse IDs**, as fxs's CXI lacked them (`transfer_context/10`). One row per
+  memory cell, dark cells included, in storage order (cell 15 first, pitfall 4). Lit cells must
+  be selected by `memoryCell`, never by row. Data and mask are bit-identical; the same 3000 trains.
+
+### 3.4 When proc is taped, and who can read it
+
+- **Source paths are absolute, in the proposal form**
+  (`/gpfs/exfel/exp/MID/202601/p010400/proc/r0423/CORR-…`), as EXtra-data opened them.
+- **A missing source reads as the fill value, silently.** Shown on a mock run written like the
+  real files (`bench_io --phase taped`):
+  - One module's file was moved away. The virtual file still opened and read: that module's
+    int16 data came back **all zero**, which looks like "no photons", and its mask all
+    `0xFFFFFFFF`. The other modules still read normally.
+  - A reader of data alone gets a plausible frame with a dark module. A reader that applies the
+    mask drops the module, but only if it reads the mask.
+  - EXtra-data on the same directory refuses: `No data found with >= 16 modules present`.
+- **Detecting it** is cheap: `all(os.path.exists(s.file_name) for s in
+  ds.virtual_sources())`, 192 `stat` calls for AGIPD. Any VDS reader must do it, and must also
+  check the per-train frame count against its own expectation.
+- **After the move to tape** every virtual file over proc is a file of fill values. It is not
+  worth keeping: rebuilding takes ~14 s from a restored proc, and it holds no data of its own
+  (cf. the window sums, which are the record because they do).
+- **Access:** the files take scratch's default ACL (`user::r--`, `group::r--`, group `upex`,
+  `other::---`), the same as `agipd_saxs.h5`. Anyone who can read our scratch outputs and proc
+  can read them, DAMNIT's jobs included. Nothing about them is specific to one user.
+
+### 3.5 Tier-2 access (open task 12) and the photon-statistics pass (S4)
+
+- **What a VDS offers:** a flat `(frame, module, ss, fs)` array with frame identity beside it,
+  in one file that h5py, extra-speckle or a notebook can open without EXtra-data. For per-frame
+  random access, such as XPCS ROI series or XCCA frame selection, that is simpler code. It is
+  also no slower than EXtra-data, if read frame by frame.
+- **What it does not offer:**
+  - Any saving on ROI reads. The chunk is a whole module, so `ds[r, m, y0:y1, x0:x1]` still
+    decompresses all 512 × 128 pixels of that module. Only the module choice saves anything,
+    and EXtra-data's module selection does the same.
+  - Any lasting value once proc is taped (§3.4).
+- **For S4's photon statistics,** which must be extracted from proc before taping, a VDS is
+  acceptable as the input index if every job checks its sources first. It is not a reason to
+  delay. The output is what must survive, and the VDS cannot.
