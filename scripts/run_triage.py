@@ -9,7 +9,8 @@ T1, ``--phase inventory``:
 
 T2a, ``--phase xpcs``:
 * the analytical XPCS SNR (§4.6) per run and 30 s slice
-* β measured from the runs themselves
+* β from `REFERENCE_BETA`, one table for every run (user, 2026-10-13); the median
+  over β-eligible runs and the reference runs' re-measurement are reported beside it
 * the noise check ρ and the cross-check against DAMNIT's own g2
 * by default only on the T2a acceptance runs; ``--runs all`` takes every static and
   silica run with an XPCS result
@@ -55,10 +56,13 @@ from analysis.triage.series import load_droplet, segment  # noqa: E402
 from analysis.triage.stats import z_for_tests  # noqa: E402
 from analysis.triage.xpcs import (  # noqa: E402
     N_BLOCKS,
+    REFERENCE_BETA_RUNS,
     SNR_MIN,
     crl_state,
+    fixed_beta,
     measure_beta,
     measure_run,
+    reference_beta,
     summarise,
 )
 
@@ -189,7 +193,7 @@ def _measure(job):
         return run, None, None, f"{type(error).__name__}: {error}", 0.0
 
 
-def _roi_rows(m, beta) -> list[dict[str, Any]]:
+def _roi_rows(m, eligible) -> list[dict[str, Any]]:
     rows = []
     for r, kind in enumerate(m.kinds):
         fit = m.fits[r]
@@ -207,10 +211,19 @@ def _roi_rows(m, beta) -> list[dict[str, Any]]:
                 "sigma_A": fit.sigma_amplitude,
                 "gamma_per_s": fit.rate,
                 "sigma_gamma": fit.sigma_rate,
-                "beta_eligible": m.run in beta[r].runs,
+                "beta_eligible": m.run in eligible[r].runs,
+                "beta_reference": m.run in REFERENCE_BETA_RUNS,
             }
         )
     return rows
+
+
+def _beta_block(roi_q, beta) -> dict[float, dict[str, Any]]:
+    return {
+        float(roi_q[r]): {"value": b.value, "n_eligible": b.n_eligible, "p16": b.p16,
+                          "p84": b.p84, "runs": list(b.runs)}
+        for r, b in beta.items()
+    }  # fmt: skip
 
 
 def xpcs_phase(args) -> dict[str, Any]:
@@ -237,7 +250,11 @@ def xpcs_phase(args) -> dict[str, Any]:
     states = pd.Series({r: v[0] for r, v in measured.items()})
     majority = states.mode().iloc[0] if len(states) else None
     same = [v[1] for r, v in measured.items() if v[0] == majority]
-    beta = measure_beta(same)
+    roi_q = same[0].roi_q_A if same else np.zeros(0)
+    beta = fixed_beta(roi_q)
+    beta_eligible_median = measure_beta(same)  # cross-check only
+    has_reference = {m.run for m in same} >= set(REFERENCE_BETA_RUNS)
+    remeasured = reference_beta(same) if has_reference else None
 
     summaries, roi_tables, slice_rows = [], {}, []
     for r, (opt, m, seconds) in sorted(measured.items()):
@@ -249,7 +266,7 @@ def xpcs_phase(args) -> dict[str, Any]:
         s.update(seconds=round(seconds, 1), sample=inv.loc[r, "sample"],
                  cls=inv.loc[r, "cls"], optics=opt)  # fmt: skip
         summaries.append(s)
-        roi_tables[r] = _roi_rows(m, beta)
+        roi_tables[r] = _roi_rows(m, beta_eligible_median)
         for sl in slices:
             slice_rows.append(
                 {"run": r, "slice": sl["slice"], "n_usable": sl["n_usable"],
@@ -286,18 +303,28 @@ def xpcs_phase(args) -> dict[str, Any]:
             },
         },
         "beta_eligible_per_plain_roi": {
-            float(next(iter(measured.values()))[1].roi_q_A[r]): beta[r].n_eligible
-            for r in plain
+            float(roi_q[r]): beta_eligible_median[r].n_eligible for r in plain
+        },
+        # REFERENCE_BETA is reproduced from its own runs by this code (None when the
+        # reference runs are not all in this set)
+        "reference_beta_reproduced": None if remeasured is None else {
+            float(roi_q[r]): {
+                "frozen": beta[r].value, "remeasured": remeasured[r].value,
+                "agree": bool(abs(remeasured[r].value - beta[r].value)
+                              <= 1e-6 + 1e-4 * beta[r].value),
+            }
+            for r in range(len(roi_q))
         },
         "r450_r400_extractable": {
             r: by_run.get(r, {}).get("extractable") for r in (450, 400)
         },
     }  # fmt: skip
+    reproduced = checks["reference_beta_reproduced"]
     passed = (
         not checks["rho_within"]["runs_outside"]
         and not checks["damnit_g2"]["outside"]
-        and all(n >= 3 for n in checks["beta_eligible_per_plain_roi"].values())
         and all(checks["r450_r400_extractable"].values())
+        and (reproduced is None or all(v["agree"] for v in reproduced.values()))
     )
     table = pd.DataFrame(
         [{k: v for k, v in s.items() if k != "snr_run"} for s in summaries]
@@ -307,13 +334,9 @@ def xpcs_phase(args) -> dict[str, Any]:
         "elapsed_s": round(time.perf_counter() - t0, 1),
         "snr_min": SNR_MIN,
         "optics_majority": majority,
-        "beta": {
-            float(next(iter(measured.values()))[1].roi_q_A[r]): {
-                "value": b.value, "n_eligible": b.n_eligible, "p16": b.p16,
-                "p84": b.p84, "runs": list(b.runs),
-            }
-            for r, b in beta.items()
-        } if measured else {},
+        "beta_source": f"REFERENCE_BETA, runs {list(REFERENCE_BETA_RUNS)}",
+        "beta": _beta_block(roi_q, beta),
+        "beta_eligible_median": _beta_block(roi_q, beta_eligible_median),
         "checks": checks,
         "passed": bool(passed),
         "errors": errors,
@@ -338,7 +361,7 @@ def parse_args(argv=None):
 def print_xpcs(report) -> None:
     print(f"\n{len(report['runs'])} runs in {report['elapsed_s']} s; optics "
           f"{report['optics_majority']}")  # fmt: skip
-    print("beta per ROI:")
+    print(f"beta per ROI ({report['beta_source']}):")
     for q, b in report["beta"].items():
         print(f"  {q:.4f} A^-1: {b['value']:.4f} (16-84 % {b['p16']:.4f}-{b['p84']:.4f}, "
               f"n = {b['n_eligible']}: {b['runs']})")  # fmt: skip

@@ -430,7 +430,15 @@ extractable ⇔ n_extractable_slices ≥ 1
 - **Plain ROIs only:** 0.029, 0.040, 0.051 and 0.0805 Å⁻¹, i.e. the ROIs whose edges miss B1 and B2
   (§4.3). Bragg-q ROIs carry crystallite speckle and are a content flag (§4.7).
 
-**β(q) is measured from the data** (user, 2026-10-01):
+**β(q) is one fixed table, `triage.xpcs.REFERENCE_BETA`** (user, 2026-10-13, superseding the
+median below). It is the median intercept A of the runs whose g2 decays almost completely in
+the window: r450, r493, r494, r495 and r496. That gives 4.8 % at 0.029 Å⁻¹, 3.9 %, 2.9 %, and
+1.9 % at 0.0805. The spread over the five runs is ≤ 5 % per plain ROI
+(`scripts/run_triage_xpcs_20261013T152014Z.json`). The median over β-eligible runs, below,
+moved with the run set: 2.3 % at 0.029 over the eleven acceptance runs. It is reported only
+as a cross-check (`context/diagnostics.md` §4).
+
+*Superseded 2026-10-13 —* **β(q) is measured from the data** (user, 2026-10-01):
 
 ```
 per static run with XPCS, per plain ROI: the block-jackknife g2 (below), fitted with
@@ -595,7 +603,7 @@ saxs-background-subtraction). The cost is measured on one run before the list is
 | D8 | **`xpcs_ttcf` is read**, not only `xpcs_mean_dataset` | it supplies φ per slice, the β fits, the noise check and `on`-only selection for mesh runs. Measured cost: 28 s per static run in one process (§2) |
 | D9 | r1–42 inventory only | user, 2026-10-01 |
 | D10 | Keep rule = analytical XPCS SNR ≥ 3 in at least one 30 s slice of a plain ROI; backgrounds are the only exception | user, 2026-10-01; §4.6. It replaced the Γ–q exponent criterion, which the user did not want to rely on |
-| D13 | β is measured from the data (median τ → 0 intercept of slow, well-measured runs). The speckle/pixel model β_res is a cross-check | user, 2026-10-01 |
+| D13 | β is one fixed table from r450 and r493–496, the median τ → 0 intercept of runs with an almost complete g2 (`REFERENCE_BETA`). It replaced the median over β-eligible runs (2026-10-01), which moved with the run set. The speckle/pixel model β_res is a cross-check | user, 2026-10-13 |
 | D14 | The analytical noise carries √2 for the TTCF_off subtraction | measured: 3.9e-4 predicted against 3.8e-4 jackknife on r423 (§2.3) |
 | D11 | XCCA and crystallinity are content flags, never ranking criteria | user, 2026-10-01: XCCA is low priority; Bragg kinetics survive in DAMNIT 1D |
 | D12 | Dynamics only from the plain ROIs | Bragg-ROI "g2" is crystallite speckle (§2.3), and the 0.072 ROI misbehaves without crystals |

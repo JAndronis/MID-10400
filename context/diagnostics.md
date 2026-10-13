@@ -7,7 +7,7 @@ the XPCS keep rule is `context/run-triage.md` §4.6, the photon-statistics quali
 **State (2026-10-13):**
 - Phase A (`analysis.diagnostics.frames`, `.curves`) is done: 22 mock tests, ruff clean,
   smoke-tested on r0423 and r0426.
-- Phase B (`analysis.diagnostics.xpcs`, a measured β) is done: §4.
+- Phase B (`analysis.diagnostics.xpcs`, a fixed reference β) is done: §4.
 - Phases C–F are to come.
 
 ---
@@ -97,8 +97,8 @@ looking for outliers.
 
 ## 4. Per-run XPCS SNR (phase B)
 
-`xpcs.xpcs_snr(run, load_beta(report))` is `triage.xpcs.measure_run` + `summarise` for one run,
-with β read from a triage XPCS report. It returns `summary` (the verdict), `slices` (SNR per
+`xpcs.xpcs_snr(run)` is `triage.xpcs.measure_run` + `summarise` for one run, with β the fixed
+`triage.xpcs.REFERENCE_BETA` table (or a report's β, `load_beta`, for comparison). It returns `summary` (the verdict), `slices` (SNR per
 ROI per 30 s slice) and `rois` (k̄, N_pix, φ, ρ, the fit, the β used). An unknown β gives SNR
 NaN and `extractable` None. The same change was made in `triage.xpcs.summarise`, and
 `scripts/run_triage.py` now records a run without a TTCF as an error instead of dropping it.
@@ -141,3 +141,31 @@ job 25287690):
 - **An SNR pass does not mean a resolved decay.** The criterion is the SNR of one g2 point at
   τ → 0 (user, 2026-10-01). r423 passes, yet its fitted decay at 0.029 Å⁻¹ sits at about one
   lag (0.53 µs), so its dynamics are mostly faster than the window.
+
+**β fixed, 2026-10-13 (user).** "A fitted contrast that is different to each run will be a
+pitfall": the β above (median over eligible runs) moved with the run set. It is replaced by one
+table from the runs with an almost complete g2: r450, r493, r494, r495 and r496
+(`triage.xpcs.REFERENCE_BETA`, measured by job 25288023,
+`scripts/run_triage_xpcs_20261013T152014Z.json`).
+
+| ROI [Å⁻¹] | β | A over the five runs |
+|---|---|---|
+| 0.029 | 0.0478 | 0.0474–0.0499 |
+| 0.040 | 0.0390 | 0.0379–0.0400 |
+| 0.051 | 0.0295 | 0.0293–0.0306 |
+| 0.0805 | 0.0186 | 0.0171–0.0189 |
+
+A/σ_A is 19–68 per run. 1/(2Γ) is 4.5–10.7 µs at 0.029, against a 60 µs window.
+
+The verdicts with the fixed β come from job 25288102 (`scripts/run_triage_xpcs_20261013T152419Z.json`;
+the 11 acceptance runs plus r493, r494 and r496; 119 s):
+- **The fixed β is reproduced from its own runs exactly** (`reference_beta_reproduced`, all
+  agree). The DAMNIT g2 cross-check passes. `passed` is still False on the noise check alone (ρ
+  1.5–3.5 on the high-SNR runs, unchanged, since ρ does not depend on β).
+- **Every run is extractable, by a wide margin.** The best 30 s slice reaches SNR 19 (r370, a
+  600-train run) up to 107 (r441). r423 reaches 32 and r426 25. The 30 s slice at which SNR = 3
+  would be reached, `t_needed_s`, is ≤ 0.75 s for all 14 runs.
+- **So for static runs the keep rule does not discriminate.** It will separate runs only where
+  k̄ or the train count is low: mesh runs (on-trains only), heavily attenuated runs and short
+  runs. That is a consequence of the rule the user chose, not something the diagnostics should
+  change. The caveat above stands: SNR at τ → 0 is not a resolved decay.

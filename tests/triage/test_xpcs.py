@@ -15,6 +15,8 @@ from triage_fakes import FIRST_TRAIN, REP_RATE_HZ, write_xpcs_run
 
 from analysis.triage.xpcs import (
     OFF_SUBTRACTION,
+    REFERENCE_BETA,
+    REFERENCE_BETA_RUNS,
     Beta,
     DecayFit,
     QGridMismatch,
@@ -22,11 +24,13 @@ from analysis.triage.xpcs import (
     crl_state,
     diagonal_sums,
     fit_decay,
+    fixed_beta,
     jackknife_g2,
     measure_beta,
     measure_run,
     read_npix_per_bin,
     read_saxs_kbar,
+    reference_beta,
     roi_bin_masks,
     roi_edges_nm,
     roi_kinds,
@@ -136,6 +140,39 @@ def test_snr_is_the_formula(synthetic):
     assert s["n_slices"] == 1  # 200 trains: one part-slice of >= 150
     assert s["extractable"] == (s["best_snr"] >= 3)
     assert s["t_needed_s"] == pytest.approx(30.0 * (3 / s["best_snr"]) ** 2)
+
+
+def test_reference_beta_is_the_median_over_its_runs(synthetic):
+    from dataclasses import replace
+
+    truth, m = synthetic
+    runs = (450, 493, 494)
+    copies = [replace(m, run=r) for r in (*runs, 999)]
+    beta = reference_beta(copies, runs=runs)
+    for r in range(len(m.kinds)):
+        assert beta[r].value == pytest.approx(m.fits[r].amplitude)
+        assert beta[r].runs == runs  # 999 is not a reference run
+    assert beta[0].value == pytest.approx(truth["beta"], rel=0.1)
+
+
+def test_fixed_beta_matches_rois_by_centre():
+    roi_q = np.array([0.04, 0.02875, 0.099])
+    beta = fixed_beta(roi_q)
+    assert beta[0].value == REFERENCE_BETA[0.04][0]
+    assert beta[1].value == REFERENCE_BETA[0.02875][0]
+    assert beta[1].runs == REFERENCE_BETA_RUNS
+    assert np.isnan(beta[2].value) and beta[2].n_eligible == 0
+    # DAMNIT stores the centres as float sums: 0.07200000000000001 is 0.072
+    assert (
+        fixed_beta(np.array([0.07200000000000001]))[0].value == REFERENCE_BETA[0.072][0]
+    )
+
+
+def test_reference_beta_falls_from_five_to_two_percent():
+    """User, 2026-10-13: 5 % at low q to 2 % at high q, from r450 and r493-496."""
+    plain = [REFERENCE_BETA[q][0] for q in (0.02875, 0.04, 0.0505, 0.0805)]
+    assert plain == sorted(plain, reverse=True)
+    assert 0.045 < plain[0] < 0.05 and 0.017 < plain[-1] < 0.02
 
 
 def test_an_unknown_beta_is_not_a_verdict(synthetic):

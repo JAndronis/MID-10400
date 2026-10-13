@@ -5,8 +5,10 @@ analytical SNR per 30 s slice (`summarise`),
 
     SNR = β · k̄ · sqrt(N_pix · (F − 1) · φ · n) / √2,
 
-and β read from a triage XPCS report rather than re-measured, since β is a property of
-the optics and is measured over many runs (`scripts/run_triage.py --phase xpcs`).
+with β the fixed `REFERENCE_BETA` table, the same for every run (user, 2026-10-13):
+4.8 % at 0.029 Å⁻¹ to 1.9 % at 0.0805, from r450 and r493–496. A β per run, or one
+that moves with the set of runs it came from, would make the verdict depend on that
+set. A report's ``beta`` block can still be passed in to compare.
 
 An unknown β gives SNR NaN and ``extractable`` None — never False.
 """
@@ -21,12 +23,9 @@ import numpy as np
 
 from analysis.saxs.config import DEFAULT_OUTPUT_ROOT as SAXS_ROOT
 from analysis.triage.inventory import DAMNIT_ROOT, damnit_file
-from analysis.triage.xpcs import Beta, measure_run, summarise
+from analysis.triage.xpcs import ROI_MATCH_A, Beta, fixed_beta, measure_run, summarise
 
 __all__ = ["beta_by_roi", "load_beta", "rep_rate_hz", "xpcs_snr"]
-
-#: Two ROI centres within this [Å⁻¹] are the same ROI (DAMNIT stores float centres).
-ROI_MATCH_A = 1e-6
 
 
 def load_beta(report: str | Path | dict) -> dict[float, Beta]:
@@ -68,7 +67,7 @@ def rep_rate_hz(path: str | Path) -> float:
 
 def xpcs_snr(
     run: int,
-    beta: dict[float, Beta],
+    beta: dict[float, Beta] | None = None,
     *,
     proposal: int = 10400,
     damnit_root: str | Path = DAMNIT_ROOT,
@@ -78,7 +77,7 @@ def xpcs_snr(
 ) -> dict[str, Any]:
     """One run's SNR per plain ROI and 30 s slice, and its keep verdict.
 
-    :param beta: `load_beta` of a triage XPCS report.
+    :param beta: None for `REFERENCE_BETA`, or `load_beta` of a triage XPCS report.
     :param rep_rate: pulse rate [Hz]; default DAMNIT's ``rep_rate`` of the run.
     :param select: train ids to restrict to (e.g. a mesh run's `on` trains).
     :returns: ``summary`` (the `summarise` dict without its slices), ``slices`` (a
@@ -97,7 +96,7 @@ def xpcs_snr(
     m = measure_run(run, path, scratch, rate, select=select)
     if m is None:
         raise LookupError(f"r{run}: no xpcs_ttcf matrix in {path}")
-    b = beta_by_roi(m.roi_q_A, beta)
+    b = fixed_beta(m.roi_q_A) if beta is None else beta_by_roi(m.roi_q_A, beta)
     summary = summarise(m, b)
     rows = summary.pop("slices")
 
@@ -134,6 +133,7 @@ def xpcs_snr(
             "snr_run": run_snr,
         }
     )
+    summary["beta_source"] = "REFERENCE_BETA" if beta is None else "given"
     summary["beta_known"] = bool(
         np.isfinite(beta_values[[k == "plain" for k in m.kinds]]).any()
     )

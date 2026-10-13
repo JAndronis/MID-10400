@@ -15,6 +15,13 @@ the runs whose decay is slow and well measured.
 Every input is read from DAMNIT's per-run file and the SAXS pass's scratch file. The
 TTCF is reduced in one pass to per-train sums and counts of its finite diagonal
 entries, from which g2 over any set of trains follows exactly.
+
+β is one table for every run, `REFERENCE_BETA` (user, 2026-10-13), from the runs
+whose g2 decays almost completely inside the lag window. `measure_beta`, the median
+over whichever runs pass `beta_eligible`, survives as a cross-check only: it moved
+with the run set (2.3 % at 0.029 Å⁻¹ over the eleven acceptance runs, against 4.8 %
+from the reference runs), because a run that loses contrast before the first lag
+still passes eligibility with a low intercept.
 """
 
 from __future__ import annotations
@@ -33,6 +40,8 @@ __all__ = [
     "MIN_SLICE_TRAINS",
     "N_BLOCKS",
     "OFF_SUBTRACTION",
+    "REFERENCE_BETA",
+    "REFERENCE_BETA_RUNS",
     "ROI_EDGES_A",
     "SKIP_LAST_LAGS",
     "SLICE_TRAINS",
@@ -47,12 +56,14 @@ __all__ = [
     "crl_state",
     "diagonal_sums",
     "fit_decay",
+    "fixed_beta",
     "jackknife_g2",
     "measure_beta",
     "measure_run",
     "read_npix_per_bin",
     "read_saxs_kbar",
     "read_ttcf_diagonals",
+    "reference_beta",
     "roi_bin_masks",
     "roi_edges_nm",
     "roi_kinds",
@@ -80,6 +91,26 @@ BETA_MIN_PRECISION, BETA_MIN_DECAY_LAGS = 10.0, 5.0
 OFF_SUBTRACTION = float(np.sqrt(2.0))
 #: OK frames whose normalization is median-combined into N_pix per bin.
 NPIX_FRAMES = 10
+#: Runs whose g2 decays almost completely inside the 60 µs lag window (user,
+#: 2026-10-13: "a fitted contrast that is different to each run will be a pitfall").
+#: Late PEG 6K droplet of 12 May; their τ → 0 intercepts fix β for every run.
+REFERENCE_BETA_RUNS = (450, 493, 494, 495, 496)
+#: β per ROI centre [Å⁻¹] as (median, p16, p84) of the fitted intercept A over
+#: `REFERENCE_BETA_RUNS`. Measured 2026-10-13 with this module's `measure_run` and
+#: `fit_decay` (scripts/run_triage_xpcs_20261013T152014Z.json, job 25288023): 4.8 %
+#: at 0.029 Å⁻¹ falling to 1.9 % at 0.0805, A/σ_A 19–68 per run. `reference_beta`
+#: re-measures it; the triage script checks the two agree when the runs are in its set.
+REFERENCE_BETA: dict[float, tuple[float, float, float]] = {
+    0.02875: (0.047803, 0.047412, 0.048816),
+    0.04: (0.039039, 0.038549, 0.039383),
+    0.0505: (0.029474, 0.029348, 0.029969),
+    0.0605: (0.022055, 0.021190, 0.027577),
+    0.067: (0.019076, 0.018810, 0.019468),
+    0.072: (0.019117, 0.018546, 0.021378),
+    0.0805: (0.018556, 0.017375, 0.018862),
+}
+#: Two ROI centres within this [Å⁻¹] are the same ROI (DAMNIT stores float centres).
+ROI_MATCH_A = 1e-6
 
 _TTCF = "xpcs_ttcf/__xarray_dataarray_variable__"
 
@@ -494,6 +525,43 @@ def measure_beta(measurements: list[RunMeasurement]) -> dict[int, Beta]:
             out[r] = Beta(float(p50), len(amps), float(p16), float(p84), tuple(runs))
         else:
             out[r] = Beta(float("nan"), 0, float("nan"), float("nan"), ())
+    return out
+
+
+def reference_beta(
+    measurements: list[RunMeasurement], runs: tuple[int, ...] = REFERENCE_BETA_RUNS
+) -> dict[int, Beta]:
+    """β per ROI index from the reference runs: (median, p16, p84) of converged A.
+
+    No eligibility cut: the reference runs are chosen because their decay is
+    complete, and each run counts once whatever its precision.
+    """
+    out = {}
+    chosen = [m for m in measurements if m.run in runs and m.n_usable]
+    n_rois = len(measurements[0].edges_nm) if measurements else 0
+    for r in range(n_rois):
+        amps = [m.fits[r].amplitude for m in chosen if m.fits[r].converged]
+        if amps:
+            p16, p50, p84 = np.percentile(amps, [16, 50, 84])
+            used = tuple(m.run for m in chosen if m.fits[r].converged)
+            out[r] = Beta(float(p50), len(amps), float(p16), float(p84), used)
+        else:
+            out[r] = Beta(float("nan"), 0, float("nan"), float("nan"), ())
+    return out
+
+
+def fixed_beta(roi_q_A: np.ndarray, table=REFERENCE_BETA) -> dict[int, Beta]:
+    """`REFERENCE_BETA` by ROI index, matched on the centre; NaN for a ROI it lacks."""
+    nan = float("nan")
+    out = {}
+    for r, q in enumerate(np.asarray(roi_q_A, dtype=np.float64)):
+        hit = [v for key, v in table.items() if abs(key - q) < ROI_MATCH_A]
+        if hit:
+            value, p16, p84 = hit[0]
+            out[r] = Beta(value, len(REFERENCE_BETA_RUNS), p16, p84,
+                          REFERENCE_BETA_RUNS)  # fmt: skip
+        else:
+            out[r] = Beta(nan, 0, nan, nan, ())
     return out
 
 

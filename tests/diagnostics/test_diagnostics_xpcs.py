@@ -10,7 +10,13 @@ import pytest
 from triage_fakes import REP_RATE_HZ, write_xpcs_run
 
 from analysis.diagnostics.xpcs import beta_by_roi, load_beta, rep_rate_hz, xpcs_snr
-from analysis.triage.xpcs import OFF_SUBTRACTION, measure_beta, measure_run
+from analysis.triage.xpcs import (
+    OFF_SUBTRACTION,
+    REFERENCE_BETA,
+    REFERENCE_BETA_RUNS,
+    measure_beta,
+    measure_run,
+)
 
 RUN = 423
 
@@ -71,6 +77,18 @@ def test_snr_with_a_measured_beta(roots, tmp_path):
         "best_snr",
     ]
     assert out["slices"].n_usable.sum() == 200
+
+
+def test_the_default_beta_is_the_reference_table(roots):
+    damnit_root, saxs_root, _ = roots
+    out = xpcs_snr(RUN, damnit_root=damnit_root, saxs_root=saxs_root)
+    rois = out["rois"]
+    for q, (value, _, _) in REFERENCE_BETA.items():
+        row = rois[np.isclose(rois.roi_q_A, q, atol=1e-6)]
+        assert row.beta.item() == value
+        assert row.beta_n_eligible.item() == len(REFERENCE_BETA_RUNS)
+    assert out["summary"]["beta_source"] == "REFERENCE_BETA"
+    assert out["summary"]["beta_known"] is True
 
 
 def test_an_unknown_beta_gives_no_verdict(roots):
