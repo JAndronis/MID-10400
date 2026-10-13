@@ -63,3 +63,147 @@ it masks (shadowed or excluded, but read out).
   W4's gate E compares it with the empirical frame-to-frame scatter.
 - **σ_read is a diagnostic from now on.** As measured it is mostly pixel noise (0.30 keV) plus jf1's
   common mode.
+
+---
+
+## 3. Phase 2: the pass counts photons (implemented 2026-10-13)
+
+**Per frame, in this order** (`analysis.waxs.integrate.prepare_frame`):
+
+1. the union mask: `(data.mask & mask_bits) != 0` or the static `.edf`;
+2. `extreme_pixels` drops the kept pixels that are non-finite or beyond `±max_abs_kev`
+   (pitfalls 21 and 24). This happens before counting, so a gain-switched or NaCl-spot value
+   never reaches a count;
+3. `photons.zero_levels` estimates each ASIC's level from the frame itself, over the `data.mask`-good
+   pixels (`level_pixels = "all_good"`, `.edf`-masked ones included). This is float64, stored as
+   float32. An ASIC with fewer than `level_min_pixels` usable pixels, or with no value below the cut,
+   has **no level**, and its integrable pixels are dropped and counted in `n_level_missing`. A level
+   far outside ±1 keV (a broken pedestal, say) therefore gives no level rather than a wrong one;
+4. `photons.count_photons`: `clip(rint((x − float32(level)) / float32(E)), 0)`, in float32, from the
+   *stored* values, so any frame can be recounted from proc bit for bit;
+5. pyFAI integrates the counts with every excluded pixel as NaN, `variance = counts`: Poisson,
+   `Σc²·n` per bin, the AGIPD form. Negative variance bins can no longer occur, and the ledger asserts
+   it.
+
+The worker passes the **dynamic** mask alone, because the level uses `.edf`-masked pixels and the
+operator supplies the static mask. `integrate_frame(..., timings=)` splits the worker's time into
+`photonise` and `integrate`.
+
+**Config** (all in `config_hash`, by-name pickling unchanged):
+
+| Field | Default | Note |
+|---|---|---|
+| `count_energy_kev` | `None` → `photon_energy_kev` | Resolved in `__post_init__`, like the noise fallback. Separate so that the count can follow open task 15 without moving q |
+| `level_pixels` | `"all_good"` | or `"kept"` (the `.edf`-kept pixels only) |
+| `level_cut_kev`, `level_window_kev`, `level_iterations`, `level_edge_px` | 2.0, 1.0, 3, 3 | the template's |
+| `level_min_pixels` | 1000 | derived in §2 |
+
+`read_noise_kev` and `read_noise_fallback_kev` stay in the hash. σ_read no longer enters the
+variance, but it is still stored (`cells/read_noise_kev`, `provenance/error_model`), and a field that
+changes a stored number belongs in the hash.
+
+**Stored**, beside the existing columns:
+
+| Where | What |
+|---|---|
+| `frames/asic_level` (n, 8) f4 | Zero level per ASIC in keV, as counted with. NaN for an ASIC with no level in an integrated frame (0.0 is a real level), 0 in rows never integrated. The one column exempt from "no NaN in the file" |
+| `frames/n_level_missing` u1 | ASICs that had pixels to integrate but no level |
+| `frames/count_energy_kev` f4 | The E counted at, per frame |
+| `frames/n_photons` u4 | Photons over the integrated pixels |
+| `frames/energy_valid` | **Unchanged meaning**: raw keV over the integrated pixels, before any level is subtracted. Do not read `units` into it |
+| `provenance.attrs["units"]` | `"photons"`, written at layout time, so even an unfinished file says what it counts. A file without it is a keV file |
+| `provenance/photon_counting` | the settings and a one-line method string |
+| `provenance/photon_levels` | the per-ASIC median and frame-to-frame rms of the level, and the missing-level counts |
+
+**Readers.** `writer.file_units(path)` returns `"photons"` or `"keV"`. `per_cell` and `pooled_per_train`
+carry `units` on their result. `combine.require_same_units` raises `UnitsMismatch`, and
+`combine_files`, `damnit.combined_curve` and `damnit.overview_figure` call it, because a fitted
+factor between a keV and a photon curve would absorb the unit change as a detector mismatch. The
+overview's y-label follows the unit. The writer refuses to resume into a file whose `units` differ
+or are absent (`SchemaMismatch`). In practice the config hash already differs, so this is a second,
+explicit guard.
+
+**Shared layer.** `common.writer.FrameTableWriter` gains `FRAME_ARRAYS` (per-frame `(n, k)` columns)
+and `UNITS`. Both are empty for AGIPD, whose output digest is unchanged (the SAXS snapshot test).
+
+**Speed.** The estimator costs 5.7–8.6 ms per frame on one login-node core (synthetic frames at
+0.15–1.0 photons/pixel), against ~2 ms for the dense integration. Iterating the window over the
+below-cut values whenever the window ends below the cut is exact and halves the cost. The node
+figure is in §4.
+
+**Tests.**
+- `tests/waxs/test_waxs_photons.py`:
+  - per-ASIC offsets under Poisson photons are recovered to < 5 eV;
+  - a common-mode jump is followed;
+  - counts equal the truth;
+  - **E/2 exactly doubles** them;
+  - too few pixels and an above-cut level give no level;
+  - the estimator matches the template's `baseline` to 1e-12 keV;
+  - counts are reproducible from the stored float32 values.
+- `test_waxs_integrate.py`:
+  - a masked ASIC is not counted;
+  - a fully masked one costs nothing;
+  - the NaN-versus-mask gate holds on counted frames;
+  - extreme pixels are dropped before counting.
+- `test_waxs_writer.py`:
+  - the mock now carries a zero level per ASIC and train plus a lit-cell shift, and the stored
+    `asic_level` of every frame recovers it to 0.01 keV;
+  - a file without `units` is not resumed.
+- `test_waxs_combine.py` and `test_waxs_damnit.py`: keV and photon inputs are refused.
+- `test_waxs_scatter.py`: the σ ratio is 1 for a pure counting process with 20 % flux jitter.
+- `tests/common/test_pinned_digests.py` and the WAXS output digest were updated deliberately.
+
+---
+
+## 4. Acceptance: W4 on r0423, keV against photons (2026-10-13)
+
+Slurm 25287845, then the repeat 25287881, both on **max-exfl226** (allcpu, Intel Gold 6240, 2 × 18
+cores, the DAMNIT node type in CLAUDE.md), with 36 workers and pyFAI 2026.5.0. No 9374F node was free,
+so these timings are *not* comparable with the September W4 targets (17.5 / 20.1 s on max-exfl484, a
+9374F). keV and photons, however, ran on the same node type, so they are comparable with each other.
+- **keV:** main's code (deploy clone `ac24b89`, the W4 rerun due since 2026-09-14),
+  `scratch/s2_jf_photonise/kev/`.
+- **Photons:** this branch (`b6c55f8`, a venv without the dev group), `scratch/s2_jf_photonise/photons/`.
+- JSONs: `scripts/w4_acceptance_r0423_{jf1,jf2}_{kev,photons}_*.json` and
+  `scripts/w7_before_after_r0423_20261013T144611Z.json`.
+
+| Gate | keV jf1 / jf2 | photons jf1 / jf2 |
+|---|---|---|
+| 0 configuration | pass: 3001 trains, 24 000 frames, lit `{0…6,15}` | pass, `units = photons` |
+| A self-test (NaN vs mask) | 0.0 / 0.0 | **0.0 / 0.0** |
+| B reference | 6.5e-8 / 8.0e-8 | **7.4e-8 / 7.5e-8**. Template levels against stored `asic_level`: **0.0 keV** difference, missing-level patterns equal |
+| C wall (target 600 s) | 36.2 / 32.7 s | 52.3 / 49.3 s (repeat; the first run's jf2 took 80.7 s at efficiency 0.39 with the same worker CPU time, a one-off) |
+| C ms/frame/core | read 13.5 + mask 11.6 + frame 12.0 (jf1) | read 12.3 + mask 11.7 + **photonise 23.6** + integrate 5.0 (jf1) |
+| D ledger | 24 000 OK; frames with a negative-variance bin 493 / 9162, still negative after pooling 0 / **8** | 24 000 OK; **0 / 0** negative bins; 0 missing levels; E 9.04 on every frame |
+| E σ ratio (frames / model) | 0.976 / 0.953 | **1.012 / 1.002** (overlap 1.009 / 1.003) |
+
+- **The counting costs about 24 ms per frame per core on this node under full load**, about +45 % of
+  wall. The pyFAI step itself is 5 ms. The keV path's 12 ms "integrate" also included building the
+  keV variance. A final timing on a 9374F node follows S3's pyFAI 2026.9 upgrade. If it ever
+  matters, estimating only the ASICs that have integrable pixels would save 40–60 % (jf1 integrates
+  5 of 8 ASICs, jf2 3 of 8), at the cost of the common-mode diagnostic on the rest.
+- **The Poisson σ is the scatter the frames show**, to 1.2 % on jf1 and 0.2 % on jf2. The per-pixel
+  D of 0.93 predicts 0.97, so a train's frames differ by slightly more than counting noise: about
+  0.3 σ, plausibly cell-to-cell shape differences. Per-frame σ is now usable on every frame. Before,
+  jf2 had a non-positive bin in 38 % of its frames, and 8 bins stayed negative even after pooling.
+- **Gate E cannot see jf1's common mode**, because it is shared by every cell of a train. What does
+  see it is keV over photons train by train, on the same frames: **3.81 % rms on jf1 and 0.35 % on
+  jf2**. W7 predicted 3.7 % for jf1, and 1.0 %/√8 for jf2, whose level moves per frame. The per-train
+  spread of jf1's intensity drops from 0.1695 to 0.1653, and √(0.1653² + 0.0381²) = 0.1696: the keV
+  spread is the photon spread plus that zero-level noise. jf2's stays at 0.1600. The 16 % itself is
+  the sample and the beam.
+- **keV over E · photons** across the run: 1.036 (jf1) / 1.035 (jf2), rising with q (jf1 1.029 →
+  1.045 over 11.5–23.7 nm⁻¹), as W7 found on 100 trains.
+
+**jf1/jf2 overlap (CLAUDE.md open task 5), 11.53–18.44 nm⁻¹, 285 bins:**
+
+| | factor | χ²ᵣ | residual rms | slope | residual at q_low / q_high | σ/I |
+|---|---|---|---|---|---|---|
+| keV | 0.98823 ± 0.00005 | 54.1 | 0.743 % | 2.57e-3 /nm | −1.12 % / +0.66 % | 0.101 % |
+| photons | **0.99076 ± 0.00005** | **31.4** | **0.640 %** | **2.56e-3 /nm** | −1.12 % / +0.65 % | 0.114 % |
+
+The keV row reproduces 2026-09-13 exactly. Photon counting moves the factor by +0.26 % and removes
+0.1 % of the residual, but the **tilt is unchanged to 0.4 %**. So the uncorrected zero level (§6 O5's
+third candidate) is *not* what tilts jf2 against jf1. That leaves polarisation and a relative
+q-axis error, which r0426 (with Bragg peaks in the overlap) and the polarisation correction can
+separate.

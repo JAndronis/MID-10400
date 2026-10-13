@@ -9,6 +9,12 @@ design applies unchanged; §4 says exactly which parts those are.
 Work phase by phase (§7). Present a plan before creating files. **W0–W4 are done and W5 is
 implemented but unrun**; §7 carries the state of each, and §8 the testing conventions.
 
+> **Since 2026-10-13 the pass counts photons** (CLAUDE.md open task 18,
+> `context/jungfrau-photonising.md`): a per-frame, per-ASIC zero level, then
+> `clip(rint((x − level)/E), 0)`, with a Poisson variance. D3's keV error model below is
+> superseded (σ_read is now a recorded diagnostic). §2's "dark mean −0.16 keV on jf1" was one
+> train of a 0.15 keV-rms common mode. W4 was re-accepted on both detectors in keV and in photons.
+
 ---
 
 ## 1. Scope
