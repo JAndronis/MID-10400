@@ -1,7 +1,7 @@
 [project]
 name = "MID-10400-analysis"
 version = "0.1.0"
-description = "EuXFEL MID (proposal 10400) raw-data reader plugin for pyBeamtime — ferritin crystallization in acoustically levitated droplets."
+description = "Analysis code for EuXFEL MID proposal 10400: AGIPD SAXS and JUNGFRAU WAXS passes for ferritin crystallization in acoustically levitated droplets."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -9,10 +9,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# EuXFEL I/O stack. Needed only by EuXFELMIDRawReader.load_run (Tier 1 assembly)
-# and, later, the Tier-2 adapters — all of which run on Maxwell against real
-# data. Kept as an optional extra so the pure path helpers, can_read, and
-# list_runs stay importable and unit-testable without EXtra-data installed.
+# EuXFEL I/O and analysis stack: EXtra-data/-geom, pyFAI and DAMNIT. Both
+# integrators and the test suite need it.
 euxfel = [
     "euxfel-extra",
     "extra_data",
@@ -27,7 +25,7 @@ euxfel = [
     "extra_proposal",
     "extra-speckle",
     # Imported at module level by extra_speckle.xcca (so by the DAMNIT context
-    # file) but not declared by it. Previously present only via pyBeamtime.
+    # file) but not declared by it.
     "numba",
     "dask[complete]",
     "dask_jobqueue",
@@ -41,8 +39,7 @@ plotting = [
     "SciencePlots",
     "cmasher",
     # The shared Jupyter kernel runs from this environment
-    # (scripts/shared_env.sh). Previously present only transitively, via
-    # pyBeamtime.
+    # (scripts/shared_env.sh).
     "ipykernel",
 ]
 
@@ -63,8 +60,6 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-# src/readers (the pyBeamtime reader plugin) is not packaged while pyBeamtime
-# is dropped as a dependency: it cannot be imported without it.
 packages = ["src/analysis"]
 
 [tool.ruff]
@@ -87,9 +82,6 @@ select = ["E", "F", "I", "W", "UP", "B"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
-markers = [
-    "integration: requires extra_data + real EuXFEL data (skipped when unavailable)",
-]
 # The JUNGFRAU mock run is 135 MB (dense float32 over 16 memory cells of
 # 512x1024, as the real detector is), the fixtures cache one per distinct
 # keyword signature, and pytest's defaults keep the last *three* sessions'

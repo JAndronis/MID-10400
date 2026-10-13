@@ -17,10 +17,7 @@ wheels/
 .pytest_cache/
 .mypy_cache/
 
-# Runtime artifacts (not committed content) — see README
-beamtime.json
-elog.csv
-user_processed/
+# Runtime artifacts (not committed content)
 *.zarr
 
 # Data (never commit facility data)
@@ -34,9 +31,6 @@ data/
 
 # OS cruft
 .DS_Store
-
-# pybeamtime dependency build
-extern
 
 # Figures made by the notebooks (figures/droplets/... per droplet); not committed
 figures/

@@ -71,9 +71,6 @@ src/analysis/           the analysis package — the only heavy code
     waxs/               JUNGFRAU WAXS pass (DAMNIT variables `jungfrau_waxs_*`)
     threadenv.py        thread pinning; a leaf module with no imports of its own
 
-src/readers/            pyBeamtime reader plugin
-    io/readers/euxfel.py   EuXFELMIDRawReader — a run directory to a lazy xarray Dataset
-
 src/amore/              DAMNIT deployment directory (deliberately NOT packaged)
     context.py          the DAMNIT variable definitions
     analysis_helpers.py droplet ellipse fitting and volume tracking from camera images
@@ -84,9 +81,8 @@ notebooks/              exploratory notebooks (damnit, dask, waxs, extra-speckle
 data/                   local exported detector slices and mask files for offline work (untracked)
 ```
 
-Only `src/analysis` is packaged into the wheel; `src/readers` stays in the tree but is neither
-packaged nor tested while pyBeamtime is dropped as a dependency. `src/amore` mirrors the DAMNIT
-context directory on the cluster: DAMNIT `exec`s that context file into a dict, so functions
+Only `src/analysis` is packaged into the wheel. `src/amore` mirrors the DAMNIT context directory
+on the cluster: DAMNIT `exec`s that context file into a dict, so functions
 defined there cannot be pickled to spawned worker processes — which is why every DAMNIT variable
 body is just an import plus a call into `analysis.*`.
 
@@ -340,17 +336,6 @@ variables; the heavy ones run as one Slurm job per run on a whole node. Groups o
   `jungfrau_waxs_jf2`, `jungfrau_waxs_overview` and `jungfrau_waxs_combined`. Each body is an
   import plus a call.
 
-### 3.6 pyBeamtime reader plugin (`src/readers`)
-
-`EuXFELMIDRawReader` implements pyBeamtime's raw-reader interface for this beamtime: it maps a
-proposal root to run directories, reports run metadata from the filesystem alone, and turns one
-run directory into a lazy, dask-backed `xarray.Dataset` via EXtra-data, with each source isolated
-under its own prefixed dimensions. Importing the `readers` package registers it with pyBeamtime's
-`ReaderRegistry` under the slug `"mid"`. It is deliberately self-contained — absolute
-`pyBeamtime.*` imports, self-registration at import time, and the EuXFEL stack imported lazily
-inside `load_run` — so the same file works as a plugin here or as a module inside pyBeamtime
-itself, and so its pure path helpers stay unit-testable without the EuXFEL stack installed.
-
 ---
 
 ## 4. Conventions that hold across the codebase
@@ -388,11 +373,11 @@ silently.
 
 **Stack** (versions pinned in `uv.lock`; these are the ones every measurement was taken against):
 Python 3.12, numpy 2.4, h5py 3.16, EXtra-data 1.24, euxfel-EXtra 2026.1.1, EXtra-geom 1.16,
-pyFAI 2026.5, fabio, xarray, plus `extra-speckle` and `damnit` from the facility's git servers and
-`pyBeamtime` as a local editable path dependency.
+pyFAI 2026.5, fabio, xarray, plus `extra-speckle` (from git.xfel.eu) and `damnit` (from GitHub)
+as git dependencies.
 
 ```bash
-uv sync --extra euxfel    # the full stack; plain `uv sync` gives only the core (pyBeamtime + pytest)
+uv sync --extra euxfel    # the full stack; plain `uv sync` gives only the core (xarray + pytest)
 uv run pytest             # ~480 unit tests
 uvx ruff format && uvx ruff check
 ```

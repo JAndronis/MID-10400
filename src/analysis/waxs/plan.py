@@ -14,8 +14,8 @@ EXtra-data's reader assumes one entry per train throughout — ``buffer_shape`` 
 represented at all, and :func:`build_plan` refuses the run rather than reading
 it wrong.
 
-Nothing here imports DAMNIT, so this module can back the pyBeamtime EuXFEL
-reader later.
+Nothing here imports DAMNIT, so this module can back a reader outside DAMNIT
+later.
 """
 
 from __future__ import annotations

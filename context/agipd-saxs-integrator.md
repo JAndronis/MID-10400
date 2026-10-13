@@ -121,8 +121,8 @@ Modules under `src/<pkg>/saxs/`:
 | `run.py` | Orchestration |
 | `cli.py` | Standalone entry point |
 
-The reader layer (`plan.py`, reads in `worker.py`) must not import DAMNIT, so it can back the
-pyBeamtime EuXFEL reader later.
+The reader layer (`plan.py`, reads in `worker.py`) must not import DAMNIT, so it can back a
+reader outside DAMNIT later.
 
 ---
 

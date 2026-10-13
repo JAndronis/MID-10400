@@ -6,7 +6,7 @@ there cannot be pickled to the spawned workers this pass runs.
 
 The context-file variable is therefore two lines: call :func:`agipd_saxs` and
 hand DAMNIT the result. Nothing here imports DAMNIT, so the same functions
-work from a notebook, from a Slurm script, or from the pyBeamtime reader.
+work from a notebook or from a Slurm script.
 """
 
 from __future__ import annotations

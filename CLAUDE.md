@@ -5,8 +5,7 @@ Repository guide for Claude Code. Read this file first, then the context file fo
 `<pkg>` = `analysis` (`src/analysis/`), this repository's src-layout analysis package. It holds
 `analysis.common` (detector-agnostic: status codes, the train/block row model, the mask vocabulary,
 CPU and pool helpers, the frame-table writer), `analysis.saxs` (AGIPD) and `analysis.waxs`
-(JUNGFRAU). The pyBeamtime reader plugin (`src/readers/`) and the DAMNIT context files
-(`src/amore/`, not packaged) are separate.
+(JUNGFRAU). The DAMNIT context files (`src/amore/`, not packaged) are separate.
 
 ## Context files
 
@@ -166,8 +165,9 @@ nucleation?
   /gpfs/exfel/exp/MID/202601/p010400/usr/Software/MID-10400/.venv/bin/python` (previously
   `usr/Software/mid-10400-post-env`, Python 3.11 over the facility `202502` env — not the measured
   stack).
-- pyBeamtime is **dropped as a dependency** (2026-10-06): `src/readers` is kept but neither
-  packaged nor tested.
+- **pyBeamtime is gone from this repository.** Dropped as a dependency 2026-10-06; the reader
+  plugin (`src/readers`) and its test removed 2026-10-13. Its plugins will live in a separate
+  repository; the last version here is `git show b14df61:src/readers/io/readers/euxfel.py`.
 - **Heavy code lives in `<pkg>`, not in the DAMNIT context file.** DAMNIT `exec`s the context file
   into a dict, so functions defined there cannot be pickled to spawned worker processes.
 - Any process reading AGIPD data sets `EXTRA_NUM_THREADS=1` and `OMP_NUM_THREADS=1`.
@@ -194,7 +194,6 @@ nucleation?
 | pyFAI | operators, reference | method tuples only; no Poisson error model on photon-count data |
 | DAMNIT | per-run orchestration, summaries | Context variables are thin wrappers over `<pkg>`: `analysis.saxs.damnit` for `agipd_saxs`, `analysis.waxs.damnit` for `jungfrau_waxs_jf1`/`jf2`/`_overview`/`_combined`. `tests/test_context.py` loads the context file the way DAMNIT does and asserts, by AST, that every wrapper body is an import plus a call |
 | extra-speckle | XPCS, Tier-2 data access | |
-| pyBeamtime (own) | multi-facility readers — **dropped as a dependency 2026-10-06** | EuXFEL reader plugin contract: `load_run(self, run_id, root_path)`. `get_run_path` is required in the ABC even though the docs omit it |
 | `scripts/p4_acceptance.py` | P4 acceptance for `agipd_saxs` | runs the pass, then the four §10 gates; writes its verdict as JSON beside itself. Needs a node, the real geometry/mask files and r0423. **Not unit-tested** — see the testing rule below |
 | `scripts/w1_facts.py` | W1 facts for `analysis.waxs` (**not unit-tested**) | per run and detector: file existence + sha256, source names, lit-cell split and readout noise (**open task 2's O4**), whether `data.mask` is train-invariant, whether an ROI over the lit cells saves I/O, extreme-pixel counts. `--runs 423 426 --detectors jf1 jf2`; JSON beside itself |
 | `scripts/w4_acceptance.py` | W4 acceptance for `analysis.waxs` (**not unit-tested**) | one detector at a time: configuration, NaN-equivalence self-test, an independent per-frame-mask reference against the stored sums, timing, ledger. `--run 423 --detector jf1 --workers 36`; JSON beside itself |
@@ -468,7 +467,6 @@ statistics (open task 6). Integer data cannot carry NaN, so bad pixels must come
 | 10 | XPCS | Define q-binning; custom g2 model with KWW fitting (extra-speckle lacks it); shear vs diffusion diagnostic |
 | 11 | XCCA second pass | ROI list excluding Bragg q; per-shot masks; `AveragedAngularCorrelationMasked`; bulk chunk reader (integrator I3) |
 | 12 | Tier-2 data access | extra-speckle orchestration without materialising full detector arrays |
-| 13 | pyBeamtime integration | **Deferred**: pyBeamtime dropped as a dependency on 2026-10-06; `src/readers` kept, unpackaged, its test skipped. Restoring it means re-adding the dependency (not as an `extern/` path source — `extern/` is gitignored, so the deploy clone cannot sync it) and `src/readers` to the wheel. Then: EuXFEL reader plugin on top of the `<pkg>` reader layer |
 | 14 | Upstream issues | EXtra-data per-chunk lookup; pyFAI method-string resolution and OpenCL fallback warning; XCCA `from_dataset` double update |
 | 16 | D6 value bound and r0480 | **Resolved 2026-09-14.** `scripts/w6_data_check.py` on 473/473 frames + 200 controls found none of the three predicted causes: the extreme pixels are unflagged and do reach the integrator, but they are a **separate population** — passing frames stop at 131 keV, failing ones run 5629–8234, a 43× empty band with the 1000 keV bound inside it, 93 % piled within 10 % of a hard edge. **97.2 % lie within 1 % of q = 22.33 nm⁻¹ and the rest at 19.3: NaCl (200) at 22.28 and (111) at 19.30 (a = 5.6402 Å), in the 1893:54 ratio rock salt gives**, and the rate rises through the run (deciles `[0,7,0,78,26,13,27,63,107,152]`) as the droplet evaporates. **Confirmed on jf2**, which spans q = 9.8–18.5 — below both reflections — and integrates r0480 completely. **Fix shipped:** the pixel is excluded and the frame kept (pitfall 21); the bound stays at 1000 keV, now with a traceable source. **Accepted cost, deliberately:** an affected frame's ring bin reads low, and the affected-q range is *not* stored per frame — this dataset is for kinetics, not XCCA/XPCS, so `frames/n_extreme_pixels` is the filter. **Left open, not blocking:** whether values above the band are clipped or real needs the **raw** gain stage (proc does not carry it); the same pixel gives 14 distinct values across 14 frames, so it is not a fixed per-pixel clip |
 | 15 | Photon energy, 9.04 vs 9.000 keV | `cfg.photon_energy_kev` (9.04, from this file) sets the wavelength and so the q scale; `XGM.photon_energy_by_train()` reports 9.000 keV nominal on r0423, constant across all trains. The 0.44 % gap shifts every q by 0.44 % — 0.003 nm⁻¹ at the 0.6 nm⁻¹ Bragg peak, 0.005 at q_max. `plan.run_checks` records both and warns. Settle which is authoritative with MID; it is a config change plus a reintegration, not a code change |

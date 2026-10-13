@@ -6,8 +6,8 @@ would otherwise shift every later frame onto the wrong trainId.
 
 ``build_plan`` takes an optional ``DataCollection`` so callers can supply a run
 that is already open — or a mock one — instead of going through ``open_run``.
-Nothing here imports DAMNIT, so this module can back the pyBeamtime EuXFEL
-reader later.
+Nothing here imports DAMNIT, so this module can back a reader outside DAMNIT
+later.
 """
 
 from __future__ import annotations

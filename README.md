@@ -24,17 +24,13 @@ src/analysis/           analysis package (<pkg>)
     saxs/               AGIPD SAXS loader and integrator (`agipd_saxs`)
     waxs/               JUNGFRAU WAXS integrator (`jungfrau_waxs_*`)
     threadenv.py        thread pinning, importable before the numerical stack
-src/readers/            pyBeamtime reader plugin (EuXFELMIDRawReader), dormant
-    io/readers/euxfel.py
 src/amore/              DAMNIT deployment: context file + droplet helpers (not packaged)
 scripts/                acceptance and probe scripts, run on a node
 tests/                  pytest suite
 ```
 
-Only `src/analysis` is packaged. `src/readers` is kept but neither packaged nor
-tested while pyBeamtime is dropped as a dependency. `src/amore` is the DAMNIT
-context directory, mirroring its name on the cluster; heavy code must **not**
-live there, because DAMNIT `exec`s the context file into a dict and functions
+Only `src/analysis` is packaged. `src/amore` is the DAMNIT context directory,
+mirroring its name on the cluster; heavy code must **not** live there, because DAMNIT `exec`s the context file into a dict and functions
 defined that way cannot be pickled to spawned workers.
 
 ## Setup (uv)
@@ -150,40 +146,6 @@ from analysis.waxs.damnit import combined_curve      # jf2 scaled onto jf1
 Variables: `agipd_saxs`, `agipd_iq_overview`, `jungfrau_waxs_jf1`,
 `jungfrau_waxs_jf2`, `jungfrau_waxs_overview`, `jungfrau_waxs_combined`.
 
-## Using the reader
-
-Dormant: pyBeamtime is not a dependency for now, so this section describes how
-the reader works once it is restored.
-
-Because this is a plugin (not built into pyBeamtime), **import the package once**
-so it registers with `ReaderRegistry`:
-
-```python
-import readers                                # registers EuXFELMIDRawReader (slug "mid")
-from pyBeamtime.beamtime import Beamtime
-
-bt = Beamtime.from_path("/gpfs/exfel/exp/MID/202601/p010400")
-ds = bt[500].load_raw()                       # lazy xr.Dataset for run r0500
-```
-
-The reader is written to be upstreamed into pyBeamtime near-verbatim: it uses
-absolute `pyBeamtime.*` imports and self-registers at import time. Upstreaming
-= move `euxfel.py` into `pyBeamtime/io/readers/` and add a `from . import
-euxfel` line to that package's `__init__.py`.
-
-pyBeamtime's `beamtime init --beamline mid` CLI only sees this reader in a
-process where `readers` has been imported. For a one-off, write `beamtime.json`
-by hand (`raw_reader: "EuXFELMIDRawReader"`) or upstream the reader.
-
-### Elog
-
-Map runs to samples with the canonical elog. Auto-detect will not match the
-run-table's column names, so pass them explicitly:
-
-```bash
-beamtime import-elog run_table.csv --scan-col "Run Number" --sample-col "Sample Name"
-```
-
 ## Scripts
 
 Run on a node against real data, each writing its verdict as JSON beside itself.
@@ -204,7 +166,6 @@ uv run pytest                    # unit tests, no data and no Maxwell needed
 uv run pytest tests/saxs         # the AGIPD suite
 uv run pytest tests/waxs         # the JUNGFRAU suite
 uv run pytest tests/common       # the shared layer, the pins, config hashing
-uv run pytest -m integration     # load_run smoke test (needs extra_data + data)
 ```
 
 Both integrator suites build mock runs of real shape and dtype, so they run on a
@@ -221,5 +182,4 @@ one of those has moved a stored number, whether or not it meant to.
 uvx ruff format && uvx ruff check
 ```
 
-`beamtime.json`, `elog.csv`, and `user_processed/` are runtime artifacts and are
-git-ignored, as is all facility data.
+All facility data is git-ignored.
