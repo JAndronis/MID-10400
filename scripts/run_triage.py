@@ -15,11 +15,19 @@ T2a, ``--phase xpcs``:
 * by default only on the T2a acceptance runs; ``--runs all`` takes every static and
   silica run with an XPCS result
 
+T2b, ``--phase classify``:
+* droplet hits for every mesh, static and reference run (``analysis.triage.classify``):
+  mesh train classes per attenuator-and-sample block, out-of-beam trains of the rest
+* each block's cut and each run's counts, flags and WAXS check, with their sources
+* checks: r318 against lowq_report's own hit rule, the runs that must come out
+  ambiguous (r68–69, r140) and all-on (r309–311)
+
 Everything is read from DAMNIT, the SAXS pass's scratch files and raw, read-only.
 Nothing is written next to them.
 
     python scripts/run_triage.py --phase inventory
     python scripts/run_triage.py --phase xpcs --workers 8
+    python scripts/run_triage.py --phase classify --workers 16
 
 Writes run_triage_<phase>_<stamp>.json beside this script, or at --json, plus a CSV
 of the per-run rows next to it. Not unit-tested (CLAUDE.md rule 7): check a change
@@ -46,6 +54,17 @@ import pandas as pd  # noqa: E402
 
 from analysis.common.cpu import default_pool  # noqa: E402
 from analysis.saxs.config import DEFAULT_OUTPUT_ROOT as SAXS_ROOT  # noqa: E402
+from analysis.triage.classify import (  # noqa: E402
+    OFF_SIGMA,
+    SEPARATION_BANDS,
+    STATIC_QUANTILE,
+    STATIC_WINDOW,
+    classify_block,
+    run_blocks,
+    static_hits,
+    train_signals,
+    waxs_check,
+)
 from analysis.triage.inventory import (  # noqa: E402
     DAMNIT_ROOT,
     build_inventory,
@@ -347,9 +366,143 @@ def xpcs_phase(args) -> dict[str, Any]:
     }  # fmt: skip
 
 
+def _signals(run: int):
+    """One run's log10(s/F) and log10(ring/F), or why not, in a worker."""
+    try:
+        ds = train_signals(run)
+    except Exception as error:  # noqa: BLE001 - recorded per run, never fatal
+        return run, None, None, None, f"{type(error).__name__}: {error}"
+    with np.errstate(invalid="ignore", divide="ignore"):
+        x = np.log10((ds.saxs_mid / ds.flux).values)
+        w = np.log10((ds.waxs_ring / ds.flux).values)
+    return run, ds.trainId.values, x, w, None
+
+
+def _r318_against_lowq(classes, tids) -> dict:
+    """lowq_report cell 17's own rule on r318, train by train, against our classes.
+
+    Its rule: hit ⇔ water (0.85–0.95 nm⁻¹) per flux > 2 × the median at the lowest Z.
+    """
+    import extra_data as ed
+    import h5py
+    import xarray as xr
+
+    from analysis.diagnostics.curves import per_train_flux
+
+    raw = ed.open_run(10400, 318, data="raw")
+    src = "MID_EXP_SAM/HEXAPOD/SSHEX"
+    z = raw[src, "Z.actualPosition"].xarray()
+    path = damnit_file(318, DAMNIT_ROOT, 10400)
+    with h5py.File(path, "r") as f:
+        g = f["agipd_saxs"]
+        q = g["q"][:]
+        c = np.flatnonzero((q >= 0.85) & (q < 0.95))
+        frames = g["n_frames"][:] > 0
+        band = g["intensity"][:, :, c[0] : c[-1] + 1].mean(axis=-1)
+        water = np.where(frames, band, 0).sum(1) / np.maximum(frames.sum(1), 1)
+        water = xr.DataArray(water, dims="trainId", coords={"trainId": g["trainId"][:]})
+    water = water / per_train_flux(path).flux
+    ours = xr.DataArray(classes, dims="trainId", coords={"trainId": tids})
+    ours, z, water = xr.align(ours, z, water, join="inner")
+    low = z < float(z.min()) + 0.05
+    hit = (water > 2 * float(water.where(low).median())).values
+    lowq = pd.Series(np.where(hit, "hit", "miss"), name="lowq")
+    table = pd.crosstab(pd.Series(ours.values, name="ours"), lowq)
+    agree = int(
+        ((ours.values == "on") & hit).sum() + ((ours.values == "off") & ~hit).sum()
+    )
+    decided = int(np.isin(ours.values, ("on", "off")).sum())
+    return {"crosstab": table.to_dict(), "agreement": agree / max(decided, 1),
+            "n_decided": decided}  # fmt: skip
+
+
+def classify_phase(args) -> dict[str, Any]:
+    t0 = time.perf_counter()
+    blocks = run_blocks(read_run_table(args.damnit_root / "runs.sqlite"))
+    wanted = blocks.index[
+        blocks.cls.isin(["mesh_sshex", "static_droplet", "reference"])
+    ]
+    with default_pool(min(args.workers, len(wanted))) as pool:
+        results = list(pool.map(_signals, [int(r) for r in wanted]))
+    signals = {r: (t, x, w) for r, t, x, w, err in results if err is None}
+    errors = {r: err for r, *_, err in results if err is not None}
+
+    rows, cuts = [], {}
+    is_mesh = {r: isinstance(blocks.loc[r, "block"], str) for r in signals}
+    mesh = blocks.loc[[r for r in signals if is_mesh[r]]]
+    for block, members in mesh.groupby("block").groups.items():
+        out = classify_block({int(r): signals[int(r)][1] for r in members})
+        cuts[block] = {k: v for k, v in out["block"].items()}
+        for r in members:
+            r = int(r)
+            v = out["runs"][r]
+            rows.append({"run": r, "kind": "mesh", "block": block,
+                         **{k: v[k] for k in ("n_on", "n_edge", "n_off", "n_none",
+                                              "ambiguous", "two_classes", "reference",
+                                              "off", "sigma", "high")},
+                         **waxs_check(signals[r][2], out["classes"][r])})  # fmt: skip
+            if r == 318:
+                r318 = _r318_against_lowq(out["classes"][r], signals[r][0])
+    for r, (_, x, w) in signals.items():
+        if is_mesh[r]:
+            continue
+        on = static_hits(x)
+        cls = np.where(on, "on", np.where(np.isfinite(x), "off", "none"))
+        rows.append({"run": r, "kind": "static", "block": None,
+                     "n_on": int(on.sum()), "n_edge": 0,
+                     "n_off": int((cls == "off").sum()),
+                     "n_none": int((cls == "none").sum()), "ambiguous": False,
+                     **waxs_check(w, cls)})  # fmt: skip
+    table = pd.DataFrame(rows).sort_values("run")
+    by_run = table.set_index("run")
+    checks = {
+        "r318_vs_lowq": r318 if 318 in by_run.index else None,
+        "ambiguous_as_expected": {
+            r: bool(by_run.loc[r, "ambiguous"]) for r in (68, 69, 140)
+            if r in by_run.index
+        },
+        "all_on_as_expected": {
+            r: bool(by_run.loc[r, "n_on"] > 0 and by_run.loc[r, "n_edge"] == 0
+                    and by_run.loc[r, "n_off"] == 0)
+            for r in (309, 310, 311) if r in by_run.index
+        },
+    }  # fmt: skip
+    passed = (
+        checks["r318_vs_lowq"] is not None
+        and checks["r318_vs_lowq"]["agreement"] >= 0.99
+        and all(checks["ambiguous_as_expected"].values())
+        and all(checks["all_on_as_expected"].values())
+    )
+    return {
+        "phase": "classify",
+        "elapsed_s": round(time.perf_counter() - t0, 1),
+        "sources": {
+            "signal": "DAMNIT agipd_saxs 0.3-0.5 nm^-1 / (xgm_intensity x "
+                      "total_transmission), run-triage D5",
+            "off_band": f"{OFF_SIGMA} robust sigma of the run's own off class (§4.3)",
+            "hit_cut": "centre of the widest empty band of the block's pooled values "
+                       "relative to each run's off level, between the off band and "
+                       "the hits' mode (§4.4 on the relative axis)",
+            "separation": f"hits need a mode >= {SEPARATION_BANDS} off bands above "
+                          "the off level",
+            "static": f"more than {OFF_SIGMA} robust sigma below a running "
+                      f"{STATIC_QUANTILE} quantile over {STATIC_WINDOW} trains, "
+                      "residuals centred, iterated",
+        },
+        "blocks": cuts,
+        "checks": checks,
+        "passed": bool(passed),
+        "errors": errors,
+        "runs": records(table),
+        "_table": table,
+    }  # fmt: skip
+
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--phase", choices=["inventory", "xpcs"], default="inventory")
+    parser.add_argument(
+        "--phase", choices=["inventory", "xpcs", "classify"], default="inventory"
+    )
     parser.add_argument("--proposal", type=int, default=10400)
     parser.add_argument("--damnit-root", type=Path, default=DAMNIT_ROOT)
     parser.add_argument("--runs", nargs="*", default=None, help="run numbers, or 'all'")
@@ -383,7 +536,11 @@ def print_xpcs(report) -> None:
 
 def main(argv=None) -> int:
     args = parse_args(argv)
-    phase = {"inventory": inventory_phase, "xpcs": xpcs_phase}[args.phase]
+    phase = {
+        "inventory": inventory_phase,
+        "xpcs": xpcs_phase,
+        "classify": classify_phase,
+    }[args.phase]
     report = report_header(proposal=args.proposal) | phase(args)
     table = report.pop("_table")
     path = write_report(report, args.json, f"run_triage_{args.phase}")
@@ -391,6 +548,16 @@ def main(argv=None) -> int:
     print(f"wrote {path.with_suffix('.csv')}")
     if args.phase == "xpcs":
         print_xpcs(report)
+        return 0 if report["passed"] else 1
+    if args.phase == "classify":
+        print(f"\n{len(report['runs'])} runs in {report['elapsed_s']} s; "
+              f"errors {report['errors']}")  # fmt: skip
+        for block, cut in report["blocks"].items():
+            print(f"  {block}: t_on {cut['t_on']:.3f} "
+                  f"on_mode {cut['on_mode']:.2f} off_cut {cut['off_cut']:.3f} "
+                  f"ambiguous {cut['ambiguous']}")  # fmt: skip
+        print("\nchecks:", json.dumps(report["checks"], indent=1, default=str))
+        print(f"\npassed: {report['passed']}")
         return 0 if report["passed"] else 1
 
     print(f"\n{report['n_runs']} runs in {report['elapsed_s']} s")

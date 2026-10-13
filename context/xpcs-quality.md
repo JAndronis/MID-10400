@@ -235,8 +235,9 @@ diagnostic(run) = diagnostic over hits(run) only; n_hits always reported beside 
   run's window sums. The 10-train windows mix classes, so the weights are built from the windows
   whose ten trains are all hits. Where too few exist, the unweighted estimator in the narrow
   rings is used, and its w_cv² bias (§3) is reported with it.
-- The hit classifier is run-triage's T2 `classify`, specified there (§4.4) and not yet built.
-  **It comes before any mesh-run score** (user, 2026-10-13).
+- The hit classifier is `analysis.triage.classify.hits(run)`, **built 2026-10-14 (phase H)**. It
+  is documented in run-triage §4.4 "As built": mesh runs by block, static runs by an out-of-beam
+  rule. Every diagnostic takes its `train_ids`.
 
 ## 6. Where it is computed — a separate pass (user, 2026-10-13)
 
@@ -301,7 +302,7 @@ compare_ttcf(run, ...) -> β_sf / A per XPCS ROI, using triage.xpcs.measure_run
 |---|---|---|
 | **Q0** | this spec | reviewed 2026-10-13 (§9) |
 | **Q1** | the separate pass (`analysis.photon_stats`, node script), its file and hash, the reader; mock tests with a synthetic negative binomial of known β, one with injected hot pixels, and one with a dropped train | β recovered within its σ from the mock; histograms equal the dense computation frame by frame; on r0423 and r0450 the first 20 trains reproduce this probe's numbers exactly; time and size per run measured on r0423, r0450 and one mesh run (r318) |
-| **H** | mesh hits: run-triage T2 `classify` (§4.4) and the static out-of-beam rule (§5.1); every diagnostic takes the hit trains | r318's classes match lowq_report (on only at Z ≈ 177.6, X 1.54–2.24); r307 reported ambiguous; hit fractions reported per run (r120 ≈ 6 %, inside run-triage §2.1's 6–23 %; r318 ≈ 34 %, a Z ±0.25 scan, §2.2) |
+| **H** | mesh hits: run-triage T2 `classify` (§4.4) and the static out-of-beam rule (§5.1); every diagnostic takes the hit trains | **passed 2026-10-14**: r318 agrees with lowq_report's rule on 99.6 % of trains; r68–69 and r140 ambiguous, r309–311 all on; r307 reports 46 hits with WAXS z 0.8 (flagged by the WAXS check, not by the classifier); hit fractions per run in the report (r120 11 %, r318 36 %) |
 | **Q2** | β_sf along one droplet series against V/V₀, per 30 s slice, on hits only | a trend with droplet volume measured or excluded at stated precision. A diagnostic only: the keep rule keeps the fixed β (§9) |
 | **Q3** | β_sf against the TTCF intercept on the reference runs, with the TTCF rebuilt on our pixels | the 0.79–0.94 ratio on r0450 explained: geometry (our ROIs vs extra-speckle's), normalisation, or charge sharing |
 | **Q4** | the outlier rule for low-k̄ rings (pixels whose counts are impossible for the ring's k̄), and R3 per run as a flag | r0423 at 0.75–0.86 nm⁻¹ gives a β_sf within 2σ of its neighbours once the rule is applied |

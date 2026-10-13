@@ -26,6 +26,7 @@ still passes eligibility with a low intercept.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -443,12 +444,19 @@ def measure_run(
     phi = counts[:, :, 0].sum(axis=0) / max(n * (f_frames - 1), 1)
     kbar = np.nanmean(kbar_t, axis=0) if n else np.full(len(edges), np.nan)
     if n >= 2:
-        g2, sigma, loo = jackknife_g2(
-            sums[:, :, :k_max], counts[:, :, :k_max], n_blocks
-        )
-        fits = [fit_decay(tau, g2[r], sigma[r], loo[:, r]) for r in range(len(edges))]
-        analytic = OFF_SUBTRACTION / (kbar * np.sqrt(npix * (f_frames - 1) * phi * n))
-        with np.errstate(invalid="ignore", divide="ignore"):
+        # A ROI whose every pair fell to the kbar filter is all NaN: its g2, σ and
+        # fit come back NaN, which is the answer, not a warning per ROI and block.
+        with warnings.catch_warnings(), np.errstate(invalid="ignore", divide="ignore"):
+            warnings.simplefilter("ignore", RuntimeWarning)
+            g2, sigma, loo = jackknife_g2(
+                sums[:, :, :k_max], counts[:, :, :k_max], n_blocks
+            )
+            fits = [
+                fit_decay(tau, g2[r], sigma[r], loo[:, r]) for r in range(len(edges))
+            ]
+            analytic = OFF_SUBTRACTION / (
+                kbar * np.sqrt(npix * (f_frames - 1) * phi * n)
+            )
             rho = np.nanmean(sigma[:, :3], axis=1) / analytic
     else:
         g2 = sigma = np.full((len(edges), k_max), np.nan)

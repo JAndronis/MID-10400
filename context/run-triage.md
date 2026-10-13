@@ -11,7 +11,10 @@ The file follows the integrator guides' conventions:
 **State:**
 - T0 (this spec) was reviewed on 2026-10-01 and revised to the keep rule in §1.
 - **T1 is done:** acceptance passed on the real data on 2026-10-01 (§4.2, §9).
-- T2–T4 are not started.
+- **T2b (droplet hits, `triage.classify`) is done** (2026-10-14, session S4): §4.4 as built, the
+  static out-of-beam rule, and `scripts/run_triage.py --phase classify`. Acceptance passed
+  (`run_triage_classify_20261013T222916Z.json`).
+- The rest of T2, and T3–T4, are not started.
 
 ---
 
@@ -360,6 +363,61 @@ on   ⇔ s_t > s_hi;  off ⇔ s_t < s_lo;  edge ⇔ otherwise
 
 - If the block has no empty band, the threshold falls back to the histogram minimum and the run
   is flagged `classification_ambiguous`. r307 is the expected case.
+
+**As built (2026-10-14, `triage.classify`; the pseudocode above did not survive the data).**
+Over all 255 mesh runs, pooling raw log10(s_t/F_t) per attenuator block gives no empty band:
+- off levels differ between runs of one block by up to 0.9 dex, and drift along a series
+  (r308 → r335: −5.45 → −4.7);
+- r240–335 mixes two samples (PEG 6K r240–306, pure ferritin r308–335), and r290–306 sit
+  0.7 dex below r240–288;
+- 29 runs hit the droplet on ≥ 40 % of their trains, so a run's median is not its off level;
+- a thin continuum of edge trains (beam on the droplet's edge) fills the gap between off and
+  hits.
+
+```
+block    = attenuator (2 significant digits) × effective sample                  run_blocks
+per run  : Otsu's two-class split of x = log10(s_t/F_t)                           (Otsu 1979)
+           off level m, σ = 1.4826·MAD of the low class; two classes ⇔ high − m ≥ 2·5σ
+per block: rel = x − m of every two-class run, pooled
+           on_mode = shorth midpoint of rel above the off band 5σ (σ = median over runs)
+           t_on = centre of the widest empty band of rel in (5σ, on_mode)   # §4.4 on rel
+           ambiguous block ⇔ on_mode < 2 · 5σ                     (silica r68–69: 1.07 bands)
+one-class run: placed on its nearest two-class neighbour's off level;
+           all on at the hit level (r309–311: beam on the droplet throughout), all off in
+           the off band, else ambiguous (r140: 0.6 dex below its neighbours' off level)
+classes  : off ⇔ rel ≤ 5σ;  on ⇔ rel ≥ t_on;  edge otherwise
+```
+
+Results (`scripts/run_triage_classify_20261013T222916Z.json`):
+
+| Block (attenuator, sample) | t_on [dex] | Hits' mode | Notes |
+|---|---|---|---|
+| 1e-4, silica | — | — | ambiguous: one level, no hits |
+| 0.001, PEG 6K (r70–87) | 0.21 | +0.82 | hits only 6.6× above off; WAXS confirms nothing at this flux |
+| 0.0047 (r307) | 0.58 | +0.62 | 46 hits, WAXS z 0.8 |
+| 0.012 (r88–185) | 0.39 | +1.33 | r140 ambiguous, r92 all off |
+| 0.041 (r289) | 0.39 | +1.33 | |
+| 0.051 (r186–239) | 0.68 | +1.46 | |
+| 0.1, pure ferritin (r308–335) | 0.71 | +1.51 | r309–311 all on |
+| 0.1, PEG 6K (r240–306) | 0.36 | +1.48 | |
+
+- **255 runs: 40 913 hits, 3834 edge, 161 861 off; 3 ambiguous** (r68, r69, r140). The median
+  hit fraction is 12 %; p90 is 48 %.
+- **Checked against lowq_report's own rule on r318** (water 0.85–0.95 nm⁻¹ > 2× the median at the
+  lowest Z, an independent band): 256 of its 258 hits are ours, all 446 of our off trains are
+  its misses, and the agreement is 99.6 % of 705 decided trains. At the upper Z, X spans
+  1.48–2.25 mm (its rule: 1.49–2.25).
+- **WAXS**: hits sit 0.33–0.35 dex (×2.1–2.25) above off from attenuator 0.012 up; z ≥ 5 in 229 of
+  248 runs. The edge trains sit at the off level in WAXS (+0.01–0.03 dex), so they are near-misses
+  with surface scattering, not partial hits. At attenuators 0.001 and 0.0047 the ring is
+  noise-dominated and confirms nothing.
+
+**Static runs (and reference runs)** are hits except a droplet out of the beam:
+`static_hits`, x more than 5 robust σ below a running 75th percentile over 301 trains (the keep
+rule's 30 s slice), residuals centred, iterated. A 51-train running median (§4.3) misses any
+absence longer than 25 trains. 56 of 162 runs have such trains, 2557 in all: r463 481 (after its
+explosion), r477 200, r368 178, r438 and r452 148 each, r426 57. WAXS drops with them (z 23–392)
+except in r495.
 - The cross-check reports how far `w_t` agrees with the SAXS classes.
 - **Off-droplet sub-classes** follow `notebooks/lowq_report.ipynb` cell 17 (r318), extended to the
   fly scan. Each off train stores `dist_mm`, the hexapod distance from the bounding box of the run's

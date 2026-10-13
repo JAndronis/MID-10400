@@ -8,7 +8,9 @@ the XPCS keep rule is `context/run-triage.md` §4.6, the photon-statistics quali
 - Phase A (`analysis.diagnostics.frames`, `.curves`) is done: 22 mock tests, ruff clean,
   smoke-tested on r0423 and r0426.
 - Phase B (`analysis.diagnostics.xpcs`, a fixed reference β) is done: §4.
-- Phases C–F are to come.
+- Phase C (the photon-statistics spec, `context/xpcs-quality.md`) is reviewed.
+- Phase H (droplet hits, `triage.classify`; the per-run score with k̄ per ROI) is done: §5.
+- Q1 and phases D–F are to come.
 
 ---
 
@@ -169,3 +171,35 @@ the 11 acceptance runs plus r493, r494 and r496; 119 s):
   k̄ or the train count is low: mesh runs (on-trains only), heavily attenuated runs and short
   runs. That is a consequence of the rule the user chose, not something the diagnostics should
   change. The caveat above stands: SNR at τ → 0 is not a resolved decay.
+
+---
+
+## 5. The per-run score over droplet hits (phase H, 2026-10-14)
+
+Every diagnostic of a run is computed over its droplet hits only (user, 2026-10-13):
+`analysis.triage.classify.hits(run)["train_ids"]`; method and results in run-triage §4.4
+"As built". `diagnostics.xpcs.xpcs_score(run)` combines:
+- `hits`: the classification summary (counts, flags, the WAXS check);
+- `kbar`: `kbar_rois(run, hits)`, the mean k̄ per XPCS ROI over the hits. It comes from
+  extra-speckle's `scratch/xpcs/r{run:04d}/kbar.nc` (k̄ per train, frame and ROI; 453 runs), or
+  from our own k̄ when that file is missing;
+- `n_rois_kbar_ok` / `n_plain_rois_kbar_ok`: ROIs with mean k̄ ≥ `KBAR_MIN` = 3e-3 photons per pixel
+  per frame (user, 2026-10-14; also extra-speckle's default `kbar_threshold`,
+  pipeline/pipeline.py:89). The user wrote "ph/pix/s" but defined k̄ "per acquisition"; a frame is
+  the acquisition, so the threshold is per frame;
+- `snr`: `xpcs_snr(run, select=hits)`.
+
+**extra-speckle's k̄ against ours** (r0423, all trains): 0.02046 / 0.01525 / 0.01101 / 0.00729 /
+0.00499 / 0.00370 / 0.00232 against 0.02054 / 0.01533 / 0.01113 / 0.00744 / 0.00511 / 0.00378 /
+0.00238. They agree to 0.4–3 % per ROI, so the geometry worry of pitfall 16 does not show at
+the ROI-mean level.
+
+| Run | Kind | Hits | ROIs at k̄ ≥ 3e-3 (plain) | Best 30 s SNR over hits |
+|---|---|---|---|---|
+| r120 | mesh | 95 of 834 | 3 / 7 (1 / 4) | 1.7, not extractable |
+| r318 | mesh | 259 of 722 | 4 / 7 (3 / 4) | 10.0, extractable |
+| r307 | mesh | 46 of 726 | 0 / 7 | 0.0 |
+| r423 | static | 3000 of 3001 | 6 / 7 (3 / 4) | 32.2 |
+
+On r120 the mean k̄ over all trains is 4e-4 in every ROI. Over the hits it is 2.5–5.4e-3, which
+is why the score is taken over the hits.

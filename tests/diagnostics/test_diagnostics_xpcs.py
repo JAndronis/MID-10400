@@ -9,7 +9,15 @@ import numpy as np
 import pytest
 from triage_fakes import REP_RATE_HZ, write_xpcs_run
 
-from analysis.diagnostics.xpcs import beta_by_roi, load_beta, rep_rate_hz, xpcs_snr
+from analysis.diagnostics.xpcs import (
+    KBAR_MIN,
+    beta_by_roi,
+    kbar_rois,
+    load_beta,
+    rep_rate_hz,
+    xpcs_score,
+    xpcs_snr,
+)
 from analysis.triage.xpcs import (
     OFF_SUBTRACTION,
     REFERENCE_BETA,
@@ -126,3 +134,77 @@ def test_a_run_without_ttcf_is_refused(roots, tmp_path):
                 a.copy(name, b)
     with pytest.raises(LookupError, match="no xpcs_ttcf"):
         xpcs_snr(RUN, {}, damnit_root=tmp_path / "amore", saxs_root=saxs_root)
+
+
+# ── k̄ per ROI and the per-run score ──────────────────────────────────────────
+
+
+def write_kbar_nc(path, train_ids, kbar_per_roi, n_frames=10):
+    """extra-speckle's kbar.nc: k̄ per (trainId, frame, roi_q)."""
+    import xarray as xr
+
+    values = np.broadcast_to(
+        np.asarray(kbar_per_roi, float)[None, None, :],
+        (len(train_ids), n_frames, len(kbar_per_roi)),
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    xr.DataArray(
+        values.copy(),
+        dims=("trainId", "frame", "roi_q"),
+        coords={
+            "trainId": np.asarray(train_ids, dtype=np.uint64),
+            "frame": np.arange(n_frames),
+            "roi_q": [0.02875, 0.04, 0.0505, 0.0605, 0.067, 0.072, 0.0805],
+        },
+    ).to_netcdf(path, engine="h5netcdf")
+    return path
+
+
+def test_kbar_rois_counts_the_rois_above_the_threshold(tmp_path):
+    tids = np.arange(100, 110)
+    kbar = [0.02, 0.01, 0.004, 0.003, 0.0029, 0.001, 0.0005]
+    write_kbar_nc(tmp_path / "r0423" / "kbar.nc", tids, kbar)
+    table = kbar_rois(423, xpcs_root=tmp_path)
+    np.testing.assert_allclose(table.kbar, kbar)
+    assert list(table.above) == [True, True, True, True, False, False, False]
+    assert table.attrs["n_above"] == 4
+    assert table.attrs["n_plain_above"] == 3  # 0.0605 is a Bragg ROI
+    assert table.attrs["kbar_min"] == KBAR_MIN == 3e-3
+    assert table.attrs["n_trains"] == 10
+    assert kbar_rois(423, tids[:3], xpcs_root=tmp_path).attrs["n_trains"] == 3
+
+
+def test_kbar_rois_fall_back_to_our_geometry(roots, tmp_path):
+    damnit_root, saxs_root, truth = roots
+    table = kbar_rois(RUN, xpcs_root=tmp_path / "none", damnit_root=damnit_root,
+                      saxs_root=saxs_root)  # fmt: skip
+    assert "our geometry" in table.attrs["source"]
+    np.testing.assert_allclose(table.kbar, truth["kbar"], rtol=1e-6)
+
+
+def test_the_score_is_taken_over_the_hits(roots, tmp_path):
+    import xarray as xr
+    from triage_fakes import run_row, write_sqlite
+
+    damnit_root, saxs_root, truth = roots
+    path = damnit_root / "extracted_data" / f"p10400_r{RUN}.h5"
+    with h5py.File(path, "r") as f:
+        tids = f["agipd_saxs/trainId"][:]
+    for group, name in (
+        ("xgm_intensity", "Energy"),
+        ("total_transmission", "__xarray_dataarray_variable__"),
+    ):
+        with h5py.File(path, "a") as f:
+            if group in f:
+                del f[group]
+        xr.DataArray(np.ones(tids.size), dims="trainId", coords={"trainId": tids},
+                     name=name).to_dataset().to_netcdf(
+            path, group=group, mode="a", engine="h5netcdf")  # fmt: skip
+    write_sqlite(damnit_root / "runs.sqlite", [run_row(RUN)])
+    score = xpcs_score(RUN, damnit_root=damnit_root, saxs_root=saxs_root,
+                       xpcs_root=tmp_path / "none")  # fmt: skip
+    assert score["kind"] == "static"
+    assert score["n_hits"] == tids.size  # a steady synthetic run never leaves
+    assert score["snr"]["n_usable"] == tids.size
+    expected = np.broadcast_to(np.asarray(truth["kbar"]), (7,)) >= KBAR_MIN
+    assert score["n_rois_kbar_ok"] == int(expected.sum())
