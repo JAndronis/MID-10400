@@ -55,9 +55,29 @@ Read this when working on the lock, the completeness check, resume, the DAMNIT c
   exceptions are r0016 and r0017 jf1, at `npt` 500, and r0041 jf1, at `npt` 500 with **pyFAI
   2026.9.0** (written 2026-10-09 on max-exfl462, not by the deploy env).
 - **r0423.** `is_complete` holds for AGIPD at the defaults and for jf1 and jf2 at `npt=200`
-  (§3). The operator built on 2026-10-13 hashes to the one stored on 2026-10-07.
+  (§3). On an AVX2 node (EPYC 75F3), the operator built on 2026-10-13 hashes to the one stored on
+  2026-10-07.
 
 **Operator build cost** (r0423 provenance, `setup_timings.operator`): AGIPD 1.2 s, JF 0.17 s.
+Reading the stored operator back costs about 0.01 s: 28 MB for AGIPD, 2 MB for JF.
+
+**The operator sha256 depends on the node's instruction set** (S3, 2026-10-13, r0423, pyFAI
+2026.5 and 2026.9).
+- AVX2 nodes (EPYC 75F3, E5-2640 v4), where production r0423–r0428 were written, build
+  `2bec8d7c…`.
+- AVX-512 nodes (EPYC 9374F, Gold 6140) build `a59609c8…`.
+- Only `omega` differs: 105 693 of 1 048 576 pixels, by 1 ULP (at most 1.1e-16 relative).
+  `coef`, `bins`, `indptr` and `q` are bit-identical.
+- `allcpu` mixes both classes, so **never gate on an exact sha256 against an operator rebuilt on
+  another node.**
+- The worker's own sha256 check (`worker.init`) is safe: parent and workers share a node.
+- **Reproduced by S1** on a Gold 6126 (max-cssb009, Slurm job 25287937, 2026-10-13). The AGIPD
+  operator built there hashes to `a59609c8…`, against `2bec8d7c…` stored; `omega` differs on
+  105 693 pixels, by at most 1.11e-16; `coef`, `bins`, `indptr` and `q` are identical. With the
+  array comparison, `is_complete` holds for AGIPD, jf1 and jf2. The sha256 comparison it replaced
+  would have refused all three. Script and log: `scratch/slurm_logs/s1_integrity/isa_check*`.
+
+**pyFAI 2026.5 → 2026.9** (S3): bit-identical on everything this repository uses.
 
 ## 2. The lock (`analysis.common.lock`)
 
@@ -108,8 +128,12 @@ otherwise carries its reasons. A frame table is complete when:
 - the pyFAI version recorded in it equals the installed one (`GATING_PACKAGES`). This gate is kept for AGIPD
   too, by user decision on 2026-10-13, although AGIPD numbers depend on pyFAI only through the
   operator;
-- `provenance.operator_sha256` equals `/operator.sha256`, and both equal the sha256 of the
-  operator this pass would build now.
+- `provenance.operator_sha256` equals `/operator.sha256` (both written by the same job);
+- the stored operator equals the one this pass would build now, **array by array**, not by sha256
+  (§1):
+  - AGIPD: `coef`, `bins`, `indptr` and `q` exactly; `omega` to `OMEGA_RTOL` = 1e-12 relative,
+    against a 1.1e-16 spread between node classes;
+  - JF: the static mask exactly; `q` and `omega` to 1e-6, because `omega` is stored as float32.
 
 **The window sums (AGIPD) are complete when:**
 - the hash (with the detector name resolved) and the schema match, and the file was finalised;
@@ -117,13 +141,13 @@ otherwise carries its reasons. A frame table is complete when:
 - no train is unfinished;
 - the trains are exactly the frame table's.
 
-**How the would-be operator sha256 is obtained: the operator is built.**
+**How the would-be operator is obtained: it is built, on the checking node.**
 - **Inside a pass**, the check reuses the operator the pass builds anyway, so it costs nothing extra.
-- **Elsewhere** (`expected_operator_sha256`), the build is memoised per process on the config with
-  the proposal and run zeroed, since no operator input depends on the run. A script checking 459
-  runs builds it once.
-- **Why not compare library versions instead:** an exact sha needs no assumption about what a pyFAI or
-  EXtra-geom release changes.
+- **Elsewhere** (`expected_operator`), the build is memoised per process on the config with the
+  proposal and run zeroed, since no operator input depends on the run. A script checking 459 runs
+  builds it once.
+- **Why not compare library versions instead:** comparing the arrays needs no assumption about
+  what a pyFAI or EXtra-geom release changes.
 
 **The early return.**
 - **Where.** At the top of each `run_*`, after the operator build (which reads only the geometry or
@@ -153,8 +177,8 @@ resume.
 - **`FrameTableWriter.check_resumable`** refuses an existing file unless `overwrite`:
   - `ConfigHashMismatch` — the config hash differs;
   - `SchemaMismatch` — a column is missing;
-  - `OperatorMismatch`, a subclass of `ConfigHashMismatch` — the operator or the pyFAI version
-    differs.
+  - `OperatorMismatch`, a subclass of `ConfigHashMismatch` — the operator arrays (same rule as
+    §3) or the pyFAI version differ.
 
   `open_or_create` calls it. The `run_*` functions also call it under the lock, before the plan, masks
   and self-test, so a file that can only be reprocessed is refused in a second.

@@ -14,10 +14,16 @@ A frame table is complete when all of these hold:
   accounts for every row;
 * every :data:`~analysis.common.writer.GATING_PACKAGES` version is the
   installed one;
-* its operator sha256 is the one this pass would build now.
+* its stored operator equals the one this pass would build now, array by
+  array.
 
 The last two are what make a pyFAI upgrade force a reprocess rather than a file
-half integrated by each version. The pass-specific checks — the window sums for
+half integrated by each version. The operator is compared by its arrays, not
+its sha256: the same build differs by one ULP in the solid angle between AVX2
+and AVX-512 nodes, and ``allcpu`` mixes both (S3, 2026-10-13), so a sha256
+match would refuse a valid file whenever DAMNIT landed on the other class.
+
+The pass-specific checks — the operator's layout, and the window sums for
 AGIPD — live beside each pass, in ``analysis.saxs.complete`` and
 ``analysis.waxs.complete``.
 """
@@ -31,7 +37,12 @@ from typing import Any
 import h5py
 
 from analysis.common.status import UNFINISHED
-from analysis.common.writer import FrameTableWriter, PassConfig, version_changes
+from analysis.common.writer import (
+    FrameTableWriter,
+    OperatorCheck,
+    PassConfig,
+    version_changes,
+)
 
 __all__ = ["Completeness", "frame_table_reasons", "unfinished_reasons"]
 
@@ -66,20 +77,20 @@ def frame_table_reasons(
     path: str | Path,
     cfg: PassConfig,
     writer: type[FrameTableWriter],
-    operator_sha256: str | None,
+    operator_check: OperatorCheck | None,
 ) -> list[str]:
     """Why the frame table at ``path`` is not complete; empty when it is.
 
     :param writer: the pass's writer class, whose schema the file must have.
-    :param operator_sha256: the operator the pass would build now; ``None``
-        skips that comparison.
+    :param operator_check: compares the stored operator with the one the pass
+        would build now; ``None`` skips that comparison.
     """
     path = Path(path)
     if not path.exists():
         return ["no file"]
     try:
         with h5py.File(path, "r") as handle:
-            return _reasons(handle, cfg, writer, operator_sha256)
+            return _reasons(handle, cfg, writer, operator_check)
     except (OSError, KeyError, ValueError) as error:
         return [f"unreadable: {error!r}"]
 
@@ -88,7 +99,7 @@ def _reasons(
     handle: h5py.File,
     cfg: PassConfig,
     writer: type[FrameTableWriter],
-    operator_sha256: str | None,
+    operator_check: OperatorCheck | None,
 ) -> list[str]:
     if "provenance" not in handle:
         return ["no provenance group"]
@@ -127,8 +138,6 @@ def _reasons(
         reasons.append(
             f"provenance names operator {recorded}, /operator holds {stored}"
         )
-    if operator_sha256 is not None and stored != operator_sha256:
-        reasons.append(
-            f"integrated by operator {stored}, this pass would build {operator_sha256}"
-        )
+    if operator_check is not None:
+        reasons += operator_check(handle)
     return reasons

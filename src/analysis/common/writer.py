@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
@@ -57,6 +58,11 @@ log = logging.getLogger(__name__)
 #: a file written under another version would be a mix of two integrators.
 GATING_PACKAGES: tuple[str, ...] = ("pyFAI",)
 
+#: Compares the operator stored in an open output file with the one a pass built
+#: now, returning one reason per difference. Each pass supplies its own, since
+#: only it knows its operator's layout — and which of its arrays are exact.
+OperatorCheck = Callable[[h5py.File], list[str]]
+
 #: How to reprocess a file this pass refuses to resume into.
 _REPROCESS_HINT = (
     "move it aside with scripts/reprocess_safe.py and reprocess, or pass "
@@ -75,6 +81,10 @@ class OperatorMismatch(ConfigHashMismatch):
     match while the operator does not: after a pyFAI upgrade, say. Resuming
     would mix rows from two integrators, and finalising would then stamp the
     new version on all of them.
+
+    The operator is compared array by array, not by sha256: the same build
+    differs by one ULP in the solid angle between AVX2 and AVX-512 nodes, and
+    ``allcpu`` mixes both (S3, 2026-10-13).
     """
 
 
@@ -179,21 +189,20 @@ class FrameTableWriter:
         plan: RunPlan,
         path: Path | None = None,
         *,
-        operator_sha256: str | None = None,
+        operator_check: OperatorCheck | None = None,
     ) -> FrameTableWriter:
         """Open the run's output file, creating and initialising it if needed.
 
         An existing file is resumed into only if :meth:`check_resumable`
         allows it, unless ``cfg.overwrite``, which recreates it.
 
-        :param operator_sha256: the operator this run built — see
-            :meth:`check_resumable`.
+        :param operator_check: see :meth:`check_resumable`.
         """
         path = Path(path) if path is not None else cfg.output_file
         path.parent.mkdir(parents=True, exist_ok=True)
 
         if path.exists() and not cfg.overwrite:
-            cls.check_resumable(cfg, path, operator_sha256=operator_sha256)
+            cls.check_resumable(cfg, path, operator_check=operator_check)
             return cls(h5py.File(path, "r+"), cfg, plan)
 
         handle = h5py.File(path, "w")
@@ -202,15 +211,19 @@ class FrameTableWriter:
 
     @classmethod
     def check_resumable(
-        cls, cfg: PassConfig, path: Path, *, operator_sha256: str | None = None
+        cls,
+        cfg: PassConfig,
+        path: Path,
+        *,
+        operator_check: OperatorCheck | None = None,
     ) -> None:
         """Refuse an existing file that resuming would turn into a mixture.
 
         Read-only, so a pass can call it before any expensive setup as well as
         when it opens the file. A missing file, or ``cfg.overwrite``, passes.
 
-        :param operator_sha256: the operator this run built. ``None`` skips the
-            operator check, for a caller with no operator to compare.
+        :param operator_check: compares the stored operator with the one this
+            run built. ``None`` skips it, for a caller with no operator.
         :raises ConfigHashMismatch: the config hash differs.
         :raises SchemaMismatch: the frame table lacks a column.
         :raises OperatorMismatch: the operator, or the version of a
@@ -223,12 +236,13 @@ class FrameTableWriter:
         with h5py.File(path, "r") as existing:
             stored = existing["provenance"].attrs.get("config_hash")
             missing = cls._missing_columns(existing)
-            stored_operator = (
-                existing["operator"].attrs.get("sha256")
-                if "operator" in existing
-                else None
-            )
             versions = existing["provenance"].attrs.get("package_versions")
+            # An empty /operator is a file that died before storing one, with
+            # no rows to mix; there is nothing to compare.
+            has_operator = "operator" in existing and len(existing["operator"]) > 0
+            differences = (
+                operator_check(existing) if operator_check and has_operator else []
+            )
         if stored != config_hash:
             raise ConfigHashMismatch(
                 f"{path} was written with config hash {stored}, "
@@ -239,12 +253,7 @@ class FrameTableWriter:
                 f"{path} has no {missing} in its frame table, so it predates "
                 f"a column this pass now stores; {_REPROCESS_HINT}"
             )
-        changed = version_changes(versions)
-        if operator_sha256 is not None and stored_operator not in (
-            None,
-            operator_sha256,
-        ):
-            changed.append(f"operator {stored_operator} -> {operator_sha256}")
+        changed = version_changes(versions) + differences
         if changed:
             raise OperatorMismatch(
                 f"{path} was integrated differently from this run "

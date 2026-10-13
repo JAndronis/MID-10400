@@ -19,6 +19,7 @@ import json
 import logging
 import time
 from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -42,7 +43,7 @@ from analysis.waxs.cells import (
     CellClassification,
     UnexpectedLitCells,
 )
-from analysis.waxs.complete import is_complete
+from analysis.waxs.complete import is_complete, operator_differences
 from analysis.waxs.config import CELLS_PER_TRAIN, JungfrauWaxsConfig
 from analysis.waxs.integrate import ErrorModel
 from analysis.waxs.operator import WaxsOperator, build_operator
@@ -152,17 +153,19 @@ def run_jungfrau_waxs(
     # Skipped while a lock exists, since the file may be mid-write; the check
     # under the lock below then decides.
     if not cfg.overwrite and not lock_path(output_path).exists():
-        if is_complete(output_path, cfg, operator_sha256=op.sha256):
+        if is_complete(output_path, cfg, operator=op):
             return _from_file(cfg, output_path, reduce)
     with output_lock(output_path) as lock:
         if not cfg.overwrite:
-            verdict = is_complete(output_path, cfg, operator_sha256=op.sha256)
+            verdict = is_complete(output_path, cfg, operator=op)
             if verdict:
                 return _from_file(cfg, output_path, reduce)
             log.info("%s", verdict)
         # Before the cells and the self-test, so a file that can only be
         # reprocessed is refused at once.
-        JungfrauWaxsWriter.check_resumable(cfg, output_path, operator_sha256=op.sha256)
+        JungfrauWaxsWriter.check_resumable(
+            cfg, output_path, operator_check=partial(operator_differences, op=op)
+        )
         return _integrate(
             cfg,
             op,
@@ -265,7 +268,10 @@ def _integrate(
         report = _run_selftest(cfg, op, ai, model, classification, det, plan)
 
     with JungfrauWaxsWriter.open_or_create(
-        cfg, plan, output_path, operator_sha256=op.sha256
+        cfg,
+        plan,
+        output_path,
+        operator_check=partial(operator_differences, op=op),
     ) as out:
         out.store_operator(op)
         out.store_cells(classification, model, sampled)

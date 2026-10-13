@@ -25,6 +25,7 @@ import time
 from collections.abc import Callable
 from contextlib import ExitStack
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -42,7 +43,11 @@ from analysis.common.writer import IncompleteRun, pooled_per_train, status_count
 from analysis.saxs import masks as masks_module
 from analysis.saxs import operator as operator_module
 from analysis.saxs import worker as worker_module
-from analysis.saxs.complete import is_complete, window_sums_reasons
+from analysis.saxs.complete import (
+    is_complete,
+    operator_differences,
+    window_sums_reasons,
+)
 from analysis.saxs.config import AgipdSaxsConfig
 from analysis.saxs.pixel_sums import FAILED, FILE_NAME, PixelSumWriter, WindowSpec
 from analysis.saxs.plan import build_plan
@@ -146,7 +151,7 @@ def run_agipd_saxs(
 
     def complete() -> Completeness:
         return is_complete(
-            output_path, cfg, pixel_sums_path=pixel_sums_path, operator_sha256=op.sha256
+            output_path, cfg, pixel_sums_path=pixel_sums_path, operator=op
         )
 
     # Skipped while a lock exists, since the file may be mid-write; the check
@@ -163,7 +168,9 @@ def run_agipd_saxs(
             log.info("%s", verdict)
         # Before the plan, the masks and the self-test, so a file that can only
         # be reprocessed is refused in a second rather than after a minute.
-        AgipdSaxsWriter.check_resumable(cfg, output_path, operator_sha256=op.sha256)
+        AgipdSaxsWriter.check_resumable(
+            cfg, output_path, operator_check=partial(operator_differences, op=op)
+        )
         return _integrate(
             cfg,
             dc=dc,
@@ -271,7 +278,10 @@ def _integrate(
         )
         out = stack.enter_context(
             AgipdSaxsWriter.open_or_create(
-                cfg, plan, output_path, operator_sha256=op.sha256
+                cfg,
+                plan,
+                output_path,
+                operator_check=partial(operator_differences, op=op),
             )
         )
         out.store_operator(op)

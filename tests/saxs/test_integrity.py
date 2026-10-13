@@ -29,7 +29,7 @@ from analysis.saxs import masks as masks_module  # noqa: E402
 from analysis.saxs import operator as operator_module  # noqa: E402
 from analysis.saxs import run as run_module  # noqa: E402
 from analysis.saxs import worker  # noqa: E402
-from analysis.saxs.complete import is_complete  # noqa: E402
+from analysis.saxs.complete import is_complete, operator_differences  # noqa: E402
 from analysis.saxs.pixel_sums import FILE_NAME, PixelSumWriter  # noqa: E402
 from analysis.saxs.writer import AgipdSaxsWriter, per_pulse  # noqa: E402
 
@@ -222,10 +222,11 @@ def test_is_complete_says_why_not(pipeline, complete_run, tmp_path, change, expe
 def test_another_operator_or_config_is_not_complete(pipeline, complete_run):
     directory, _ = complete_run
     kwargs = {"pixel_sums_path": directory / FILE_NAME}
+    moved = replace(pipeline.op, q=pipeline.op.q * 1.001)
     other_operator = is_complete(
-        directory / "out.h5", pipeline.cfg, operator_sha256="0" * 64, **kwargs
+        directory / "out.h5", pipeline.cfg, operator=moved, **kwargs
     )
-    assert any("this pass would build 000" in r for r in other_operator.reasons)
+    assert other_operator.reasons == ("operator q differs from the one built now",)
     other_npt = is_complete(
         directory / "out.h5",
         replace(pipeline.cfg, npt=pipeline.cfg.npt + 1),
@@ -235,8 +236,52 @@ def test_another_operator_or_config_is_not_complete(pipeline, complete_run):
     assert any("config hash" in reason for reason in other_npt.reasons)
 
 
+# ── node classes ──────────────────────────────────────────────────────────────
+def _nudge_omega(directory, relative=None):
+    """Move every tenth stored solid angle: one ULP, or by ``relative``."""
+    with h5py.File(directory / "out.h5", "r+") as handle:
+        omega = handle["operator/omega"][()]
+        if relative is None:
+            omega[::10] = np.nextafter(omega[::10], np.inf)
+        else:
+            omega[::10] *= 1 + relative
+        handle["operator/omega"][...] = omega
+
+
+def test_a_one_ulp_solid_angle_from_another_node_class_is_complete(
+    pipeline, complete_run, tmp_path, monkeypatch
+):
+    """AVX2 and AVX-512 nodes build omega one ULP apart on ~10 % of pixels
+    (S3, 2026-10-13), and allcpu mixes both: that must not refuse a file."""
+    copy_of(complete_run, tmp_path)
+    _nudge_omega(tmp_path)
+    before = stats(tmp_path)
+    kwargs = {"pixel_sums_path": tmp_path / FILE_NAME, "geometry": pipeline.geometry}
+    assert is_complete(tmp_path / "out.h5", pipeline.cfg, **kwargs)
+    AgipdSaxsWriter.check_resumable(
+        pipeline.cfg,
+        tmp_path / "out.h5",
+        operator_check=lambda handle: operator_differences(handle, pipeline.op),
+    )
+    forbid_writing(monkeypatch)
+    run_on_mock(pipeline, tmp_path)
+    assert stats(tmp_path) == before
+
+
+def test_a_real_change_to_the_solid_angle_is_not(pipeline, complete_run, tmp_path):
+    copy_of(complete_run, tmp_path)
+    _nudge_omega(tmp_path, relative=1e-9)
+    verdict = is_complete(
+        tmp_path / "out.h5",
+        pipeline.cfg,
+        pixel_sums_path=tmp_path / FILE_NAME,
+        geometry=pipeline.geometry,
+    )
+    assert verdict.reasons == ("operator omega differs by more than 1e-12 relative",)
+
+
 def test_a_missing_file_is_not_complete(pipeline, tmp_path):
-    verdict = is_complete(tmp_path / "out.h5", pipeline.cfg, operator_sha256="0" * 64)
+    verdict = is_complete(tmp_path / "out.h5", pipeline.cfg, operator=pipeline.op)
     assert verdict.reasons[0] == "no file"
 
 
@@ -358,10 +403,10 @@ def test_a_file_from_another_operator_is_refused_not_resumed(
         run_on_mock(pipeline, tmp_path, pixel_sum_trains=None)
     monkeypatch.undo()
     with h5py.File(tmp_path / "out.h5", "r+") as handle:
-        handle["operator"].attrs["sha256"] = "f" * 64
+        handle["operator/coef"][0] *= 2
     before = stats(tmp_path)
 
-    with pytest.raises(OperatorMismatch, match="operator fff"):
+    with pytest.raises(OperatorMismatch, match="operator coef differs"):
         run_on_mock(pipeline, tmp_path, pixel_sum_trains=None)
     assert stats(tmp_path) == before
 

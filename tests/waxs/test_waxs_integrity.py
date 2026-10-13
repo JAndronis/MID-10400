@@ -10,6 +10,7 @@ import dataclasses
 import json
 
 import h5py
+import numpy as np
 import pytest
 
 pytest.importorskip("extra_data")
@@ -24,7 +25,7 @@ from analysis.common.writer import IncompleteRun, OperatorMismatch  # noqa: E402
 from analysis.waxs import run as run_module  # noqa: E402
 from analysis.waxs import worker  # noqa: E402
 from analysis.waxs.cells import UnexpectedLitCells  # noqa: E402
-from analysis.waxs.complete import is_complete  # noqa: E402
+from analysis.waxs.complete import expected_operator, is_complete  # noqa: E402
 from analysis.waxs.writer import JungfrauWaxsWriter  # noqa: E402
 
 
@@ -87,10 +88,27 @@ def test_another_pyfai_or_operator_is_not_complete(cfg, mock_run_factory, tmp_pa
     mock, dc = mock_run_factory()
     path = tmp_path / "run.h5"
     run(cfg, mock, dc, output_path=path)
-    assert not is_complete(path, cfg, operator_sha256="0" * 64)
+    op = expected_operator(cfg)
+    moved = is_complete(path, cfg, operator=dataclasses.replace(op, q=op.q * 1.01))
+    assert moved.reasons == ("operator q differs by more than 1e-06 relative",)
     set_pyfai(path, "2000.1.0")
     verdict = is_complete(path, cfg)
     assert verdict.reasons == (f"written with pyFAI 2000.1.0 -> {_installed()}",)
+
+
+def test_a_float32_ulp_in_the_stored_solid_angle_is_complete(
+    cfg, mock_run_factory, tmp_path
+):
+    """The file stores omega as float32; a one-ULP float64 difference between
+    node classes can round to a one-ULP float32 one."""
+    mock, dc = mock_run_factory()
+    path = tmp_path / "run.h5"
+    run(cfg, mock, dc, output_path=path)
+    with h5py.File(path, "r+") as handle:
+        omega = handle["operator/omega"][()]
+        omega[::10] = np.nextafter(omega[::10], np.float32(np.inf))
+        handle["operator/omega"][...] = omega
+    assert is_complete(path, cfg)
 
 
 def _installed():
