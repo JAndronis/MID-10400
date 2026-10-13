@@ -214,7 +214,7 @@ def dispatch(
             "--local",
         ]
         try:
-            slurm.submit(
+            job = slurm.submit(
                 command,
                 f"{script.stem}_r{run:04d}",
                 out,
@@ -230,6 +230,9 @@ def dispatch(
         except slurm.SubmitError as error:
             log.error("%s", error)
             status = 1
+            continue
+        if job is not None:
+            print(f"r{run:04d}: job {job}, log {out}/slurm-{job}.out")
     return status
 
 
