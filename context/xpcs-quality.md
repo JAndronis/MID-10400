@@ -3,8 +3,8 @@
 Context file for CLAUDE.md open task 20 (c). Read `CLAUDE.md`, then `context/run-triage.md`
 §4.6 (the keep rule and its analytical SNR) and `context/diagnostics.md` §4 (the fixed β).
 
-**State:** spec only, written 2026-10-13 (session S4), **for the user's review**. Nothing is
-implemented. Every number comes from `scripts/xpcs_quality_probe.py` on 20 trains of r0423 and
+**State:** spec, written 2026-10-13 (session S4) and **reviewed by the user the same day**
+(decisions in §9). Nothing is implemented. Every number comes from `scripts/xpcs_quality_probe.py` on 20 trains of r0423 and
 of r0450. There are two reports beside it:
 - `xpcs_quality_probe_20261013T153938Z.json`: job 25288430, max-cssb024, Xeon Gold 6226.
 - `xpcs_quality_probe_20261013T165909Z.json`: job 25288745, max-wn135, EPYC 75F3. It adds the
@@ -122,12 +122,17 @@ What this says, as far as 20 trains can:
   Raw r0423 and r0450 carry identical `MID_XTD6_MONO` (TX 0, TY 2, energy changer 9.0925) and
   `MID_OPT_MONO` (TX −15, TY 97, energy changer 8.99999535, target 9.0) settings, but their
   in/out positions are not known here. Ask MID before quoting this. The settings being
-  identical does rule the monochromator out as the cause of the r0423/r0450 difference.
+  identical does rule the monochromator out as the cause of the r0423/r0450 difference. The
+  energy changers report their setpoint, not the beam: the real energy is 9.04 keV (user,
+  2026-10-13, from the undulator spectrum and the beamline staff; CLAUDE.md open task 15).
   **If this holds, the fixed β overstates the SNR of early droplets by up to ×3.** r0423's best
   slice would fall from 32 to about 9, still above 3. Phase Q2 measures β_sf against droplet
   volume along a whole series.
-- **The weighting matters.** The unweighted estimator reads 0.006–0.016 higher, and twice as
-  high at 0.75–0.86 nm⁻¹ (w_cv 0.18–0.37 there, 0.08–0.13 at lower q). Narrow rings
+- **The weighting matters, by exactly w_cv².** The unweighted estimator reads high by the
+  squared spread of mean intensity across the ring: r0450 wide ROIs 0.0112 / 0.0063 / 0.0065
+  against w_cv² 0.0112 / 0.0063 / 0.0067; r0423 0.0165 / 0.0104 / 0.0160 against
+  0.0172 / 0.0113 / 0.0175. In the narrow rings the same bias is 0.002–0.006 at q ≤ 0.56. So a
+  wrong or missing weight costs a wide ROI 20–60 % of β, and a narrow ring 5–15 %. Narrow rings
   (Δq = 0.025) with weights reproduce the wide ROIs' β_sf: r0450 0.025–0.050, mean ≈ 0.03 at
   0.35–0.56.
 - **The negative-binomial shape fails mildly on r0450.** R3 is 5–12 % above expectation at
@@ -170,7 +175,7 @@ What this says, as far as 20 trains can:
   omega at rtol 1e-12; branch `claude/s1-damnit-integrity-1548a4`, 7ebeaa8), not through the
   sha.
 
-## 5. Storage
+## 5. Storage — per frame, 17 rings (user, 2026-10-13)
 
 Measured with gzip level 1, one chunk per train, K = 15, uint32 counts. The per-frame record is
 `hist (n, R, K+2)`, `S1`, `S2 (n, R)`, plus trainId and pulseId:
@@ -178,44 +183,91 @@ Measured with gzip level 1, one chunk per train, K = 15, uint32 counts. The per-
 | Granularity | ROIs | Per frame | r0423-size run (465 k frames) | Proposal (1.486 × 10⁸ frames, 459 runs) |
 |---|---|---|---|---|
 | per frame | 4 XPCS | 50–61 B (320 uncompressed) | 23–28 MB | 7–9 GB |
-| per frame | 17 rings | 163–206 B (1308 uncompressed) | 76–96 MB | 24–31 GB |
+| **per frame** | **17 rings** | **163–206 B (1308 uncompressed)** | **76–96 MB** | **24–31 GB** |
 | per train (frames summed) | 17 rings | — | ≈ 3.9 MB uncompressed | ≈ 0.8 GB uncompressed (617 077 trains) |
 
-- **Per frame keeps every later choice open**: per pulse rank (heating, CLAUDE.md boundary 4),
-  per slice, per droplet-volume bin, the frames of a TTCF block.
-- **Per train loses the pulse axis.** β_sf per frame is useless on its own (σ ≈ 0.1 at these
-  k̄), so per-train sums lose nothing for slices or runs, only for within-train questions.
-- Recommendation: **per frame, 17 rings** (24–31 GB, about half the window sums' 53 GB), in
-  `usr/cached_files/agipd_photon_stats/r{run:04d}/`
-  beside the window sums. Like them it survives the move to tape, and the middata ACL already
-  lets DAMNIT write there.
+- **Per frame** (user): it keeps every later grouping open — per pulse rank (heating, CLAUDE.md
+  boundary 4), per slice, per droplet-volume bin, per hit train of a mesh scan (§5.1).
+- **17 rings rather than 4 ROIs**, because they give the more realistic contrast, which is the
+  criterion the user set:
+  - every XPCS-ROI number is the exact sum of its rings, so nothing is lost;
+  - in a ring the result depends 2–5× less on the per-pixel weights (§3: 0.002–0.006 against
+    0.006–0.017);
+  - the weights are what is uncertain wherever a run-mean pixel pattern is not the pattern of
+    the frames at hand: mesh scans (§5.1), and droplets whose shadow or stray light changes
+    along the run (memory, saxs-background-subtraction).
 
-## 6. Where it is computed
+  The cost is 3.4× the storage.
+- Location: `usr/cached_files/agipd_photon_stats/r{run:04d}/`, beside the window sums. It
+  survives the move to tape, and the middata ACL already allows writes there.
 
-**Option W, inside the `agipd_saxs` worker** (recommended), as the per-pixel window sums are
-(§15 of the integrator guide):
-- **Cost.** `integrate_frame` already holds the valid nonzero pixels (`keep`) and the pixels
-  where the frame's mask differs from its cell's base mask (`diff`). The histogram needs only
-  `label[keep]` and `label[diff]`, plus each cell's base count per ring, built once. Measured:
-  0.15–0.41 ms/frame (EPYC 75F3, both rings and ROIs), against reads of 4.2–10.6 ms (data)
-  and 8.2–14.8 ms (mask) per frame over the two nodes: 1–3 % of the read. A standalone sparse
-  version that rescans the frame costs 2.5–4.6 ms; the dense one 10–15 ms. All three agree on
-  every frame (0 mismatches over 2 × 2945 frames). The
-  window sums cost +11.5 % wall (their phase S2, 2026-10-07).
-- **It needs no extra read of proc.** The one bulk AGIPD reprocess planned after the merges
-  (S1 → S3 → S2 → S4) produces it for every run. **The user has to coordinate that.** The
-  histograms must be in the code that reprocess runs, so S4's phase Q1 has to merge first.
-- **A separate file with its own hash**: ring edges, pixel → ring sha256, K. The operator
-  is checked with `operator_differences`, as above.
-  It is never truncated by `overwrite`, like the window sums, and has its own completeness
-  check (S1's `is_complete` pattern).
-- **A standalone backfill**, `run_photon_stats(cfg)`, like `run_pixel_sums`, for runs the
-  reprocess misses. It reads proc, so it works only before taping.
+### 5.1 Mesh scans: extract every frame, score only the hits
 
-**Option P, a separate pass:** a script over proc per run. It has to read `image.data` and
-`image.mask` again: ≈ 12–25 ms/frame, 1.6–3.2 h of CPU per 465 k-frame run, ≈ 14–29
-node-hours for the proposal on 36 cores. It is independent of the reprocess's timing and of the
-integrator code. Choose it only if the reprocess cannot wait for Q1.
+The extraction is per frame and identical for every run, so mesh scans need nothing special at
+that stage. **The diagnostics do**, because most mesh trains miss the droplet. Mid-q SAXS per
+flux (0.3–0.5 nm⁻¹, DAMNIT `agipd_saxs` / XGM × transmission, log₁₀, 2026-10-13):
+
+| Run | Off-droplet peak | Hit cluster | Between the two |
+|---|---|---|---|
+| r120 | −4.3 (725 of 833 trains) | −3.1 to −2.8 (≈ 52, 6 %) | ≈ 56, spread over 1.1 dex |
+| r318 | −5.15 (443 of 720) | −3.95 to −3.4, peak −3.8 (≈ 246, 34 %) | ≈ 31 |
+
+The off peak and the hit cluster are about 1.3 dex apart, ≈ 20× (run-triage §2.1: 14–28× on its
+probe runs). The trains between
+them are partial overlaps of the beam with the droplet's edge. Those are exactly the trains where
+surface scattering and refraction change the pixel pattern, so they belong to neither class.
+
+So, for every diagnostic built on these products — β_sf and the shape checks here, the XPCS SNR
+(`triage.xpcs.measure_run(select=)`), and the SVD, χ² and XGM scatter of
+`context/diagnostics.md`:
+
+```
+hits(run) -> trainIds
+    mesh run:   train_class == on            (run-triage §4.4: pooled log10(s_t / F_t) per
+                                              attenuator block, empty band; `edge` and `off`
+                                              excluded; `classification_ambiguous` reported, r307)
+    static run: every train except a droplet out of the beam — s_t / F_t below the run's own
+                running median by more than the §4.3 cut (5 robust σ)
+diagnostic(run) = diagnostic over hits(run) only; n_hits always reported beside it
+```
+
+- **The per-pixel weights of a mesh run come from its hit trains only**, never from the whole
+  run's window sums. The 10-train windows mix classes, so the weights are built from the windows
+  whose ten trains are all hits. Where too few exist, the unweighted estimator in the narrow
+  rings is used, and its w_cv² bias (§3) is reported with it.
+- The hit classifier is run-triage's T2 `classify`, specified there (§4.4) and not yet built.
+  **It comes before any mesh-run score** (user, 2026-10-13).
+
+## 6. Where it is computed — a separate pass (user, 2026-10-13)
+
+The user chose a separate pass. Ideally the histograms would come out of an XPCS worker, beside
+the correlations, but those are extra-speckle's, and building them into it is not in reach now.
+
+**Rejected: inside the `agipd_saxs` worker** (kept for the record). `integrate_frame` already
+holds the valid nonzero pixels (`keep`) and the pixels whose mask differs from the cell's base
+mask (`diff`). The histogram needs only `label[keep]` and `label[diff]`, plus each cell's base
+count per ring. Measured at 0.15–0.41 ms/frame (EPYC 75F3), against reads of 4.2–10.6 ms (data)
+and 8.2–14.8 ms (mask) per frame over the two nodes: 1–3 % of the read. A standalone sparse
+version that rescans the frame costs 2.5–4.6 ms; the dense one 10–15 ms. All three agree on
+every frame (0 mismatches over 2 × 2945 frames).
+
+**Chosen: a separate pass**, `analysis.photon_stats` plus a node script, one run per job,
+workers over trains:
+- **It reads `image.data` and `image.mask`**: ≈ 12–25 ms/frame, 1.6–3.2 h of CPU per 465 k-frame
+  run, ≈ 14–29 node-hours for the proposal on 36 cores. The mask is read rather than taken from
+  the stored per-cell base masks. The 0.022 % of pixels whose flags vary between trains can carry
+  counts, and in S2 one such pixel weighs as much as a speckle (data quality > speed).
+- **The histogram is the sparse form** (2.5–4.6 ms/frame), or the in-worker form if the pass
+  builds its own per-cell base masks.
+- **The pass's own geometry and masks** (`build_operator`, `build_static_bad`, `frame_bad`,
+  `cfg.mask_bits`); its compatibility with the integrator is checked with
+  `operator_differences`.
+- **Its own file and hash**: ring edges, pixel → ring labels, K. Frames are labelled from the
+  reader's coordinates (trainId, pulseId, cellId), never by position, so they can be matched to
+  the `agipd_saxs` frame table.
+- **It must run before the run's proc goes to tape**, and is independent of the bulk reprocess.
+- **Bulk extraction only with the user's OK**, after the per-run time and size are measured on a
+  few runs.
 
 - **Virtual CXI as the input** (S3, job 25288100, EPYC 9374F, branch
   `claude/s3-speed-tooling-b02c32` commit 90977be, its `context/performance.md` §3).
@@ -247,17 +299,21 @@ compare_ttcf(run, ...) -> β_sf / A per XPCS ROI, using triage.xpcs.measure_run
 
 | Phase | Content | Acceptance |
 |---|---|---|
-| **Q0** | this spec | the user's review |
-| **Q1** | the worker hook, the file and its hash, `run_photon_stats`, the reader; mock tests with a synthetic negative binomial of known β (and one with injected hot pixels) | β recovered within its σ from the mock; histograms equal the dense computation frame by frame; on r0423 and r0450 (20 trains) the file reproduces this probe's numbers exactly; worker cost ≤ 1 ms/frame on the DAMNIT partition |
-| **Q2** | β_sf along one droplet series (r443–452, or r423–426) against V/V₀, per 30 s slice | a trend with droplet volume measured or excluded at stated precision; the user decides whether β per slice replaces `REFERENCE_BETA` in the keep rule |
+| **Q0** | this spec | reviewed 2026-10-13 (§9) |
+| **Q1** | the separate pass (`analysis.photon_stats`, node script), its file and hash, the reader; mock tests with a synthetic negative binomial of known β, one with injected hot pixels, and one with a dropped train | β recovered within its σ from the mock; histograms equal the dense computation frame by frame; on r0423 and r0450 the first 20 trains reproduce this probe's numbers exactly; time and size per run measured on r0423, r0450 and one mesh run (r318) |
+| **H** | mesh hits: run-triage T2 `classify` (§4.4) and the static out-of-beam rule (§5.1); every diagnostic takes the hit trains | r318's classes match lowq_report (on only at Z ≈ 177.6, X 1.54–2.24); r307 reported ambiguous; the hit fraction of r120 and r318 within the 6–23 % of run-triage §2.1 |
+| **Q2** | β_sf along one droplet series against V/V₀, per 30 s slice, on hits only | a trend with droplet volume measured or excluded at stated precision. A diagnostic only: the keep rule keeps the fixed β (§9) |
 | **Q3** | β_sf against the TTCF intercept on the reference runs, with the TTCF rebuilt on our pixels | the 0.79–0.94 ratio on r0450 explained: geometry (our ROIs vs extra-speckle's), normalisation, or charge sharing |
 | **Q4** | the outlier rule for low-k̄ rings (pixels whose counts are impossible for the ring's k̄), and R3 per run as a flag | r0423 at 0.75–0.86 nm⁻¹ gives a β_sf within 2σ of its neighbours once the rule is applied |
 
-## 9. Decisions for the user
+## 9. Decisions (user, 2026-10-13)
 
-1. **Option W or P** (§6). W needs Q1 merged before the bulk reprocess.
-2. **Per frame or per train** (§5), and 4 ROIs or 17 rings.
-3. **Whether β_sf may ever replace the fixed β.** The probe hints that β depends on the droplet
-   (r0423 against r0450). The user ruled out a fitted contrast per run (2026-10-13). β_sf is
-   not fitted to dynamics, but it is per run. Q2 gives the evidence; the rule stays as it is
-   until then.
+1. **A separate pass**, not the `agipd_saxs` worker (§6). The ideal would be an XPCS worker
+   beside the correlations, but those are extra-speckle's.
+2. **Per frame** (§5). Rings or ROIs was left to whichever gives more realistic results: 17
+   rings, for the reason in §5.
+3. **The keep rule keeps the fixed β** (`REFERENCE_BETA`). β_sf is a diagnostic; the user is
+   satisfied with the visibility result as it stands, and may come back to it.
+4. **Mesh scans are not dropped.** Their diagnostics are computed on droplet hits only, which
+   needs the hit classifier first (§5.1, phase H).
+5. The photon energy is **9.04 keV**. The 9.000 readbacks are setpoints (§3).
