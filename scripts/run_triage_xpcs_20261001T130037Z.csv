@@ -1,0 +1,2 @@
+run,n_usable,n_slices,n_extractable_slices,extractable,best_snr,best_slice,best_roi_q_A,t_needed_s,seconds,sample,cls,optics
+423,3000,10,0,False,,,,inf,66.3,ferritin50_peg6k,static_droplet,XTD1:0010100000 XTD6:0010110000
