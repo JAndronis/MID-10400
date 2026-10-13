@@ -98,6 +98,17 @@ on 2026.5. The changelog's one numerical item, detector `orientation` as a pure 
 pixels, does not touch us: AGIPD (`extra_geom.to_pyfai_detector()`) and both JUNGFRAU PONIs
 carry orientation 3, the default, in both versions.
 
+**Merging the upgrade means a reprocess of every pass output.** S1's `is_complete` /
+`check_resumable` (branch `claude/s1-damnit-integrity-*`, open task 17b) keeps pyFAI in its
+version gate (`GATING_PACKAGES` in `analysis/common/writer.py`). The user decided this on
+2026-10-13, with the bit-identity evidence above in hand. So once pyFAI 2026.9 is on main:
+- every existing `agipd_saxs.h5` and `jungfrau_waxs_*.h5` reads "not complete";
+- resuming one raises `OperatorMismatch`;
+- every file must be reprocessed through `scripts/reprocess_safe.py`, never with `overwrite=True`.
+
+This is intended. Schedule the merge together with the bulk reprocess that already follows S2
+(merge order S1 → S3 → S2 → S4), not on its own.
+
 ### 2.2 Measurement
 
 `scripts/bench_pyfai.py`, job 25287833, max-cfel030 (AMD EPYC 9374F), 2026-10-13. One process,
@@ -198,6 +209,14 @@ rebuilt on the current node refuses a valid file whenever DAMNIT lands on a diff
 `allcpu` mixes them. Compare the sparse matrix and q exactly, and Ω to a tolerance, rather than
 the digest. The worker-side check (`worker.init` against the parent's sha) is safe: both are
 built on the same node.
+
+S1 adopted this on 2026-10-13 (branch `claude/s1-damnit-integrity-*`, commit 7ebeaa8):
+- **How the check compares now:** AGIPD `coef`/`bins`/`indptr`/`q` exactly and `omega` to
+  rtol 1e-12; JF mask exactly, `q`/`omega` to rtol 1e-6.
+- **Reproduced** on a Gold 6126 (job 25287937).
+- **How common it is:** a status over every stored file found 119 of 459 AGIPD files, and 140
+  of 418 per JUNGFRAU detector, written on the other CPU class. All are complete under the new
+  check.
 
 ---
 
