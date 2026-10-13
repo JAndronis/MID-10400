@@ -115,6 +115,32 @@ sane option; for a fixed mask, the manual route is worth benchmarking.
    `analysis_helpers.py`.)
 6. `n_angular_samples` should divide the angular sampling cleanly; the mask threshold
    `1/(2·n_phi)` assumes the mask CCF only takes multiples of `1/n_phi`.
+
+### 2.4 Lessons from p010646's XCCA (fxs, 2026-10) — for open task 11
+
+From `../transfer_context/10_fxs_specifics.md` (p010646 measurements, compared here 2026-10-13).
+They hold whichever toolbox task 11 ends up using:
+
+- **A neighbour correction removes real signal as well as artefacts.** fxs subtracts, per
+  frame, the correlation between the frame and the same pulse/cell of the adjacent trains.
+  That removes detector and static-sample correlations, but also everything that persists
+  from train to train: a levitated-droplet crystal signal fell from |C₂| ≈ 0.02 to 3e-4. Our
+  central question is a *slowly growing* pre-Bragg order in one persistent droplet, which is
+  exactly what such a correction subtracts. Look at both the corrected and the uncorrected
+  correlation, never the corrected one alone.
+- **The photon self-correlation spike at Δχ = 0** (~1/photons per bin) dominates sparse frames
+  and flattens |Cₙ|. Zero |Δχ| ≤ ~1.5° before transforming, and bin in q (~0.02 nm⁻¹ there)
+  first: single radial bins are noise-dominated.
+- **The observable is the Fourier transform of the mean correlation.** The mean of the per-frame
+  |Cₙ| is biased upward by noise.
+- **Masks differ per memory cell** on AGIPD; a static mask alone left partly masked regions that
+  looked like multi-photon events in 0.3–10 % of frames. Our SAXS pass already uses each
+  frame's own mask (`saxs/sparse.py`), and an XCCA pass must too.
+- **Frame identity:** a packed `train << 24 | pulse` shot ID is exact as uint64 but not as
+  float64 (> 2⁵³); one tool's float64 padding collapsed 9568 JUNGFRAU frames into 1794 IDs.
+  Match frames on `(trainId, pulseId)` or `(trainId, cellId)`.
+- A neighbour-corrected average loses the first and last train, and a frame excluded by hand
+  must take its neighbours with it.
 ---
  
 ## 3. Pulse patterns — `extra.components.pulses`

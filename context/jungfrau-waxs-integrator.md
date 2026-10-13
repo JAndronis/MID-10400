@@ -38,11 +38,12 @@ itself a finding.
 | Units | **keV** — single-photon peak 8.87 | **keV** — peak 9.12 | 9.04 keV expected; charge sharing biases a photon peak low. The Poisson term is in keV, not counts (§3 D3) |
 | Layout | `(train, cell, 512, 1024)`, 16 memory cells per train, fixed | same | rectangular, not AGIPD's ragged frame table |
 | **Lit cells** | ~~0–7~~ **`{0…6, 15}`** | ~~0–7~~ **`{0…6, 15}`** | **Corrected — the `0–7` was array *positions*, not cell ids (§6 O4, CLAUDE.md pitfall 4).** Lit cells 42–53 % of pixels > 4.5 keV; dark cells ≤ 0.004 %. Integrating all 16 halves I(q) (§3 D4). And this set holds for the r0379–r0500 science block only: the proposal used **four** readout patterns (§6 O4) |
-| Lit / dark mean, kept region | +5.67 / −0.16 keV | +5.32 / −0.00 keV | — |
-| Readout σ, dark cells, kept region | **0.323 keV** | **0.317 keV** | the noise floor of the error model, and the two agree. Measured per run (§3 D3); a run that reads all 16 cells has no dark cell and falls back to a per-detector median |
+| Lit / dark mean, kept region | +5.67 / −0.16 keV | +5.32 / −0.00 keV | **The dark mean is the zero level the data still carry** (CLAUDE.md pitfall 23): −0.16 keV on jf1 is ~3 % of its lit mean, and it is not the same on jf2. p010646 measured such levels jumping 0.13–0.16 keV rms train to train per ASIC; one mean per run says nothing about that. Remedy: photonise per ASIC (CLAUDE.md open task 18) |
+| Readout σ, dark cells, kept region | **0.323 keV** | **0.317 keV** | the noise floor of the error model, and the two agree. **What it contains (2026-10-13):** one std over pixel × dark cell × train around one global mean, so pixel offsets, cell offsets, any common mode and any leftover in cell 7 (straight after the last lit cell) all count as "read noise"; it is not pure pixel noise. Measured per run (§3 D3); a run that reads all 16 cells has no dark cell and falls back to a per-detector median |
 | Exactly zero, lit | 0.002 % | 0.004 % | **dense**; no sparsity to exploit (§3 D1) |
 | Negative, lit, kept region | 20.8 % | 16.2 % | 45.6 % / 31.8 % over the whole detector. Either way the "no negative counts" data check is wrong here |
 | Dynamic mask set | 1.08 % | 1.08 % | same masking design as AGIPD |
+| Gain settings | `gainMode` **dynamic**, `settings` gain0, `storageCellStart` 15 | same | raw `MID_EXP_JF500K{1,2}/DET/CONTROL` run values, r0423, checked 2026-10-13. `storageCellStart` 15 is why cell 15 is acquired first (15, 0, 1, …). Dynamic gain is why gain-switched pixels exist at all (CLAUDE.md pitfall 24, open task 16) |
 | Bits present | {0, 1, 21, 22} | {0, 1, 21, 22} | 0 `OFFSET_OUT_OF_THRESHOLD`, 1 `NOISE_OUT_OF_THRESHOLD`, 21 `WRONG_GAIN_VALUE`, 22 `NON_STANDARD_SIZE`. Different from AGIPD's {0,1,7,8,9,12,13}; 21 is new |
 | Bit 22 `NON_STANDARD_SIZE` | set, 0.97 % | set, 0.97 % | unlike AGIPD, where it is never set — so **no separate seam mask is needed** (§3 D5) |
 | **Extreme pixels `data.mask` misses** | 10, **all dynamically flagged** | **15, none flagged** | up to ±1.8e5 keV, present in *every* cell. `data.mask` alone is not sufficient on jf2 (§3 D6) |
@@ -569,6 +570,15 @@ path. The parent still pins `EXTRA_NUM_THREADS=1` before the pool exists.
   What does: **r0426**, where Bragg peaks make a q-axis error shift peak positions while
   polarisation does not (§6 O5's featureless blind spot, in the one case where it lifts); and
   applying the polarisation correction to see whether χ² falls.
+
+  **A third candidate (2026-10-13): the uncorrected zero level** (CLAUDE.md pitfall 23). The dark
+  cells average −0.16 keV on jf1 and −0.00 on jf2 (§2). An additive offset c in keV adds c/I(q) to
+  a detector's relative intensity — a shape difference that grows where I(q) falls — and also moves
+  the fitted factor; neither the factor nor `residual_slope_per_nm` separates it from candidates 1
+  and 2. Photonising both detectors (CLAUDE.md open task 18) removes it, so re-measure the factor,
+  χ²ᵣ and residual on r0423 after that, before attributing the 0.74 % to polarisation. The claimed
+  0.10 % error also assumed independent pixels: a common mode shared across an ASIC does not
+  average down over a bin, so the true per-frame error of keV sums is larger than D3's model says.
 - **O6 — Closed 2026-09-13 by decision, not by measurement.** AGIPD covers 0.077–1.067 nm⁻¹ and
   JUNGFRAU populates 9.8–23.7, so the gap is 1.07–9.8 nm⁻¹ with no overlap to cross-normalise
   against. No combined SAXS+WAXS curve is planned at any point, so the question does not arise and

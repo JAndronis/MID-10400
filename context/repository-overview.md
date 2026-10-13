@@ -38,7 +38,7 @@ run and shows them as a table with previews.
 | Photon energy | 9.04 keV — set in both passes' configs, and what fixes the wavelength and so the q scale |
 | SAXS detector | AGIPD-1M, 16 modules of 512×128, at 7.531 m; q ≈ 0.08–1.07 nm⁻¹ |
 | WAXS detectors | two JUNGFRAU-500K ("jf1", "jf2"), each 512×1024, at 232 mm; after masking jf1 covers q ≈ 11.5–23.7 nm⁻¹ and jf2 ≈ 9.8–18.5 nm⁻¹ |
-| Pulse structure | ~1.128 MHz; the pattern varies per run (155 and 350 pulses/train both occur) |
+| Pulse structure | 2.25 MHz on r0423 (pulse-ID step 2, checked 2026-10-13; this table said ~1.128 MHz before); the pattern varies per run (155 and 350 pulses/train both occur) |
 | A long run | ~3000 trains at 155 AGIPD frames per train ⇒ ~465 000 frames to integrate |
 | AGIPD proc data | `int16` **photon counts**, ~99 % zeros (0.7–1.8 % of pixels non-zero per frame) |
 | JUNGFRAU proc data | `float32` **keV**, dense; 16 memory cells per train, of which typically 8 are lit |
