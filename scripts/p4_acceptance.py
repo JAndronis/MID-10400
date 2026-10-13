@@ -26,9 +26,12 @@ is gate A's job. Both use ``selftest.reference_frame``, which is the "engine
 with explicit ``variance``" the phase asks for — never ``ErrorModel.POISSON``
 (CLAUDE.md pitfall 2).
 
-Usage on a DAMNIT-partition node, from the uv environment:
+Usage, from the uv environment: submitted as one job per run to a
+DAMNIT-partition node (``--dry-run`` prints the batch script), or ``--local``
+on a node you are already on:
 
-    python scripts/p4_acceptance.py --proposal 10400 --run 423 --workers 36
+    python scripts/p4_acceptance.py --proposal 10400 --run 423 -w 36
+    python scripts/p4_acceptance.py --run 423 -w 36 --local
 
 To check an output file that already exists, without reintegrating:
 
@@ -45,7 +48,7 @@ from __future__ import annotations
 # Before numpy, pyFAI or EXtra-data are imported. This process does the dense
 # reference itself, and a multi-threaded BLAS here would make the stage timings
 # in gate C describe a machine nobody will run the real pass on.
-from _common import report_header, write_report  # noqa: E402
+from _common import add_job_args, dispatch, report_header, write_report  # noqa: E402
 
 from analysis.threadenv import set_thread_env
 
@@ -814,10 +817,9 @@ def run_sums_only(cfg: AgipdSaxsConfig, sums_path: Path, run_dir: str | None) ->
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--proposal", type=int, default=10400)
-    parser.add_argument("--run", type=int, required=True)
-    parser.add_argument(
-        "--workers", type=int, default=36, help="P4 asks for 36 (one per physical core)"
-    )
+    parser.add_argument("--run", type=int, nargs="+", required=True)
+    # P4 asks for 36 workers, one per physical core
+    add_job_args(parser, workers=P4_WORKERS, time="01:00:00")
     parser.add_argument("--output", type=Path, default=None)
     parser.add_argument(
         "--run-dir",
@@ -850,11 +852,27 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "window-sums file, and only gate E and the timing are graded",
     )
     parser.add_argument("--json", type=Path, default=None)
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    one_run_only = [
+        name for name in ("output", "run_dir", "json") if getattr(args, name)
+    ]
+    if len(args.run) > 1 and one_run_only:
+        parser.error(f"--{one_run_only[0].replace('_', '-')} names one run's file")
+    return args
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    return dispatch(
+        args,
+        args.run,
+        lambda run: run_one(argparse.Namespace(**vars(args) | {"run": run})),
+        argv=argv,
+    )
+
+
+def run_one(args: argparse.Namespace) -> int:
+    """P4 for the one run in ``args.run``."""
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
