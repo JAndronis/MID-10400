@@ -327,3 +327,31 @@ called):
   An exact-sha256 gate would have called about a quarter of the archive incomplete.
 - **The sha256 shortcut.** When the stored sha256 equals the one built on the checking node, the
   arrays are not read back (they are covered by it). Otherwise they are read and compared.
+
+## 8. Acceptance (2026-10-13)
+
+| Gate | Result |
+|---|---|
+| pytest, ruff | 654 passed, 12 skipped; ruff clean on every file touched. `src/analysis/utils.py` carries 27 ruff findings that were already on `main` and are untouched here |
+| Mock tests | lock conflict, stale-lock takeover recorded in provenance, early return with inode and mtime unchanged and no npz or lock left, `WORKER_ERROR` retry, resume refused after a pyFAI or operator change, a 1-ULP `omega` from the other node class still complete — `tests/common/test_lock.py`, `tests/saxs/test_integrity.py`, `tests/waxs/test_waxs_integrity.py` |
+| ctxrunner on the reconciled context | evaluates, 37 variables (§5) |
+| **Real run** | below |
+
+**The real-run test** (Slurm job 25293843, max-cssb006, Gold 6126, AVX-512):
+- **What ran.** DAMNIT's own interpreter with `PYTHONPATH=<S1 worktree>/src` ran `ctxrunner exec
+  10400 423 all --cluster-job --var agipd_iq_overview` on a scratch copy of the reconciled
+  context. ctxrunner pulled in `agipd_saxs` as a dependency.
+- **The pre-check.** The worktree's `analysis` was the one imported, and r0423 was complete, judged
+  through the array comparison because the file was written on AVX2.
+- **What happened.** `agipd_saxs` was "complete; answered from the file, nothing written" (13.9 s),
+  and the overview took 3.4 s; 59 s wall in all, 3.6 GB peak RSS.
+- **The verdict: pass.** `agipd_saxs.h5`, `operator.npz`, `masks.npz` and `agipd_pixel_sums.h5`
+  kept their inode, mtime, size and sha256. No file appeared, no lock was left, and the fragment
+  holds both variables with no `.errors`.
+- **Where.** Probe, job script and log: `scratch/slurm_logs/s1_integrity/phaseD/`. The scratch copy
+  wrote only its own `extracted_data/`, never `runs.sqlite`.
+
+**Left for after the merge** (needs the user's OK):
+- `python scripts/install_context.py --install --accept-live 44561ba487b3`, provided the live files
+  have not changed since the 2026-10-07 state that id names;
+- then `reprocess_safe.py` for the bulk reprocess, after S3 and S2.

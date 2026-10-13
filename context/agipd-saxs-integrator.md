@@ -359,8 +359,11 @@ and compressed with gzip level 1.
 Size: ≈ 2.8 GB for r0423 at npt = 500. The frame arrays stay `(n, npt)`: I4 is decided as
 option (a), a static pixel mask, so there are no per-region sums.
 
-**Resume.** A block is complete when all its frames have status ≠ NOT_PROCESSED. Rerunning with
-the same config hash processes only incomplete blocks.
+**Resume.** A block is complete when none of its frames is `NOT_PROCESSED` or `WORKER_ERROR`
+(open task 17, 2026-10-13; until then a `WORKER_ERROR` stayed until its rows were reset by hand).
+Rerunning with the same config hash processes only incomplete blocks. A complete file is answered
+from without writing, the file is locked while written, and a file integrated by another operator or
+pyFAI is refused rather than resumed — see `context/damnit-integrity.md`.
 
 ---
 
@@ -701,8 +704,8 @@ so removing one is a decision made by hand.
 plus those touching an unwritten window; a block wanted only for its windows runs with integration
 skipped (read and sum, no frame-table write). A killed job leaves its open windows unwritten, and a
 rerun rebuilds them from scratch, never half-filled. A failed block's trains are recorded as
-`WORKER_ERROR`, the window is written and the run raises `IncompleteRun`; but unlike the frame
-table, where `WORKER_ERROR` stays until the rows are reset, such a window is **not** final. A worker
+`WORKER_ERROR`, the window is written and the run raises `IncompleteRun`; but, as in the frame
+table since open task 17, such a window is **not** final. A worker
 error says nothing about the data, so the next run reopens every window holding one and rebuilds it
 from scratch (sums only for blocks the frame table already holds). That is also how a backfill
 retries a transient read failure: run it again. `DATA_CHECK_FAILED` and `LABEL_MISMATCH` are
