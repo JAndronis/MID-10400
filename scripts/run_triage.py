@@ -182,6 +182,8 @@ def _measure(job):
     try:
         optics = crl_state(ed.open_run(proposal, run, data="raw"))
         m = measure_run(run, Path(damnit_path), Path(scratch_path), rep_rate_hz)
+        if m is None:  # recorded, not dropped: a run asked for must be accounted for
+            return run, optics, None, "no xpcs_ttcf matrix in the DAMNIT file", 0.0
         return run, optics, m, None, time.perf_counter() - t0
     except Exception as error:  # noqa: BLE001 - recorded per run, never fatal
         return run, None, None, f"{type(error).__name__}: {error}", 0.0

@@ -498,7 +498,13 @@ def measure_beta(measurements: list[RunMeasurement]) -> dict[int, Beta]:
 
 
 def summarise(m: RunMeasurement, beta: dict[int, Beta], snr_min: float = SNR_MIN):
-    """The run's §4.6 verdict: per-slice SNR over plain ROIs, best slice, run SNR."""
+    """The run's §4.6 verdict: per-slice SNR over plain ROIs, best slice, run SNR.
+
+    ``extractable`` is None, not False, when no slice has a finite SNR in any plain
+    ROI — β unknown, or no usable train. An unknown SNR is not a low one: the
+    2026-10-01 report measured r423 alone, no run fixed β, and every run read as
+    not extractable.
+    """
     plain = [r for r, k in enumerate(m.kinds) if k == "plain"]
     b = np.array([beta[r].value for r in range(len(m.kinds))])
     per_roi_run = snr(b, m.kbar, m.npix, m.n_frames, m.phi, m.n_usable)
@@ -525,7 +531,7 @@ def summarise(m: RunMeasurement, beta: dict[int, Beta], snr_min: float = SNR_MIN
         "n_usable": m.n_usable,
         "n_slices": len(rows),
         "n_extractable_slices": int(n_ext),
-        "extractable": bool(n_ext >= 1),
+        "extractable": bool(n_ext >= 1) if finite else None,
         "best_snr": best_snr,
         "best_slice": top["slice"] if top else None,
         "best_roi_q_A": float(m.roi_q_A[top["best_roi"]]) if top else None,

@@ -4,8 +4,11 @@ Context file for CLAUDE.md open task 20 (session S4, 2026-10-13). Read `CLAUDE.m
 the XPCS keep rule is `context/run-triage.md` §4.6, the photon-statistics quality check
 `context/xpcs-quality.md`.
 
-**State:** phase A (`analysis.diagnostics.frames`, `.curves`) done 2026-10-13: 22 mock
-tests, ruff clean, smoke-tested on r0423 and r0426. Phases B–F follow the plan below.
+**State (2026-10-13):**
+- Phase A (`analysis.diagnostics.frames`, `.curves`) is done: 22 mock tests, ruff clean,
+  smoke-tested on r0423 and r0426.
+- Phase B (`analysis.diagnostics.xpcs`, a measured β) is done: §4.
+- Phases C–F are to come.
 
 ---
 
@@ -89,3 +92,52 @@ AGIPD holds 465 000 OK frames, and the plan has one `NO_FRAMES` train with no ro
 χ² against the median: median 61, p99 483. Both are dominated by the evaporation drift, which is
 a real change of shape and level. Read them per slice, or against a running median, before
 looking for outliers.
+
+---
+
+## 4. Per-run XPCS SNR (phase B)
+
+`xpcs.xpcs_snr(run, load_beta(report))` is `triage.xpcs.measure_run` + `summarise` for one run,
+with β read from a triage XPCS report. It returns `summary` (the verdict), `slices` (SNR per
+ROI per 30 s slice) and `rois` (k̄, N_pix, φ, ρ, the fit, the β used). An unknown β gives SNR
+NaN and `extractable` None. The same change was made in `triage.xpcs.summarise`, and
+`scripts/run_triage.py` now records a run without a TTCF as an error instead of dropping it.
+
+**Why the 2026-10-01 report had β = NaN.**
+- The report measured r423 alone; r450 and r400 were absent.
+- r423's fits are not β-eligible: A/σ_A is 3.1 (< 10), and 1/(2Γ) = 0.53 µs is less than
+  5τ₁ = 2.2 µs.
+- So no run fixed β, every SNR was NaN, and `summarise` turned that into
+  `extractable: False`.
+
+**β measured 2026-10-13** (`scripts/run_triage_xpcs_20261013T141114Z.json`;
+`run_triage.py --phase xpcs` on its 11 acceptance runs; one allcpu node, 8 workers, 283 s,
+job 25287690):
+
+| ROI [Å⁻¹] | β (median A) | n eligible | p16–p84 |
+|---|---|---|---|
+| 0.029 | 0.0228 | 7 | 0.015–0.050 |
+| 0.040 | 0.0182 | 8 | 0.009–0.040 |
+| 0.051 | 0.0151 | 8 | 0.008–0.030 |
+| 0.0805 | 0.0137 | 6 | 0.008–0.019 |
+
+- **Every acceptance run is extractable.** The best 30 s slice reaches SNR 8.9 (r370) to 49.8
+  (r441). r423 reaches 15, and 10 of its 10 slices pass.
+- **The DAMNIT g2 cross-check passes** (no ROI outside z = 3.8).
+- **The report's `passed` is False, on the noise check alone.** ρ (jackknife σ / analytical σ)
+  is 0.9–1.05 on the runs with moderate SNR (r423, r425, r426, r370, r410). It is 1.5–3.5 on the
+  high-SNR runs: r400, r441, r450, r451, r495 and r398. The likely reading is that at SNR ~100,
+  real block-to-block change of g2 along the run is resolved. The contiguous-block jackknife is
+  built to show it (it inflates σ rather than hiding drift). That makes the analytical SNR
+  optimistic by ρ on exactly the runs that pass by a factor of 10 or more, so no verdict here
+  changes. Whether the triage's tolerance should apply only where the SNR is moderate is a
+  decision for the user.
+- **β is not one optical number.** The eligible intercepts span a factor of ~3 per ROI: late
+  PEG 6K runs (r450, r451, r495) give A ≈ 0.05 at 0.029 Å⁻¹; r398 and r400 give 0.018–0.023;
+  r425 and r441 give 0.008–0.016. A is β times the fraction of contrast that survives the first
+  lag. Decorrelation faster than τ₁ (advection, CLAUDE.md firm boundary 3) lowers A without
+  showing as dynamics. So the median is an effective contrast, and the SNR inherits its factor-2
+  uncertainty.
+- **An SNR pass does not mean a resolved decay.** The criterion is the SNR of one g2 point at
+  τ → 0 (user, 2026-10-01). r423 passes, yet its fitted decay at 0.029 Å⁻¹ sits at about one
+  lag (0.53 µs), so its dynamics are mostly faster than the window.

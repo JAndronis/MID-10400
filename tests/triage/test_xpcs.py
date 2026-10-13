@@ -15,6 +15,7 @@ from triage_fakes import FIRST_TRAIN, REP_RATE_HZ, write_xpcs_run
 
 from analysis.triage.xpcs import (
     OFF_SUBTRACTION,
+    Beta,
     DecayFit,
     QGridMismatch,
     beta_eligible,
@@ -135,6 +136,16 @@ def test_snr_is_the_formula(synthetic):
     assert s["n_slices"] == 1  # 200 trains: one part-slice of >= 150
     assert s["extractable"] == (s["best_snr"] >= 3)
     assert s["t_needed_s"] == pytest.approx(30.0 * (3 / s["best_snr"]) ** 2)
+
+
+def test_an_unknown_beta_is_not_a_verdict(synthetic):
+    _, m = synthetic
+    nan = float("nan")
+    unknown = {r: Beta(nan, 0, nan, nan, ()) for r in range(len(m.kinds))}
+    s = summarise(m, unknown)
+    assert s["extractable"] is None
+    assert s["n_extractable_slices"] == 0
+    assert np.isnan(s["best_snr"])
 
 
 def test_snr_scales_with_the_square_root_of_trains_and_linearly_with_kbar():
