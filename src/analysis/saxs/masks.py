@@ -35,6 +35,7 @@ from pathlib import Path
 import numpy as np
 from extra_geom import agipd_asic_seams
 
+from analysis.common.arrays import atomic_savez
 from analysis.common.cpu import file_sha256
 from analysis.common.masks import (
     MaskSource,
@@ -294,10 +295,12 @@ def _base_masks_sha256(
 
 # ── persistence ───────────────────────────────────────────────────────────────
 def save_masks(bm: BaseMasks, path: str | Path) -> Path:
-    """Write base masks to ``path`` as an ``.npz``, boolean arrays packed."""
+    """Write base masks to ``path`` as an ``.npz``, boolean arrays packed.
+
+    Atomically, for the same reason as :func:`analysis.saxs.operator.save_operator`.
+    """
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez(
+    atomic_savez(
         path,
         cells=bm.cells,
         base_bad_packed=np.packbits(bm.base_bad, axis=-1),

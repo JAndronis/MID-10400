@@ -7,6 +7,10 @@ XGM, transmission or background.
 
 The two detectors never meet here: each gets its own config, its own pass and
 its own file, and they are combined only at the plot.
+
+A run whose file is already complete is answered from it and nothing is written
+(CLAUDE.md pitfall 26); otherwise the pass holds a lock on the file for as long
+as it writes it.
 """
 
 from __future__ import annotations
@@ -18,6 +22,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import h5py
 import numpy as np
 
 from analysis.common.cpu import (
@@ -25,19 +30,25 @@ from analysis.common.cpu import (
     phase,
     set_thread_env,
 )
+from analysis.common.lock import OutputLock, lock_path, output_lock
 from analysis.common.masks import frame_bad
 from analysis.common.plan import evenly_spaced
 from analysis.common.run import base_provenance, fan_out
 from analysis.common.status import FrameStatus
-from analysis.common.writer import IncompleteRun
+from analysis.common.writer import IncompleteRun, pooled_per_train, status_counts
 from analysis.waxs import worker as worker_module
-from analysis.waxs.cells import CellAccumulator, CellClassification
+from analysis.waxs.cells import (
+    CellAccumulator,
+    CellClassification,
+    UnexpectedLitCells,
+)
+from analysis.waxs.complete import is_complete
 from analysis.waxs.config import CELLS_PER_TRAIN, JungfrauWaxsConfig
 from analysis.waxs.integrate import ErrorModel
 from analysis.waxs.operator import WaxsOperator, build_operator
 from analysis.waxs.plan import build_plan, open_detector
 from analysis.waxs.selftest import run_selftest
-from analysis.waxs.writer import JungfrauWaxsWriter
+from analysis.waxs.writer import JungfrauWaxsWriter, per_cell
 
 __all__ = ["REDUCERS", "run_jungfrau_waxs"]
 
@@ -114,6 +125,14 @@ def run_jungfrau_waxs(
         default — see :func:`_blocking` and ``cfg.allow_data_check_failures`` —
         but it is logged and recorded either way. The output file is written and
         closed first whatever happens, so the ledger explains it.
+    :raises analysis.common.lock.OutputBusy: another process is writing the
+        file.
+    :raises analysis.common.writer.OperatorMismatch: the file was integrated by
+        another operator or pyFAI, so it cannot be resumed.
+
+    A file that is already complete (:func:`analysis.waxs.complete.is_complete`)
+    is answered from, with nothing written, unless ``cfg.overwrite``; it raises
+    on the same terms as a full pass would.
     """
     if reduce not in REDUCERS:
         raise ValueError(f"reduce must be one of {REDUCERS}, got {reduce!r}")
@@ -122,16 +141,108 @@ def run_jungfrau_waxs(
     set_thread_env()
     started_at = time.time()
     started = time.perf_counter()
+    output_path = Path(output_path) if output_path is not None else cfg.output_file
 
+    # The operator first: it reads only the PONI and the static mask, and the
+    # completeness check needs its sha256.
+    setup: dict[str, float] = {}
+    with phase(setup, "operator"):
+        op, ai = build_operator(cfg, poni_file)
+
+    # Skipped while a lock exists, since the file may be mid-write; the check
+    # under the lock below then decides.
+    if not cfg.overwrite and not lock_path(output_path).exists():
+        if is_complete(output_path, cfg, operator_sha256=op.sha256):
+            return _from_file(cfg, output_path, reduce)
+    with output_lock(output_path) as lock:
+        if not cfg.overwrite:
+            verdict = is_complete(output_path, cfg, operator_sha256=op.sha256)
+            if verdict:
+                return _from_file(cfg, output_path, reduce)
+            log.info("%s", verdict)
+        # Before the cells and the self-test, so a file that can only be
+        # reprocessed is refused at once.
+        JungfrauWaxsWriter.check_resumable(cfg, output_path, operator_sha256=op.sha256)
+        return _integrate(
+            cfg,
+            op,
+            ai,
+            dc=dc,
+            run_dir=run_dir,
+            output_path=output_path,
+            pool_factory=pool_factory,
+            reduce=reduce,
+            setup=setup,
+            started_at=started_at,
+            started=started,
+            lock=lock,
+        )
+
+
+def _from_file(cfg: JungfrauWaxsConfig, path: Path, reduce: str) -> Any:
+    """Answer a complete file exactly as the pass would have, read-only.
+
+    The pinned lit-cell set and the blocking statuses are checked on the same
+    terms as at the end of a pass, so pinning ``expected_lit_cells`` for a
+    reprocess still refuses a run whose stored pattern differs.
+    """
+    with h5py.File(path, "r") as handle:
+        summary = status_counts(handle["frames/status"][:], nonzero_only=True)
+        lit = tuple(int(cell) for cell in handle["cells/lit"][:])
+        data_check = json.loads(handle["provenance"].attrs.get("data_check", "{}"))
+        reduced = None
+        if reduce == "pooled":
+            reduced = pooled_per_train(handle)
+        elif reduce == "per_cell":
+            reduced = per_cell(handle)
+    if cfg.expected_lit_cells is not None and lit != tuple(cfg.expected_lit_cells):
+        raise UnexpectedLitCells(
+            f"{path} holds cells {list(lit)}, the config expects "
+            f"{list(cfg.expected_lit_cells)}"
+        )
+    log.info(
+        "r%d %s: %s is complete; answered from the file, nothing written",
+        cfg.run,
+        cfg.detector,
+        path,
+    )
+    if data_check:
+        log.warning(
+            "r%d %s: the stored file records value-check exclusions (%s)",
+            cfg.run,
+            cfg.detector,
+            json.dumps(data_check, sort_keys=True),
+        )
+    blocking = _blocking(cfg, summary)
+    if blocking and not cfg.allow_incomplete:
+        raise IncompleteRun(
+            f"not every frame reached OK: {summary}; blocking {blocking}."
+        )
+    return reduced
+
+
+def _integrate(
+    cfg: JungfrauWaxsConfig,
+    op: WaxsOperator,
+    ai: Any,
+    *,
+    dc: Any,
+    run_dir: Path | None,
+    output_path: Path,
+    pool_factory: Callable[..., Any] | None,
+    reduce: str,
+    setup: dict[str, float],
+    started_at: float,
+    started: float,
+    lock: OutputLock,
+) -> Any:
+    """The pass itself, run under the lock :func:`run_jungfrau_waxs` holds."""
     opened_here = dc is None
     if opened_here:
         from extra_data import open_run
 
         dc = open_run(cfg.proposal, cfg.run, data="proc")
 
-    setup: dict[str, float] = {}
-    with phase(setup, "operator"):
-        op, ai = build_operator(cfg, poni_file)
     with phase(setup, "detector"):
         det = open_detector(cfg, dc)
     with phase(setup, "cells"):
@@ -153,7 +264,9 @@ def run_jungfrau_waxs(
     with phase(setup, "selftest"):
         report = _run_selftest(cfg, op, ai, model, classification, det, plan)
 
-    with JungfrauWaxsWriter.open_or_create(cfg, plan, output_path) as out:
+    with JungfrauWaxsWriter.open_or_create(
+        cfg, plan, output_path, operator_sha256=op.sha256
+    ) as out:
         out.store_operator(op)
         out.store_cells(classification, model, sampled)
         todo = [b for b in plan.blocks if not out.block_complete(b)]
@@ -218,6 +331,7 @@ def run_jungfrau_waxs(
                 },
                 "data_check": out.data_check_summary(),
             }
+            | lock.provenance()
         )
         summary = out.status_summary()
         data_check = out.data_check_summary()

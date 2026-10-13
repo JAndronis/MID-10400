@@ -310,9 +310,10 @@ def test_a_window_that_lost_trains_to_a_worker_error_is_rebuilt(
 
     Block 1 (trains 10002, 10003) fails once. With 3-train windows it holds a
     train of each window, so the rerun reads every block; with 1-train windows
-    only its own. The frame table keeps its WORKER_ERROR either way — that one
-    stays until its rows are reset — so nothing is integrated and the run is
-    still incomplete, but the window sums come out whole.
+    only its own. Either way the rerun integrates block 1 alone — the others are
+    final in the frame table and are read for their windows only — and both
+    files come out whole. Until open task 17 the frame table kept its
+    WORKER_ERROR until the rows were reset by hand.
     """
     run, dc = mock_run_factory()
     real_process, real_integrate = worker.process_block, worker.integrate_frame
@@ -335,11 +336,16 @@ def test_a_window_that_lost_trains_to_a_worker_error_is_rebuilt(
         "integrate_frame",
         lambda *a: integrated.append(1) or real_integrate(*a),
     )
-    with pytest.raises(IncompleteRun, match="'frames'.*WORKER_ERROR"):
-        run_pass(run_cfg, geom, (run, dc), tmp_path, pixel_sum_trains=window)
+    run_pass(run_cfg, geom, (run, dc), tmp_path, pixel_sum_trains=window)
 
     assert sorted(seen) == reread
-    assert not integrated
+    with h5py.File(tmp_path / "out.h5", "r") as frames:
+        assert (frames["frames/status"][:] == FrameStatus.OK).all()
+        retried = np.isin(frames["frames/trainId"][:], [10002, 10003])
+        assert len(integrated) == int(retried.sum())
+        provenance = frames["provenance"].attrs
+        assert "block_errors" not in provenance
+        assert "transient" in provenance["block_errors_resolved"]
     path = tmp_path / FILE_NAME
     with h5py.File(path, "r") as handle:
         assert (handle["trains/status"][:] == FrameStatus.OK).all()
@@ -355,7 +361,7 @@ def test_a_window_that_lost_trains_to_a_worker_error_is_rebuilt(
 def test_resetting_a_failed_block_completes_frames_and_windows(
     run_cfg, geom, mock_run_factory, tmp_path, monkeypatch
 ):
-    """The frame table's retry — reset the rows, rerun — repairs both files."""
+    """A plain rerun repairs both files; resetting the rows is no longer needed."""
     run_dc = mock_run_factory()
     real = worker.process_block
     monkeypatch.setattr(
@@ -365,13 +371,13 @@ def test_resetting_a_failed_block_completes_frames_and_windows(
     )
     with pytest.raises(IncompleteRun):
         run_pass(run_cfg, geom, run_dc, tmp_path, pixel_sum_trains=3)
-    with h5py.File(tmp_path / "out.h5", "r+") as frames:
-        frames["frames/status"][0:6] = FrameStatus.NOT_PROCESSED
 
     monkeypatch.setattr(worker, "process_block", real)
     run_pass(run_cfg, geom, run_dc, tmp_path, pixel_sum_trains=3)  # no raise
     with h5py.File(tmp_path / FILE_NAME, "r") as handle:
         assert (handle["trains/status"][:] == FrameStatus.OK).all()
+    with h5py.File(tmp_path / "out.h5", "r") as frames:
+        assert (frames["frames/status"][:] == FrameStatus.OK).all()
 
 
 # ── resume ────────────────────────────────────────────────────────────────────

@@ -9,6 +9,11 @@ Two files come out of one read: the frame table (``agipd_saxs.h5``) and the
 per-pixel window sums (``agipd_pixel_sums.h5``, context file §15).
 :func:`run_pixel_sums` writes only the second, for runs whose frame table
 already exists.
+
+Both entry points first ask whether their output is already complete, and if it
+is, answer from the file and write nothing (CLAUDE.md pitfall 26). Otherwise they
+hold a lock on every file they write for as long as they write it, so a second
+DAMNIT job on the same run refuses rather than writing alongside.
 """
 
 from __future__ import annotations
@@ -23,22 +28,26 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import h5py
 import numpy as np
 
+from analysis.common.complete import Completeness
 from analysis.common.cpu import file_sha256, package_versions, phase, set_thread_env
+from analysis.common.lock import OutputLock, lock_path, output_lock
 from analysis.common.masks import frame_bad
 from analysis.common.plan import Block, RunPlan, evenly_spaced
 from analysis.common.run import FanOutTotals, base_provenance, fan_out
 from analysis.common.status import FrameStatus
-from analysis.common.writer import IncompleteRun
+from analysis.common.writer import IncompleteRun, pooled_per_train, status_counts
 from analysis.saxs import masks as masks_module
 from analysis.saxs import operator as operator_module
 from analysis.saxs import worker as worker_module
+from analysis.saxs.complete import is_complete, window_sums_reasons
 from analysis.saxs.config import AgipdSaxsConfig
-from analysis.saxs.pixel_sums import FILE_NAME, PixelSumWriter, WindowSpec
+from analysis.saxs.pixel_sums import FAILED, FILE_NAME, PixelSumWriter, WindowSpec
 from analysis.saxs.plan import build_plan
 from analysis.saxs.selftest import run_selftest
-from analysis.saxs.writer import AgipdSaxsWriter
+from analysis.saxs.writer import AgipdSaxsWriter, per_pulse
 
 __all__ = [
     "REDUCERS",
@@ -88,10 +97,21 @@ def run_agipd_saxs(
         beside ``output_path`` when that is given, else at
         ``cfg.pixel_sums_file``.
 
+    A run whose output is already complete
+    (:func:`analysis.saxs.complete.is_complete`) is answered from the file and
+    nothing is written, unless ``cfg.overwrite``. Otherwise both files are
+    locked (:func:`analysis.common.lock.output_lock`) for as long as the pass
+    writes them, and the check is made again under the lock.
+
     :raises IncompleteRun: some frame is not ``OK``, or some train with rows
         was left out of the window sums, and ``cfg.allow_incomplete`` is False.
         The output files are still written and closed first, so the ledgers
-        explain what happened.
+        explain what happened. A complete file that holds such frames raises
+        the same, without being written.
+    :raises analysis.common.lock.OutputBusy: another process is writing one of
+        the files.
+    :raises analysis.common.writer.OperatorMismatch: the frame table was
+        integrated by another operator or pyFAI, so it cannot be resumed.
     """
     # Checked before any work, so a typo costs nothing rather than surfacing
     # after the whole run has been integrated.
@@ -106,20 +126,121 @@ def run_agipd_saxs(
     started_at = time.time()
     started = time.perf_counter()
 
-    work_dir = (
-        Path(work_dir)
-        if work_dir is not None
-        else (Path(output_path).parent if output_path else cfg.output_file.parent)
-    )
-    work_dir.mkdir(parents=True, exist_ok=True)
+    if pixel_sums_path is None:
+        pixel_sums_path = (
+            Path(output_path).parent / FILE_NAME if output_path else cfg.pixel_sums_file
+        )
+    output_path = Path(output_path) if output_path else cfg.output_file
+    work_dir = Path(work_dir) if work_dir is not None else output_path.parent
+    guarded = [output_path]
+    if cfg.pixel_sum_trains is not None:
+        guarded.append(Path(pixel_sums_path))
 
+    # The operator first: it reads only the geometry, and the completeness
+    # check needs its sha256 to tell a file integrated by another pyFAI apart.
     setup: dict[str, float] = {}
-    with phase(setup, "plan"):
-        plan = build_plan(cfg, dc=dc)
     with phase(setup, "operator"):
         if geometry is None:
             geometry = operator_module.geometry_from_config(cfg)
         op, ai = operator_module.build_operator(geometry, cfg)
+
+    def complete() -> Completeness:
+        return is_complete(
+            output_path, cfg, pixel_sums_path=pixel_sums_path, operator_sha256=op.sha256
+        )
+
+    # Skipped while a lock exists, since the file may be mid-write; the check
+    # under the lock below then decides.
+    if not cfg.overwrite and not any(lock_path(p).exists() for p in guarded):
+        if complete():
+            return _from_file(cfg, output_path, pixel_sums_path, reduce)
+    with ExitStack() as held:
+        locks = [held.enter_context(output_lock(p)) for p in guarded]
+        if not cfg.overwrite:
+            verdict = complete()
+            if verdict:
+                return _from_file(cfg, output_path, pixel_sums_path, reduce)
+            log.info("%s", verdict)
+        # Before the plan, the masks and the self-test, so a file that can only
+        # be reprocessed is refused in a second rather than after a minute.
+        AgipdSaxsWriter.check_resumable(cfg, output_path, operator_sha256=op.sha256)
+        return _integrate(
+            cfg,
+            dc=dc,
+            run_dir=run_dir,
+            output_path=output_path,
+            work_dir=work_dir,
+            pool_factory=pool_factory,
+            reduce=reduce,
+            pixel_sums_path=Path(pixel_sums_path),
+            op=op,
+            ai=ai,
+            setup=setup,
+            started_at=started_at,
+            started=started,
+            locks=locks,
+        )
+
+
+def _from_file(
+    cfg: AgipdSaxsConfig, output_path: Path, pixel_sums_path: Path, reduce: str
+) -> Any:
+    """Answer a complete run from its files, exactly as the pass would have.
+
+    Opens both read-only. ``IncompleteRun`` is raised on the same terms as at
+    the end of a pass: a complete file can still hold frames that are final
+    without being ``OK``, such as ``LABEL_MISMATCH``.
+    """
+    with h5py.File(output_path, "r") as handle:
+        summary: dict[str, Any] = status_counts(
+            handle["frames/status"][:], nonzero_only=True
+        )
+        incomplete = any(name != FrameStatus.OK.name for name in summary)
+        reduced = None
+        if reduce == "pooled":
+            reduced = pooled_per_train(handle)
+        elif reduce == "per_pulse":
+            reduced = per_pulse(handle)
+    if cfg.pixel_sum_trains is not None:
+        with h5py.File(pixel_sums_path, "r") as handle:
+            trains = handle["trains/status"][:]
+        incomplete |= bool(np.isin(trains, [int(code) for code in FAILED]).any())
+        summary = {
+            "frames": summary,
+            "window_sums": status_counts(trains, nonzero_only=True),
+        }
+    log.info(
+        "r%d: %s is complete; answered from the file, nothing written",
+        cfg.run,
+        output_path,
+    )
+    if incomplete and not cfg.allow_incomplete:
+        raise IncompleteRun(f"not every frame reached OK: {summary}")
+    return reduced
+
+
+def _integrate(
+    cfg: AgipdSaxsConfig,
+    *,
+    dc: Any,
+    run_dir: Path | None,
+    output_path: Path,
+    work_dir: Path,
+    pool_factory: Callable[..., Any] | None,
+    reduce: str,
+    pixel_sums_path: Path,
+    op: Any,
+    ai: Any,
+    setup: dict[str, float],
+    started_at: float,
+    started: float,
+    locks: list[OutputLock],
+) -> Any:
+    """The pass itself, run under the locks :func:`run_agipd_saxs` holds."""
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    with phase(setup, "plan"):
+        plan = build_plan(cfg, dc=dc)
     with phase(setup, "static_mask"):
         static = masks_module.build_static_bad(cfg)
     with phase(setup, "base_masks"):
@@ -137,10 +258,6 @@ def run_agipd_saxs(
         if cfg.pixel_sum_trains is not None
         else None
     )
-    if pixel_sums_path is None:
-        pixel_sums_path = (
-            Path(output_path).parent / FILE_NAME if output_path else cfg.pixel_sums_file
-        )
 
     with ExitStack() as stack:
         # The sums first: a window-sums file this run must not touch is refused
@@ -153,7 +270,9 @@ def run_agipd_saxs(
             else None
         )
         out = stack.enter_context(
-            AgipdSaxsWriter.open_or_create(cfg, plan, output_path)
+            AgipdSaxsWriter.open_or_create(
+                cfg, plan, output_path, operator_sha256=op.sha256
+            )
         )
         out.store_operator(op)
         out.store_masks(base_masks, sampled)
@@ -211,10 +330,12 @@ def run_agipd_saxs(
                 ],
                 "unseen_cell_frames": int(totals.extra["unseen_cells"]),
             }
+            | locks[0].provenance()
         )
         if sums is not None:
             sums.finalise(
                 _pixel_provenance(cfg, plan, totals, started_at, started, setup)
+                | locks[1].provenance()
             )
         incomplete = out.any_not_ok() or (sums is not None and sums.incomplete())
         summary = out.status_summary()
@@ -251,9 +372,11 @@ def run_pixel_sums(
     :param run_dir: directory the workers open the run from.
     :param pixel_sums_path: the file; ``None`` is ``cfg.pixel_sums_file``.
     :param pool_factory: builds the executor, as for :func:`run_agipd_saxs`.
-    :returns: the file written.
+    :returns: the file written — or, when it was already complete, the file
+        left untouched.
     :raises IncompleteRun: a train with rows was left out and
         ``cfg.allow_incomplete`` is False.
+    :raises analysis.common.lock.OutputBusy: another process is writing it.
     """
     if cfg.pixel_sum_trains is None:
         raise ValueError("pixel_sum_trains is None: there are no windows to sum")
@@ -262,6 +385,52 @@ def run_pixel_sums(
     started = time.perf_counter()
     path = Path(pixel_sums_path) if pixel_sums_path else cfg.pixel_sums_file
 
+    # ``overwrite`` never applies to the window sums (context file §15.3), so
+    # neither does it bypass this.
+    if not lock_path(path).exists() and not window_sums_reasons(path, cfg):
+        return _sums_from_file(cfg, path)
+    with output_lock(path) as lock:
+        reasons = window_sums_reasons(path, cfg)
+        if not reasons:
+            return _sums_from_file(cfg, path)
+        log.info("%s is not complete: %s", path, "; ".join(reasons))
+        return _sum_windows(
+            cfg,
+            dc=dc,
+            run_dir=run_dir,
+            path=path,
+            pool_factory=pool_factory,
+            started_at=started_at,
+            started=started,
+            lock=lock,
+        )
+
+
+def _sums_from_file(cfg: AgipdSaxsConfig, path: Path) -> Path:
+    """Answer a complete window-sums file as :func:`run_pixel_sums` would."""
+    with h5py.File(path, "r") as handle:
+        trains = handle["trains/status"][:]
+    log.info("r%d: %s is complete; nothing written", cfg.run, path)
+    if np.isin(trains, [int(code) for code in FAILED]).any() and not (
+        cfg.allow_incomplete
+    ):
+        summary = status_counts(trains, nonzero_only=True)
+        raise IncompleteRun(f"not every train was summed: {summary}")
+    return path
+
+
+def _sum_windows(
+    cfg: AgipdSaxsConfig,
+    *,
+    dc: Any,
+    run_dir: Path | None,
+    path: Path,
+    pool_factory: Callable[..., Any] | None,
+    started_at: float,
+    started: float,
+    lock: OutputLock,
+) -> Path:
+    """The window-sums pass itself, run under the lock :func:`run_pixel_sums` holds."""
     setup: dict[str, float] = {}
     with phase(setup, "plan"):
         plan = build_plan(cfg, dc=dc)
@@ -282,7 +451,10 @@ def run_pixel_sums(
             initargs=(paths, cfg, windows, skip),
             pool_factory=pool_factory,
         )
-        sums.finalise(_pixel_provenance(cfg, plan, totals, started_at, started, setup))
+        sums.finalise(
+            _pixel_provenance(cfg, plan, totals, started_at, started, setup)
+            | lock.provenance()
+        )
         incomplete = sums.incomplete()
         summary = sums.status_summary()
 

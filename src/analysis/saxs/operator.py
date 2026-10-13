@@ -23,7 +23,7 @@ import numpy as np
 from extra_geom import AGIPD_1MGeometry
 from pyFAI.integrator.azimuthal import AzimuthalIntegrator
 
-from analysis.common.arrays import frozen_copy
+from analysis.common.arrays import atomic_savez, frozen_copy
 from analysis.common.pyfai import check_resolved_method
 from analysis.saxs.config import NPIX, SHAPE, AgipdSaxsConfig
 
@@ -217,9 +217,12 @@ def build_operator(
 
 
 def save_operator(op: SparseOperator, path: str | Path) -> Path:
-    """Write the operator to ``path`` as an ``.npz`` and return the path."""
+    """Write the operator to ``path`` as an ``.npz`` and return the path.
+
+    Atomically: the workers of a run load it by name, and a write that died
+    half-way must not leave them a truncated archive.
+    """
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
     meta = json.dumps(
         {
             "npt": op.npt,
@@ -234,7 +237,7 @@ def save_operator(op: SparseOperator, path: str | Path) -> Path:
         sort_keys=True,
         separators=(",", ":"),
     )
-    np.savez(
+    atomic_savez(
         path,
         coef=op.coef,
         bins=op.bins,

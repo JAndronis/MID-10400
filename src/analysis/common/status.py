@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from enum import IntEnum
 
-__all__ = ["DataCheckFailed", "FrameStatus"]
+__all__ = ["UNFINISHED", "DataCheckFailed", "FrameStatus"]
 
 
 class FrameStatus(IntEnum):
@@ -22,6 +22,15 @@ class FrameStatus(IntEnum):
     DATA_CHECK_FAILED = 4
     WORKER_ERROR = 5
     NOT_PROCESSED = 255
+
+
+#: Codes a rerun retries. ``WORKER_ERROR`` says nothing about the data — a
+#: node, a file system or a pool can fail and succeed the next time — whereas
+#: ``LABEL_MISMATCH`` and ``DATA_CHECK_FAILED`` are properties of the data and
+#: would come out the same, so they count as done.
+UNFINISHED: frozenset[FrameStatus] = frozenset(
+    {FrameStatus.NOT_PROCESSED, FrameStatus.WORKER_ERROR}
+)
 
 
 class DataCheckFailed(ValueError):

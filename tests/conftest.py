@@ -71,12 +71,15 @@ def write_elog() -> Callable[[Path, Iterable[Mapping[str, object]]], Path]:
 #: digests of the synthetic input files the fixtures build. ``poni`` is in the
 #: list because pyFAI stamps the PONI it writes with the time it wrote it, so
 #: the fixture's bytes — and every sha256 taken over them — move every session.
+#: ``lock`` and ``lock_takeover`` name the process that held the output's lock.
 #: Everything else an output file carries is a function of its inputs.
 VOLATILE_ATTRS = frozenset(
     {
         "config_hash",
         "host",
         "input_file_sha256",
+        "lock",
+        "lock_takeover",
         "package_versions",
         "platform",
         "poni",

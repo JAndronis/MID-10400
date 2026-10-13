@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import os
+import uuid
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-__all__ = ["frozen_copy", "relative_difference"]
+__all__ = ["atomic_savez", "frozen_copy", "relative_difference"]
 
 
 def relative_difference(got: np.ndarray, want: np.ndarray) -> np.ndarray:
@@ -44,3 +47,30 @@ def frozen_copy(array: np.ndarray, dtype: Any, *, cast: bool = False) -> np.ndar
     out = np.array(array, dtype=dtype, copy=True, order="C")
     out.flags.writeable = False
     return out
+
+
+def atomic_savez(path: str | Path, **arrays: Any) -> Path:
+    """``np.savez`` into a temporary file beside ``path``, then rename it over.
+
+    A reader sees the old file or the new one, never a half-written archive, and
+    a write that dies leaves the old file in place. The temporary file is handed
+    to ``np.savez`` as an open handle, because given a name not ending in
+    ``.npz`` it would append one.
+
+    :param path: the archive to write.
+    :param arrays: what ``np.savez`` stores.
+    :returns: ``path``.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}")
+    try:
+        with open(temporary, "wb") as handle:
+            np.savez(handle, **arrays)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+    return path

@@ -28,13 +28,16 @@ from typing import Any, Protocol, runtime_checkable
 import h5py
 import numpy as np
 
+from analysis.common.cpu import package_versions
 from analysis.common.plan import Block, RunPlan
-from analysis.common.status import FrameStatus
+from analysis.common.status import UNFINISHED, FrameStatus
 
 __all__ = [
+    "GATING_PACKAGES",
     "ConfigHashMismatch",
     "FrameTableWriter",
     "IncompleteRun",
+    "OperatorMismatch",
     "SchemaMismatch",
     "PassConfig",
     "as_handle",
@@ -43,13 +46,36 @@ __all__ = [
     "pooled_per_train",
     "q_centers",
     "status_counts",
+    "version_changes",
 ]
 
 log = logging.getLogger(__name__)
 
 
+#: Packages whose version must match for a file to be resumed or counted as
+#: complete. pyFAI builds both operators and integrates every JUNGFRAU frame, so
+#: a file written under another version would be a mix of two integrators.
+GATING_PACKAGES: tuple[str, ...] = ("pyFAI",)
+
+#: How to reprocess a file this pass refuses to resume into.
+_REPROCESS_HINT = (
+    "move it aside with scripts/reprocess_safe.py and reprocess, or pass "
+    "overwrite=True to replace it"
+)
+
+
 class ConfigHashMismatch(RuntimeError):
     """An existing output file was written with a different configuration."""
+
+
+class OperatorMismatch(ConfigHashMismatch):
+    """An existing output file was integrated by another operator or pyFAI.
+
+    The config hash covers the inputs, not what pyFAI makes of them, so it can
+    match while the operator does not: after a pyFAI upgrade, say. Resuming
+    would mix rows from two integrators, and finalising would then stamp the
+    new version on all of them.
+    """
 
 
 class SchemaMismatch(RuntimeError):
@@ -148,38 +174,83 @@ class FrameTableWriter:
     # ── lifecycle ────────────────────────────────────────────────────────────
     @classmethod
     def open_or_create(
-        cls, cfg: PassConfig, plan: RunPlan, path: Path | None = None
+        cls,
+        cfg: PassConfig,
+        plan: RunPlan,
+        path: Path | None = None,
+        *,
+        operator_sha256: str | None = None,
     ) -> FrameTableWriter:
         """Open the run's output file, creating and initialising it if needed.
 
-        An existing file whose stored config hash differs is refused unless
-        ``cfg.overwrite``: resuming into a file built under a different
-        configuration would mix incompatible rows.
+        An existing file is resumed into only if :meth:`check_resumable`
+        allows it, unless ``cfg.overwrite``, which recreates it.
+
+        :param operator_sha256: the operator this run built — see
+            :meth:`check_resumable`.
         """
         path = Path(path) if path is not None else cfg.output_file
         path.parent.mkdir(parents=True, exist_ok=True)
-        config_hash = cfg.config_hash()
 
         if path.exists() and not cfg.overwrite:
-            with h5py.File(path, "r") as existing:
-                stored = existing["provenance"].attrs.get("config_hash")
-                missing = cls._missing_columns(existing)
-            if stored != config_hash:
-                raise ConfigHashMismatch(
-                    f"{path} was written with config hash {stored}, "
-                    f"this run has {config_hash}; pass overwrite=True to replace it"
-                )
-            if missing:
-                raise SchemaMismatch(
-                    f"{path} has no {missing} in its frame table, so it predates "
-                    "a column this pass now stores; pass overwrite=True to "
-                    "reprocess it rather than resuming into it"
-                )
+            cls.check_resumable(cfg, path, operator_sha256=operator_sha256)
             return cls(h5py.File(path, "r+"), cfg, plan)
 
         handle = h5py.File(path, "w")
-        cls._create_layout(handle, cfg, plan, config_hash)
+        cls._create_layout(handle, cfg, plan, cfg.config_hash())
         return cls(handle, cfg, plan)
+
+    @classmethod
+    def check_resumable(
+        cls, cfg: PassConfig, path: Path, *, operator_sha256: str | None = None
+    ) -> None:
+        """Refuse an existing file that resuming would turn into a mixture.
+
+        Read-only, so a pass can call it before any expensive setup as well as
+        when it opens the file. A missing file, or ``cfg.overwrite``, passes.
+
+        :param operator_sha256: the operator this run built. ``None`` skips the
+            operator check, for a caller with no operator to compare.
+        :raises ConfigHashMismatch: the config hash differs.
+        :raises SchemaMismatch: the frame table lacks a column.
+        :raises OperatorMismatch: the operator, or the version of a
+            :data:`GATING_PACKAGES` package, differs.
+        """
+        path = Path(path)
+        if cfg.overwrite or not path.exists():
+            return
+        config_hash = cfg.config_hash()
+        with h5py.File(path, "r") as existing:
+            stored = existing["provenance"].attrs.get("config_hash")
+            missing = cls._missing_columns(existing)
+            stored_operator = (
+                existing["operator"].attrs.get("sha256")
+                if "operator" in existing
+                else None
+            )
+            versions = existing["provenance"].attrs.get("package_versions")
+        if stored != config_hash:
+            raise ConfigHashMismatch(
+                f"{path} was written with config hash {stored}, "
+                f"this run has {config_hash}; {_REPROCESS_HINT}"
+            )
+        if missing:
+            raise SchemaMismatch(
+                f"{path} has no {missing} in its frame table, so it predates "
+                f"a column this pass now stores; {_REPROCESS_HINT}"
+            )
+        changed = version_changes(versions)
+        if operator_sha256 is not None and stored_operator not in (
+            None,
+            operator_sha256,
+        ):
+            changed.append(f"operator {stored_operator} -> {operator_sha256}")
+        if changed:
+            raise OperatorMismatch(
+                f"{path} was integrated differently from this run "
+                f"({'; '.join(changed)}), so resuming into it would mix the "
+                f"two; {_REPROCESS_HINT}"
+            )
 
     @classmethod
     def _missing_columns(cls, handle: h5py.File) -> list[str]:
@@ -246,6 +317,9 @@ class FrameTableWriter:
         )
         provenance.attrs["detector_name"] = plan.detector_name
         provenance.attrs["run_checks"] = json.dumps(plan.checks, default=str)
+        # Recorded now as well as at finalise, so that a file whose run died
+        # before finishing still says which pyFAI wrote its rows.
+        provenance.attrs["package_versions"] = json.dumps(package_versions())
         for name in cls.EXTRA_GROUPS:
             handle.create_group(name)
         handle.flush()
@@ -261,12 +335,17 @@ class FrameTableWriter:
 
     # ── resume ───────────────────────────────────────────────────────────────
     def block_complete(self, block: Block) -> bool:
-        """A block is complete when none of its frames is ``NOT_PROCESSED``."""
+        """A block is complete when none of its frames is :data:`UNFINISHED`.
+
+        So a rerun retries ``WORKER_ERROR`` blocks as well as unprocessed ones,
+        and leaves ``LABEL_MISMATCH`` and ``DATA_CHECK_FAILED`` alone: those
+        would come out the same.
+        """
         rows = block.rows()
         if rows.size == 0:
             return True
         status = self._f["frames/status"][rows[0] : rows[-1] + 1]
-        return bool((status != FrameStatus.NOT_PROCESSED).all())
+        return not bool(np.isin(status, [int(code) for code in UNFINISHED]).any())
 
     # ── writing ──────────────────────────────────────────────────────────────
     def write_block(self, block: Block, result: Any) -> None:
@@ -313,7 +392,32 @@ class FrameTableWriter:
             frames[name][start:stop] = getattr(result, attribute)
         for name in self.FRAME_MATRICES:
             frames[name][start:stop] = getattr(result, name)
+        self._resolve_block_error(block)
         self._f.flush()
+
+    def _resolve_block_error(self, block: Block) -> None:
+        """Move a retried block's earlier error to ``block_errors_resolved``.
+
+        Kept rather than dropped: a block that failed once and then succeeded
+        is worth knowing about when a node or the file system misbehaves.
+        """
+        attrs = self._f["provenance"].attrs
+        if "block_errors" not in attrs:
+            return
+        errors = json.loads(attrs["block_errors"])
+        message = errors.pop(str(block.index), None)
+        if message is None:
+            return
+        resolved = json.loads(attrs.get("block_errors_resolved", "{}"))
+        resolved[str(block.index)] = message
+        attrs["block_errors_resolved"] = json.dumps(resolved)
+        if errors:
+            attrs["block_errors"] = json.dumps(errors)
+        else:
+            del attrs["block_errors"]
+        log.info(
+            "block %d succeeded on retry (it had failed: %s)", block.index, message
+        )
 
     def mark(self, block: Block, status: FrameStatus, message: str = "") -> None:
         """Record a status for every frame of a block, with no data."""
@@ -361,6 +465,25 @@ class FrameTableWriter:
     def pooled_per_train(self) -> Any:
         """Per-train pooled ``I(q)`` — see :func:`pooled_per_train`."""
         return pooled_per_train(self._f)
+
+
+def version_changes(stored: str | None) -> list[str]:
+    """How the :data:`GATING_PACKAGES` installed now differ from a record.
+
+    :param stored: a ``package_versions`` provenance attribute, JSON; ``None``
+        for a file written before it was recorded at creation, which cannot be
+        checked and so reports nothing.
+    :returns: one ``"pyFAI 2026.5.0 -> 2026.9.0"`` entry per difference.
+    """
+    if not stored:
+        return []
+    recorded = json.loads(stored)
+    installed = package_versions(GATING_PACKAGES)
+    return [
+        f"{name} {recorded.get(name)} -> {installed[name]}"
+        for name in GATING_PACKAGES
+        if recorded.get(name) != installed[name]
+    ]
 
 
 # ── reducers ──────────────────────────────────────────────────────────────────

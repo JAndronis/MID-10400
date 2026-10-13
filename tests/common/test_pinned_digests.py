@@ -178,13 +178,17 @@ EXPECTED_ALL: dict[str, tuple[str, ...]] = {
         "Block", "RunPlan", "TrainRecord", "build_blocks",
         "evenly_spaced",
     ),
+    # UNFINISHED, GATING_PACKAGES, OperatorMismatch and version_changes added
+    # for open task 17 (pass integrity): resume retries WORKER_ERROR, and
+    # refuses a file integrated by another operator or pyFAI.
     "analysis.common.status": (
-        "DataCheckFailed", "FrameStatus",
+        "UNFINISHED", "DataCheckFailed", "FrameStatus",
     ),
     "analysis.common.writer": (
-        "ConfigHashMismatch", "FrameTableWriter", "IncompleteRun",
-        "SchemaMismatch", "PassConfig", "as_handle", "config_payload",
-        "per_label", "pooled_per_train", "q_centers", "status_counts",
+        "GATING_PACKAGES", "ConfigHashMismatch", "FrameTableWriter",
+        "IncompleteRun", "OperatorMismatch", "SchemaMismatch", "PassConfig",
+        "as_handle", "config_payload", "per_label", "pooled_per_train",
+        "q_centers", "status_counts", "version_changes",
     ),
     # METHOD, NPIX, SHAPE and DEFAULT_OUTPUT_ROOT were missing here while
     # three modules imported them by name; the pass-throughs are gone.
