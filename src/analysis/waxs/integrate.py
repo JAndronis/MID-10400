@@ -1,12 +1,24 @@
-"""The error model and the pure per-frame integration.
+"""The per-frame path: masks, value check, photon counting, integration.
 
 Kept free of I/O and of EXtra-data so the self-test and the unit tests can
 reach it without a run, the way :mod:`analysis.saxs.sparse` is for AGIPD.
+
+Per frame, in this order:
+
+1. the union mask, ``data.mask`` (dynamic) or the static ``.edf``;
+2. :func:`extreme_pixels` drops kept pixels that are non-finite or beyond
+   ``±max_abs_kev`` — before counting, so a gain-switched or NaCl-spot value
+   never reaches a level or a count (pitfalls 21 and 24);
+3. :mod:`analysis.waxs.photons` estimates each ASIC's zero level from the
+   frame itself and counts photons; an ASIC with no level is not counted;
+4. pyFAI integrates the counts with the excluded pixels carried as NaN, and
+   ``variance = counts`` — Poisson, ``Σc²·n`` per bin, as AGIPD's ``Σc²·x``.
 """
 
 from __future__ import annotations
 
 import hashlib
+import time
 from dataclasses import dataclass
 
 import numpy as np
@@ -14,29 +26,36 @@ import numpy as np
 from analysis.common.status import DataCheckFailed
 from analysis.waxs.config import MODULE_SHAPE
 from analysis.waxs.operator import WaxsOperator
+from analysis.waxs.photons import (
+    ASIC_ID,
+    PhotonCounting,
+    count_photons,
+    zero_levels,
+)
 
 __all__ = [
     "ErrorModel",
     "FrameResult",
+    "PreparedFrame",
     "extreme_pixels",
     "frame_maxima",
     "integrate_frame",
+    "integrate_prepared",
+    "prepare_frame",
 ]
 
 
 @dataclass(frozen=True, slots=True)
 class ErrorModel:
-    """``Var(x) = σ_read² + E·x``, in keV².
+    """The readout noise as measured, recorded alongside every file.
 
-    ``Σc²·x`` is the Poisson variance of *integer photon counts*; on keV-valued
-    data with a negative tail it is not a variance at all. For a pixel holding
-    ``x`` keV deposited by ``E``-keV photons the count is ``x/E``, whose Poisson
-    variance in keV² is ``E·x``; the readout term adds ``σ_read²``.
-
-    **The result is deliberately not clamped.** Clamping at zero would bias the
-    noise floor upward on every negative-noise pixel and that bias does not
-    cancel, where the unbiased form's negatives do once a bin pools many frames.
-    The per-frame negative bins are counted into the ledger instead.
+    **A diagnostic since photon counting.** The stored variance is Poisson on
+    the counts and no longer involves σ_read. What is kept is the number and
+    where it came from, because it is still the cheapest health check of a
+    run's dark side. Note what it lumps together (W7): one std over pixel x
+    dark cell x train around one mean, so pixel offsets, cell offsets, jf1's
+    0.15 keV common mode and the leftover in the cell after the lit ones all
+    count; the pure pixel noise is 0.30 keV on both detectors.
     """
 
     read_noise_kev: float
@@ -61,12 +80,6 @@ class ErrorModel:
                 f"photon_energy_kev must be positive, got {self.photon_energy_kev}"
             )
 
-    def variance(self, x: np.ndarray) -> np.ndarray:
-        """Per-pixel variance in keV², same shape and dtype family as ``x``."""
-        return np.asarray(
-            self.read_noise_kev**2 + self.photon_energy_kev * x, dtype=np.float32
-        )
-
     @property
     def sha256(self) -> str:
         payload = (
@@ -77,16 +90,35 @@ class ErrorModel:
 
 
 @dataclass(frozen=True, slots=True)
+class PreparedFrame:
+    """One frame counted and masked, ready for either integration path."""
+
+    #: float32 ``(npix,)`` photon counts, NaN wherever :attr:`excluded`.
+    photons: np.ndarray
+    #: bool ``(npix,)``: the union mask, extreme pixels and uncounted ASICs.
+    excluded: np.ndarray
+    #: float32 ``(8,)`` zero level per ASIC in keV, NaN where there was none.
+    asic_level: np.ndarray
+    #: ASICs with pixels to integrate but no level, whose pixels were dropped.
+    n_level_missing: int
+    #: Kept pixels dropped for being non-finite or outside ``max_abs_kev``.
+    n_extreme_pixels: int
+
+
+@dataclass(frozen=True, slots=True)
 class FrameResult:
     """Per-frame sufficient statistics and scalars."""
 
-    signal: np.ndarray  # float64 (npt,)  Σ c·x
+    signal: np.ndarray  # float64 (npt,)  Σ c·n, photons
     normalization: np.ndarray  # float64 (npt,)  Σ c·Ω over valid pixels
-    variance: np.ndarray  # float64 (npt,)  Σ c²·Var(x)
-    energy_valid: float  # keV summed over the kept pixels
+    variance: np.ndarray  # float64 (npt,)  Σ c²·n, photons²
+    #: Raw keV summed over the integrated pixels, before any level is taken out.
+    energy_valid: float
+    #: Photons summed over the integrated pixels.
+    n_photons: int
     n_bad_pixels: int
     n_negative_variance_bins: int
-    #: Largest value over the pixels that reach the integrator (the union mask).
+    #: Largest value over the pixels that reach the integrator.
     max_kev: float
     #: Largest value over the pixels the *static* mask keeps — the set D6 tests.
     #: With an extreme pixel excluded this is the value that was excluded, which
@@ -94,6 +126,11 @@ class FrameResult:
     max_kev_static: float
     #: Kept pixels dropped for being non-finite or outside ``max_abs_kev``.
     n_extreme_pixels: int
+    #: float32 ``(8,)`` zero level per ASIC, keV; NaN where there was none.
+    asic_level: np.ndarray
+    n_level_missing: int
+    #: The energy the counts were taken at, as stored.
+    count_energy_kev: float
 
 
 def frame_maxima(
@@ -120,9 +157,9 @@ def extreme_pixels(
 ) -> np.ndarray:
     """Pixels carrying a value the pass will not integrate.
 
-    Non-finite values go because the dynamic mask is itself carried as NaN.
-    These pixels are excluded, **not** grounds for discarding the frame: that
-    would throw away every good pixel in it, in step with crystallisation.
+    Non-finite values go because the excluded pixels are themselves carried as
+    NaN. These pixels are excluded, **not** grounds for discarding the frame:
+    that would throw away every good pixel in it, in step with crystallisation.
     ``FrameResult.n_extreme_pixels`` is the filter a reader applies instead.
 
     :param x: one frame, keV.
@@ -138,61 +175,75 @@ def extreme_pixels(
     return (~excluded) & (~finite | (np.abs(flat) > max_abs_kev))
 
 
-def integrate_frame(
-    ai: object,
+def prepare_frame(
     op: WaxsOperator,
-    model: ErrorModel,
+    counting: PhotonCounting,
     x: np.ndarray,
-    bad: np.ndarray,
+    dynamic: np.ndarray,
     *,
     max_abs_kev: float,
-) -> FrameResult:
-    """Integrate one frame densely through pyFAI.
+) -> PreparedFrame:
+    """Mask, check and count one frame. Leaves the caller's arrays untouched.
 
-    ``bad`` is carried into pyFAI as NaN in both the data and the variance,
-    which drops those pixels from the numerator and the denominator exactly.
-    Pixels failing :func:`extreme_pixels` join it locally, leaving the caller's
-    array untouched, and the frame is still integrated.
-
-    :param ai: the ``AzimuthalIntegrator`` built by
-        :func:`analysis.waxs.operator.build_operator`, with ``mask`` already set
-        to ``op.static_bad``. Passing a mask here instead would rebuild pyFAI's
-        sparse matrix on every frame.
-    :param op: the operator whose q axis and static mask the engine was built on.
-    :param model: the variance model applied to the kept pixels.
+    :param op: the operator whose static mask the engine was built on.
+    :param counting: the photon-counting settings.
     :param x: one frame, ``(512, 1024)`` or flat, in keV.
-    :param bad: this frame's bad-pixel mask, flat, as
-        ``((m & mask_bits) != 0) | static_bad``.
+    :param dynamic: this frame's own exclusion, flat:
+        ``(data.mask & mask_bits) != 0``. **Not** ORed with the static mask —
+        the operator supplies that — because the zero level is estimated over
+        ``.edf``-masked pixels too.
     :param max_abs_kev: value bound handed to :func:`extreme_pixels`.
-    :returns: the per-bin sums, maxima and pixel counts for this frame.
-    :raises DataCheckFailed: *every* pixel is excluded, so there is nothing to
-        integrate. Raised rather than returned, because a frame of zeros placed
-        as if it had been measured is the one outcome no ledger column shows.
     """
     flat = np.asarray(x).reshape(-1)
     if flat.size != op.static_bad.size:
         raise ValueError(
             f"frame has {flat.size} pixels, the operator has {op.static_bad.size}"
         )
-    if bad.shape != op.static_bad.shape:
-        raise ValueError(f"bad has shape {bad.shape}, expected {op.static_bad.shape}")
+    if dynamic.shape != op.static_bad.shape:
+        raise ValueError(
+            f"dynamic has shape {dynamic.shape}, expected {op.static_bad.shape}"
+        )
 
+    bad = dynamic | op.static_bad
     extreme = extreme_pixels(flat, bad, max_abs_kev)
     n_extreme = int(extreme.sum())
     if n_extreme:
         bad = bad | extreme
-    if bad.all():
-        raise DataCheckFailed(
-            f"every one of the {bad.size} pixels is excluded: {n_extreme} of them "
-            f"for being non-finite or outside ±{max_abs_kev} keV, the rest by the "
-            "static mask and data.mask. There is nothing left to integrate"
-        )
 
-    signal = flat.astype(np.float32, copy=True)
-    variance = model.variance(signal)
-    signal[bad] = np.nan
-    variance[bad] = np.nan
+    usable = ~dynamic & np.isfinite(flat)
+    if counting.level_pixels == "kept":
+        usable &= ~op.static_bad
+    levels, _ = zero_levels(flat, usable, counting)
+    asic_level = levels.astype(np.float32)
 
+    no_level = ~np.isfinite(asic_level)
+    uncounted = no_level[ASIC_ID] & ~bad
+    n_level_missing = int(np.unique(ASIC_ID[uncounted]).size) if uncounted.any() else 0
+    excluded = bad | uncounted
+
+    photons = count_photons(flat, asic_level, counting.energy_f4)
+    photons[excluded] = np.nan
+    return PreparedFrame(
+        photons=photons,
+        excluded=excluded,
+        asic_level=asic_level,
+        n_level_missing=n_level_missing,
+        n_extreme_pixels=n_extreme,
+    )
+
+
+def integrate_prepared(
+    ai: object, op: WaxsOperator, prepared: PreparedFrame
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """``(signal, normalization, variance)`` of a counted frame, the NaN path.
+
+    The excluded pixels are already NaN in the counts, and the variance is the
+    counts themselves, NaN in the same places, so pyFAI drops them from the
+    numerator and the denominator exactly. The engine keeps the static mask it
+    was built with; passing a per-frame mask would rebuild its sparse matrix.
+    """
+    signal = prepared.photons.copy()  # writable: pyFAI's kernels insist
+    variance = prepared.photons.copy()
     result = ai.integrate1d(  # type: ignore[attr-defined]
         signal.reshape(MODULE_SHAPE),
         op.npt,
@@ -201,21 +252,75 @@ def integrate_frame(
         mask=op.static_mask_2d,
         variance=variance.reshape(MODULE_SHAPE),
     )
-    sum_signal = np.asarray(result.sum_signal, dtype=np.float64)
-    sum_normalization = np.asarray(result.sum_normalization, dtype=np.float64)
-    sum_variance = np.asarray(result.sum_variance, dtype=np.float64)
+    return (
+        np.asarray(result.sum_signal, dtype=np.float64),
+        np.asarray(result.sum_normalization, dtype=np.float64),
+        np.asarray(result.sum_variance, dtype=np.float64),
+    )
 
-    kept_values = flat[~bad]
-    occupied = sum_normalization > 0
-    max_kev, max_kev_static = frame_maxima(flat, bad, op.static_bad)
+
+def integrate_frame(
+    ai: object,
+    op: WaxsOperator,
+    counting: PhotonCounting,
+    x: np.ndarray,
+    dynamic: np.ndarray,
+    *,
+    max_abs_kev: float,
+    timings: dict[str, float] | None = None,
+) -> FrameResult:
+    """Count one frame's photons and integrate them densely through pyFAI.
+
+    :param ai: the ``AzimuthalIntegrator`` built by
+        :func:`analysis.waxs.operator.build_operator`, with ``mask`` already set
+        to ``op.static_bad``.
+    :param op: the operator whose q axis and static mask the engine was built on.
+    :param counting: the photon-counting settings.
+    :param x: one frame, ``(512, 1024)`` or flat, in keV.
+    :param dynamic: this frame's ``data.mask`` exclusion, flat — see
+        :func:`prepare_frame`.
+    :param max_abs_kev: value bound handed to :func:`extreme_pixels`.
+    :param timings: if given, ``"photonise"`` and ``"integrate"`` seconds are
+        added to it.
+    :returns: the per-bin sums, the levels, maxima and pixel counts.
+    :raises DataCheckFailed: *every* pixel is excluded, so there is nothing to
+        integrate. Raised rather than returned, because a frame of zeros placed
+        as if it had been measured is the one outcome no ledger column shows.
+    """
+    started = time.perf_counter()
+    prepared = prepare_frame(op, counting, x, dynamic, max_abs_kev=max_abs_kev)
+    counted = time.perf_counter()
+    if prepared.excluded.all():
+        raise DataCheckFailed(
+            f"every one of the {prepared.excluded.size} pixels is excluded: "
+            f"{prepared.n_extreme_pixels} of them for being non-finite or outside "
+            f"±{max_abs_kev} keV, {prepared.n_level_missing} ASIC(s) for having "
+            "no zero level, the rest by the static mask and data.mask. There is "
+            "nothing left to integrate"
+        )
+    signal, normalization, variance = integrate_prepared(ai, op, prepared)
+    if timings is not None:
+        timings["photonise"] = timings.get("photonise", 0.0) + counted - started
+        timings["integrate"] = (
+            timings.get("integrate", 0.0) + time.perf_counter() - counted
+        )
+
+    flat = np.asarray(x).reshape(-1)
+    kept = ~prepared.excluded
+    occupied = normalization > 0
+    max_kev, max_kev_static = frame_maxima(flat, prepared.excluded, op.static_bad)
     return FrameResult(
-        signal=sum_signal,
-        normalization=sum_normalization,
-        variance=sum_variance,
-        energy_valid=float(kept_values.sum()),
-        n_bad_pixels=int(bad.sum()),
-        n_negative_variance_bins=int((occupied & (sum_variance < 0)).sum()),
+        signal=signal,
+        normalization=normalization,
+        variance=variance,
+        energy_valid=float(flat[kept].sum()),
+        n_photons=int(prepared.photons[kept].sum(dtype=np.float64)),
+        n_bad_pixels=int(prepared.excluded.sum()),
+        n_negative_variance_bins=int((occupied & (variance < 0)).sum()),
         max_kev=max_kev,
         max_kev_static=max_kev_static,
-        n_extreme_pixels=n_extreme,
+        n_extreme_pixels=prepared.n_extreme_pixels,
+        asic_level=prepared.asic_level,
+        n_level_missing=prepared.n_level_missing,
+        count_energy_kev=float(counting.energy_f4),
     )

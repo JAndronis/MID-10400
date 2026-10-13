@@ -59,6 +59,14 @@ LIT_RATE = 0.6
 PHOTON_KEV = 9.04
 READ_NOISE_KEV = 0.32
 
+#: The zero level proc leaves in (CLAUDE.md pitfall 23), at a fraction of W7's
+#: real sizes so the measured readout noise stays within 2 % of READ_NOISE_KEV:
+#: a static offset per ASIC, a common-mode jump per train shared by every cell
+#: and ASIC (jf1's behaviour), and lit cells sitting higher than dark ones.
+ASIC_OFFSET_KEV = (0.03, -0.05, 0.02, 0.06, -0.01, -0.04, 0.05, -0.02)
+COMMON_MODE_RMS_KEV = 0.05
+LIT_SHIFT_KEV = 0.10
+
 
 @dataclass(frozen=True)
 class MockRun:
@@ -167,6 +175,9 @@ def write_mock_run(
     root.mkdir(parents=True, exist_ok=True)
     train_ids = tuple(int(t) for t in train_ids)
     rng = np.random.default_rng(seed)
+    common_mode = np.random.default_rng(90_000 + seed).normal(
+        0.0, COMMON_MODE_RMS_KEV, len(train_ids)
+    )
 
     static = np.zeros(N_MODULE_PX, dtype=bool)
     static[
@@ -200,6 +211,7 @@ def write_mock_run(
             extreme_train=extreme_train,
             extreme_flagged=extreme_flagged,
             shuffled_cells_train=shuffled_cells_train,
+            common_mode=common_mode,
         )
 
     return MockRun(
@@ -210,7 +222,16 @@ def write_mock_run(
         lit_cells=tuple(lit_cells),
         zero_entry_trains=tuple(zero_entry_trains),
         static_mask=static,
+        extras={
+            "common_mode_kev": dict(zip(train_ids, common_mode.tolist(), strict=True))
+        },
     )
+
+
+def injected_level(run: MockRun, train_id: int, lit: bool) -> np.ndarray:
+    """The zero level each ASIC was given in one train, keV, ``(8,)``."""
+    level = np.asarray(ASIC_OFFSET_KEV) + run.extras["common_mode_kev"][train_id]
+    return level + (LIT_SHIFT_KEV if lit else 0.0)
 
 
 def write_synthetic_poni(
@@ -349,14 +370,20 @@ def _fill_frames(
     extreme_train: int | None,
     extreme_flagged: bool,
     shuffled_cells_train: int | None,
+    common_mode: np.ndarray,
 ) -> None:
     """Fill ``data/adc``, ``data/mask`` and ``data/memoryCell`` with content.
 
     Lit cells get Poisson photons at ``PHOTON_KEV`` plus readout noise; dark
     cells get the noise alone, so the dark-cell spread a run measures is
     ``READ_NOISE_KEV`` and the lit fraction is far above any sane threshold —
-    the same separation the real detectors show.
+    the same separation the real detectors show. Every cell then carries the
+    zero level of :func:`injected_level`.
     """
+    asic = ((np.arange(MODULE_SHAPE[0])[:, None] // 256) * 4) + (
+        np.arange(MODULE_SHAPE[1])[None, :] // 256
+    )
+    asic_offset = np.asarray(ASIC_OFFSET_KEV)[asic]
     keep = ~static.reshape(-1)
     first_kept = int(np.flatnonzero(keep)[0])
 
@@ -371,6 +398,9 @@ def _fill_frames(
             values = rng.normal(0.0, READ_NOISE_KEV, (CELLS, *MODULE_SHAPE))
             for cell in lit_cells:
                 values[cell] += PHOTON_KEV * rng.poisson(LIT_RATE, MODULE_SHAPE)
+                values[cell] += LIT_SHIFT_KEV
+            if entry < common_mode.size:
+                values += asic_offset + common_mode[entry]
             frame_mask = np.zeros((CELLS, *MODULE_SHAPE), dtype=np.uint32)
             flat_mask = frame_mask.reshape(CELLS, -1)
             for cell in range(CELLS):

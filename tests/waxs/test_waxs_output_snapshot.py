@@ -20,9 +20,13 @@ from test_waxs_run import InlinePool, run  # noqa: E402  (tests/waxs is on sys.p
 #: (platform.system(), platform.machine()). Linux x86_64 is the locked
 #: environment on Maxwell, where it is stable across SIMD level, OpenMP threads
 #: and BLAS kernel; the pre-cleanup tree produces the same value.
+#:
+#: Moved 2026-10-13, deliberately, by photon counting (CLAUDE.md open task 18):
+#: the file stores photons instead of keV, gains the counting columns, and the
+#: mock now carries a zero level per ASIC and train. Was ``7b81f29b…``.
 EXPECTED_DIGEST = {
     ("Linux", "x86_64"): (
-        "7b81f29bccd82f9060f1b8a311b203edec6f5923740b9e3ee82d333b8d149f11"
+        "1df60a156320021de2bb88f1c3cab160a63e9bb8deb84ed801cab7e4f183cf3e"
     ),
 }
 

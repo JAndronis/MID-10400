@@ -5,13 +5,15 @@ pyFAI, so that comparison would be an identity check. This gate has content
 instead: it is the correctness argument for the whole design in
 :mod:`analysis.waxs.operator`.
 
-The **reference** masks each frame the obvious way — ``mask = static | dynamic``
-passed to ``integrate1d`` — which is correct and slow, because pyFAI rebuilds
-its sparse matrix whenever the mask checksum changes. The **production** path
-builds the matrix once with the static mask and carries the dynamic mask as NaN.
-Measured on r0423, the two agree exactly. If a future pyFAI changes how
-non-finite values are preprocessed, that equivalence is the thing that breaks,
-and this gate is what catches it before a whole run is integrated.
+The **reference** masks each frame the obvious way — every excluded pixel
+passed as ``integrate1d(mask=)`` — which is correct and slow, because pyFAI
+rebuilds its sparse matrix whenever the mask checksum changes. The
+**production** path builds the matrix once with the static mask and carries the
+rest as NaN. Both integrate the same photon counts, so the gate tests that
+equivalence and nothing else. Measured on r0423 (keV), the two agree exactly. If
+a future pyFAI changes how non-finite values are preprocessed, that equivalence
+is the thing that breaks, and this gate is what catches it before a whole run is
+integrated.
 
 The reference runs on its own ``AzimuthalIntegrator``, rebuilt from the
 operator's PONI text, so that hammering it with per-frame masks never evicts
@@ -29,8 +31,9 @@ from pyFAI.integrator.azimuthal import AzimuthalIntegrator
 
 from analysis.common.arrays import relative_difference
 from analysis.waxs.config import MODULE_SHAPE
-from analysis.waxs.integrate import ErrorModel, extreme_pixels, integrate_frame
+from analysis.waxs.integrate import integrate_prepared, prepare_frame
 from analysis.waxs.operator import WaxsOperator
+from analysis.waxs.photons import PhotonCounting
 
 __all__ = [
     "SelfTestFailed",
@@ -70,21 +73,24 @@ def reference_integrator(op: WaxsOperator) -> AzimuthalIntegrator:
 def reference_frame(
     ai: AzimuthalIntegrator,
     op: WaxsOperator,
-    model: ErrorModel,
-    x: np.ndarray,
-    bad: np.ndarray,
+    photons: np.ndarray,
+    excluded: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """``(signal, normalization, variance)`` with the union passed as ``mask=``."""
-    flat = np.asarray(x).reshape(-1).astype(np.float32)
+    """``(signal, normalization, variance)`` with ``excluded`` passed as ``mask=``.
+
+    :param photons: float32 counts, flat; values under ``excluded`` are ignored
+        and replaced by zero, so the mask is genuinely what removes them.
+    :param excluded: flat bool, the pixels to leave out.
+    """
+    counts = np.where(excluded, np.float32(0), np.asarray(photons, np.float32))
     result = ai.integrate1d(
-        flat.reshape(MODULE_SHAPE),
+        counts.reshape(MODULE_SHAPE),
         op.npt,
         method=op.method,
         unit=op.unit,
-        # A fresh writable array: ``frame_bad`` builds one per frame, so this
-        # is never a read-only view of the operator's static mask.
-        mask=np.ascontiguousarray(bad.reshape(MODULE_SHAPE)),
-        variance=model.variance(flat).reshape(MODULE_SHAPE),
+        # A fresh writable array, never a read-only view of the operator's.
+        mask=np.ascontiguousarray(excluded.reshape(MODULE_SHAPE)),
+        variance=counts.copy().reshape(MODULE_SHAPE),
     )
     return (
         np.asarray(result.sum_signal, dtype=np.float64),
@@ -101,41 +107,45 @@ def compare_frame(
     ai: AzimuthalIntegrator,
     reference_ai: AzimuthalIntegrator,
     op: WaxsOperator,
-    model: ErrorModel,
+    counting: PhotonCounting,
     x: np.ndarray,
-    bad: np.ndarray,
+    dynamic: np.ndarray,
     *,
     max_abs_kev: float,
 ) -> tuple[float, float, float]:
     """Relative difference in S, N and V between the two paths, on one frame.
 
+    Both paths integrate the *same* counted frame — the one
+    :func:`~analysis.waxs.integrate.prepare_frame` produces — so the comparison
+    is the NaN-versus-mask equivalence and nothing else. Whether the counts
+    themselves are right is W4's gate B, against an independent estimator.
+
     :raises SelfTestFailed: the two paths disagree about which bins are
         populated at all, which no tolerance would catch.
     """
-    # ``integrate_frame`` excludes extreme pixels itself; the reference has to
-    # be given the same union or the two would differ over the policy rather
-    # than over the NaN-vs-mask equivalence this gate exists to test.
-    bad = bad | extreme_pixels(x, bad, max_abs_kev)
-    got = integrate_frame(ai, op, model, x, bad, max_abs_kev=max_abs_kev)
-    want_s, want_n, want_v = reference_frame(reference_ai, op, model, x, bad)
-    if not np.array_equal(got.normalization > 0, want_n > 0):
+    prepared = prepare_frame(op, counting, x, dynamic, max_abs_kev=max_abs_kev)
+    got_s, got_n, got_v = integrate_prepared(ai, op, prepared)
+    want_s, want_n, want_v = reference_frame(
+        reference_ai, op, prepared.photons, prepared.excluded
+    )
+    if not np.array_equal(got_n > 0, want_n > 0):
         raise SelfTestFailed(
             "the NaN path and the per-frame-mask reference populate different "
-            f"bins: {int((got.normalization > 0).sum())} against "
+            f"bins: {int((got_n > 0).sum())} against "
             f"{int((want_n > 0).sum())} of {op.npt}"
         )
     occupied = want_n > 0
     return (
-        _relative(got.signal[occupied], want_s[occupied]),
-        _relative(got.normalization[occupied], want_n[occupied]),
-        _relative(got.variance[occupied], want_v[occupied]),
+        _relative(got_s[occupied], want_s[occupied]),
+        _relative(got_n[occupied], want_n[occupied]),
+        _relative(got_v[occupied], want_v[occupied]),
     )
 
 
 def run_selftest(
     ai: AzimuthalIntegrator,
     op: WaxsOperator,
-    model: ErrorModel,
+    counting: PhotonCounting,
     frames: list[tuple[np.ndarray, np.ndarray]],
     *,
     max_abs_kev: float,
@@ -143,17 +153,19 @@ def run_selftest(
 ) -> SelfTestReport:
     """Gate the pass on real frames before any pool is started.
 
-    :param frames: ``(x, bad)`` pairs, ``x`` in keV and ``bad`` the flat union
-        of the static mask and this frame's ``data.mask``.
+    :param frames: ``(x, dynamic)`` pairs, ``x`` in keV and ``dynamic`` this
+        frame's flat ``data.mask`` exclusion, without the static mask.
     :raises SelfTestFailed: any frame exceeds ``tolerance``.
     """
     if not frames:
         raise SelfTestFailed("no frames to self-test on")
     reference_ai = reference_integrator(op)
     worst = [0.0, 0.0, 0.0]
-    for x, bad in frames:
+    for x, dynamic in frames:
         for index, value in enumerate(
-            compare_frame(ai, reference_ai, op, model, x, bad, max_abs_kev=max_abs_kev)
+            compare_frame(
+                ai, reference_ai, op, counting, x, dynamic, max_abs_kev=max_abs_kev
+            )
         ):
             worst[index] = max(worst[index], value)
 

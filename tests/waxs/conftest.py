@@ -119,9 +119,18 @@ def operator(cfg):
 
 @pytest.fixture
 def model():
+    """The readout-noise record a file stores — a diagnostic, not the variance."""
     from analysis.waxs.integrate import ErrorModel
 
     return ErrorModel(0.32, PHOTON_KEV, "configured")
+
+
+@pytest.fixture
+def counting(cfg):
+    """The photon-counting settings the default config names."""
+    from analysis.waxs.photons import PhotonCounting
+
+    return PhotonCounting.from_config(cfg)
 
 
 @pytest.fixture
@@ -170,7 +179,6 @@ def worker_ready(pipeline):
         pipeline.cfg,
         pipeline.op,
         pipeline.ai,
-        pipeline.model,
         pipeline.classification.lit,
         pipeline.det,
     )

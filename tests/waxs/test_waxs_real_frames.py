@@ -49,8 +49,9 @@ from analysis.waxs.config import (  # noqa: E402
     EXPECTED_LIT_CELLS,
     JungfrauWaxsConfig,
 )
-from analysis.waxs.integrate import ErrorModel, integrate_frame  # noqa: E402
+from analysis.waxs.integrate import integrate_frame  # noqa: E402
 from analysis.waxs.operator import build_operator  # noqa: E402
+from analysis.waxs.photons import PhotonCounting  # noqa: E402
 from analysis.waxs.selftest import run_selftest  # noqa: E402
 
 DATA = Path(__file__).resolve().parents[2] / "data"
@@ -166,13 +167,14 @@ def test_the_read_noise_is_recovered(real):
 def test_the_nan_path_equals_the_reference_on_real_frames(real):
     """The W2 gate. Measured exact on both detectors, all 500 bins."""
     cfg, op, ai, data, mask, detector = real
-    model = ErrorModel(MEASURED[detector]["read_noise_kev"], cfg.photon_energy_kev)
+    counting = PhotonCounting.from_config(cfg)
     # Array positions 0-7, which is where the lit frames are in the export.
+    bits = np.uint32(cfg.mask_bits)
     frames = [
-        (data[position], frame_bad(mask[position], cfg.mask_bits, op.static_bad))
+        (data[position], (mask[position].reshape(-1) & bits) != 0)
         for position in range(8)
     ]
-    report = run_selftest(ai, op, model, frames, max_abs_kev=cfg.max_abs_kev)
+    report = run_selftest(ai, op, counting, frames, max_abs_kev=cfg.max_abs_kev)
 
     assert report.n_frames == 8
     assert report.max_rel_signal == 0.0
@@ -183,13 +185,20 @@ def test_the_nan_path_equals_the_reference_on_real_frames(real):
 
 def test_a_real_frame_integrates_to_something_sensible(real):
     cfg, op, ai, data, mask, detector = real
-    model = ErrorModel(MEASURED[detector]["read_noise_kev"], cfg.photon_energy_kev)
+    counting = PhotonCounting.from_config(cfg)
     bad = frame_bad(mask[0], cfg.mask_bits, op.static_bad)
-    result = integrate_frame(ai, op, model, data[0], bad, max_abs_kev=cfg.max_abs_kev)
+    dynamic = (mask[0].reshape(-1) & np.uint32(cfg.mask_bits)) != 0
+    result = integrate_frame(
+        ai, op, counting, data[0], dynamic, max_abs_kev=cfg.max_abs_kev
+    )
 
     assert np.isfinite(result.signal).all()
     assert (result.normalization > 0).all()
     assert result.energy_valid > 0
+    assert result.n_photons > 0
+    # W7: every ASIC keeps >= 55 k usable pixels, so none lacks a level.
+    assert result.n_level_missing == 0
+    assert np.abs(result.asic_level).max() < 0.5
     # jf2's extreme pixels sit under the .edf, so the kept maximum is modest.
     assert result.max_kev < 100
     assert result.n_bad_pixels == int(bad.sum())

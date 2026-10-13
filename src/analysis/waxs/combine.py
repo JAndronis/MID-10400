@@ -28,6 +28,11 @@ reflections) a good χ² here says the two detectors are mutually consistent in
 
 Everything here works on stored sums or on pooled curves — nothing reprocesses
 frames — so it is post hoc, applied to stored sums rather than during the pass.
+
+**keV and photons never mix.** Files written before photon counting store keV,
+later ones photons, and a factor fitted between the two would absorb the unit
+change and report it as a detector mismatch. :func:`require_same_units` refuses
+the pair instead, and everything that combines two inputs calls it.
 """
 
 from __future__ import annotations
@@ -41,10 +46,13 @@ import numpy as np
 __all__ = [
     "NoOverlap",
     "OverlapScaling",
+    "UnitsMismatch",
     "combine_curves",
     "combine_files",
     "mean_curve",
+    "require_same_units",
     "scale_to_overlap",
+    "units_of",
 ]
 
 #: How the scale factor is estimated.
@@ -53,6 +61,36 @@ METHODS = ("wls", "median")
 
 class NoOverlap(ValueError):
     """The two curves share no q range with data in both."""
+
+
+class UnitsMismatch(ValueError):
+    """Two inputs count different things — keV and photons — and must not mix."""
+
+
+def units_of(source: Any) -> str:
+    """What a grid or pooled dataset counts, from its ``units`` attribute.
+
+    The readers in :mod:`analysis.waxs.writer` set it; an object without one
+    came from a file written before photon counting, which stores keV.
+    """
+    from analysis.waxs.writer import KEV
+
+    return str(getattr(source, "attrs", {}).get("units") or KEV)
+
+
+def require_same_units(reference: str, other: str) -> str:
+    """The shared unit of two inputs.
+
+    :raises UnitsMismatch: they differ.
+    """
+    if reference != other:
+        raise UnitsMismatch(
+            f"the reference counts {reference} and the other {other}. Files "
+            "written before photon counting store keV; reprocess the older one "
+            "rather than combining them, because a fitted factor would absorb "
+            "the unit change and report it as a detector mismatch"
+        )
+    return reference
 
 
 @dataclass(frozen=True, slots=True)
@@ -323,8 +361,12 @@ def combine_curves(
     sigma_other: np.ndarray | None = None,
     method: str = "wls",
     min_bins: int = 8,
+    units: str | None = None,
 ) -> tuple[Any, OverlapScaling]:
     """One curve from two, with ``other`` scaled onto the reference.
+
+    ``units``, when given, is recorded on the result; the caller has already
+    checked that both inputs share it (:func:`require_same_units`).
 
     Returns a Dataset over a q axis that is the sorted union of both, carrying
     ``intensity``, ``sigma`` and ``source`` (0 = reference only, 1 = scaled
@@ -427,6 +469,8 @@ def combine_curves(
     combined.attrs.update(
         {f"scaling_{key}": value for key, value in scaling.summary().items()}
     )
+    if units is not None:
+        combined.attrs["units"] = units
     return combined, scaling
 
 
@@ -441,9 +485,15 @@ def combine_files(
 
     The stored sums carry real per-bin errors, which the per-cell grid does not,
     so this is the path that gives a meaningful ``reduced_chi2``.
+
+    :raises UnitsMismatch: one file stores keV and the other photons.
     """
     from analysis.common.writer import pooled_per_train
+    from analysis.waxs.writer import file_units
 
+    units = require_same_units(
+        file_units(Path(reference_file)), file_units(Path(other_file))
+    )
     q_ref, i_ref, s_ref = mean_curve(pooled_per_train(Path(reference_file)))
     q_other, i_other, s_other = mean_curve(pooled_per_train(Path(other_file)))
     return combine_curves(
@@ -455,4 +505,5 @@ def combine_files(
         sigma_other=s_other,
         method=method,
         min_bins=min_bins,
+        units=units,
     )

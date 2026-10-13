@@ -9,19 +9,25 @@ writes its verdict as JSON beside itself. Modelled on ``scripts/p4_acceptance.py
 
 | Gate | Asks |
 |---|---|
-| 0 configuration | the whole run, on the workers claimed, at this config hash? |
+| 0 configuration | the whole run, on the claimed workers, at this hash, in photons? |
 | A self-test | did the NaN path equal the per-frame-mask reference on real frames? |
-| B reference | does an *independent* integration reproduce what was stored? |
+| B reference | does an *independent* count and integration reproduce the file? |
 | C timing | how long did it take, and how much of the node did it use? |
-| D ledger | is every frame accounted for, with the expected cells and bits? |
+| D ledger | is every frame accounted for, with the expected cells, bits and levels? |
+| E scatter | is the stored Poisson σ the scatter the frames of a train show? |
 
-**Gate B is the one that earns its keep.** It re-reads the stored sums for a few
-fully-OK trains and compares them against an integration done the slow way —
-``integrate1d(mask = static | dynamic)`` per frame, the path
-:mod:`analysis.waxs.selftest` calls the reference. That is a genuinely different
-code path from the production NaN sentinel, and it goes through the writer's
-rows, the ``f4`` storage and the row-to-train map, so the whole chain is inside
-the comparison rather than just the kernel.
+**Gate B is the one that earns its keep.** It recounts a few fully-OK trains with
+p010646's estimator, copied verbatim below (``template_levels``) rather than
+imported from :mod:`analysis.waxs.photons`, compares the levels with the stored
+``asic_level``, and integrates the counts the slow way —
+``integrate1d(mask = excluded)`` per frame, the path :mod:`analysis.waxs.selftest`
+calls the reference. That is genuinely different code from the production
+estimator and NaN sentinel, and it goes through the writer's rows, the ``f4``
+storage and the row-to-train map, so the whole chain is inside the comparison.
+
+**Gate E is reported, not failed.** W7 measured the per-pixel counts
+under-dispersed (D = 0.93–0.95), which predicts a σ ratio of ~0.97; the number
+says how far the frames of a train scatter beyond counting noise.
 
 Needs a DAMNIT-partition node, the real PONI and ``.edf`` files, and the run.
 """
@@ -46,19 +52,21 @@ from typing import Any  # noqa: E402
 import h5py  # noqa: E402
 import numpy as np  # noqa: E402
 
-from analysis.common.masks import describe_bits, frame_bad  # noqa: E402
+from analysis.common.masks import describe_bits  # noqa: E402
 from analysis.common.status import FrameStatus  # noqa: E402
 from analysis.waxs.cells import UnexpectedLitCells  # noqa: E402
 from analysis.waxs.config import (  # noqa: E402
     CELLS_PER_TRAIN,
     EXPECTED_BITS,
+    MODULE_SHAPE,
     config_for,
     is_storage_cell_sequence,
 )
-from analysis.waxs.integrate import ErrorModel  # noqa: E402
 from analysis.waxs.operator import build_operator  # noqa: E402
 from analysis.waxs.plan import open_detector  # noqa: E402
+from analysis.waxs.scatter import frame_scatter  # noqa: E402
 from analysis.waxs.selftest import SelfTestFailed, reference_frame  # noqa: E402
+from analysis.waxs.writer import PHOTONS, file_units  # noqa: E402
 
 #: Measured on r0423 jf1, 36 workers, whole run: read_data 11.6, read_mask 5.0,
 #: integrate 3.0 ms/frame/core. Set at roughly 1.5x each, so a real regression
@@ -70,11 +78,60 @@ from analysis.waxs.selftest import SelfTestFailed, reference_frame  # noqa: E402
 #: core, where the AGIPD pass found its stages 1.3-1.6x worse under load. Dense
 #: pyFAI on 24 000 frames is simply not memory-bandwidth bound the way the AGIPD
 #: sparse kernel on 465 000 frames is.
-BUDGET_MS = {"read_data": 18.0, "read_mask": 8.0, "integrate": 5.0}
+BUDGET_MS = {"read_data": 18.0, "read_mask": 8.0, "photonise": 15.0, "integrate": 5.0}
+#: ``photonise`` is a first budget: 5.7–8.6 ms/frame on one login-node core
+#: (EPYC 75F3, 2026-10-13, synthetic frames at 0.15–1.0 photons/pixel), so
+#: ~1.5x that under load. Replace it with the node figure once W4 has one.
+
+#: The q range jf1 and jf2 share on r0423 (§6 O5), where gate E is also reported.
+OVERLAP_NM = (11.53, 18.44)
+
+#: Two float64 window means of the same pixels summed in a different order agree
+#: to ~1e-15 keV; stored as float32 they agree to one ulp of the level, 1e-8 keV
+#: at 0.2 keV. 1e-6 keV is a hundred ulps and still four orders below anything
+#: that moves a count (W7: a 0.1 keV level error moves 1 % of one-photon pixels).
+LEVEL_TOLERANCE_KEV = 1e-6
 
 #: The whole r0423 jf1 pass took 17.5 s. 600 s is 34x that: loose enough to
 #: survive a contended node, tight enough that something structural shows.
 WALL_TARGET_S = 600.0
+
+
+# ── p010646's estimator, verbatim (transfer_context/templates/jf_photon_count.py)
+def template_asics(a: np.ndarray, edge: int) -> np.ndarray:
+    """(..., 512, 1024) -> (..., 2, 4, pixels) of each 256 x 256 ASIC."""
+    a = a.reshape(*a.shape[:-2], 2, 256, 4, 256).swapaxes(-3, -2)[
+        ..., edge:-edge, edge:-edge
+    ]
+    return a.reshape(*a.shape[:-2], -1)
+
+
+def template_baseline(
+    a: np.ndarray, cut: float, window: float, iterations: int
+) -> np.ndarray:
+    """Median below ``cut``, then ``iterations`` x the mean within ``±window``."""
+    est = np.nanmedian(np.where(a < cut, a, np.nan), -1)
+    for _ in range(iterations):
+        w = np.abs(a - est[..., None]) < window
+        est = np.nansum(np.where(w, a, 0), -1) / w.sum(-1)
+    return est
+
+
+def template_levels(cfg: Any, x: np.ndarray, usable: np.ndarray) -> np.ndarray:
+    """The template's levels over ``usable``, NaN below ``level_min_pixels``."""
+    import warnings
+
+    tiles = template_asics(
+        np.where(usable, x, np.nan).reshape(MODULE_SHAPE).astype(np.float64),
+        cfg.level_edge_px,
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        levels = template_baseline(
+            tiles, cfg.level_cut_kev, cfg.level_window_kev, cfg.level_iterations
+        ).reshape(-1)
+    enough = np.isfinite(tiles).sum(-1).reshape(-1) >= cfg.level_min_pixels
+    return np.where(enough, levels, np.nan)
 
 
 def _lit_as_configured(cfg: Any, lit: list[int]) -> bool:
@@ -171,6 +228,7 @@ def stage_configuration(cfg: Any, output: Path, workers: int) -> dict[str, Any]:
         "config_hash_matches": stored_hash == expected,
         "workers_as_requested": n_workers == workers,
         "lit_matches_config": _lit_as_configured(cfg, lit),
+        "stores_photons": file_units(output) == PHOTONS,
     }
     return {
         "passed": all(checks.values()),
@@ -185,22 +243,25 @@ def stage_configuration(cfg: Any, output: Path, workers: int) -> dict[str, Any]:
     }
 
 
-# ── gate B: an independent integration ───────────────────────────────────────
+# ── gate B: an independent count and integration ─────────────────────────────
 def stage_reference(
     cfg: Any, output: Path, n_trains: int, tolerance: float, dc: Any = None
 ) -> dict[str, Any]:
-    """Re-integrate a few whole trains the slow way and compare to the file.
+    """Recount a few whole trains independently and compare to the file.
 
-    The reference path passes ``static | dynamic`` to ``integrate1d(mask=)`` per
-    frame — different code from the production NaN sentinel — and the comparison
-    is against what the *writer stored*, pooled the way §9 pools it, so the row
-    map and the ``f4`` storage are inside the gate.
+    The levels come from the template's estimator (``template_levels``), the
+    counts from the definition the pass documents — ``clip(rint((x -
+    float32(level)) / float32(E)), 0)`` — and the integration from
+    ``integrate1d(mask=excluded)`` per frame, different code from the production
+    NaN sentinel. The comparison is against what the *writer stored*, pooled the
+    way §9 pools it, so the row map and the ``f4`` storage are inside the gate.
     """
     from extra_data import by_id, open_run
 
     from analysis.common.plan import evenly_spaced
 
     op, ai = build_operator(cfg)
+    energy = np.float32(cfg.count_energy_kev)
 
     with h5py.File(output, "r") as handle:
         if handle["operator"].attrs["sha256"] != op.sha256:
@@ -210,10 +271,6 @@ def stage_reference(
                 "stored": handle["operator"].attrs["sha256"],
                 "rebuilt": op.sha256,
             }
-        model = ErrorModel(
-            float(handle["cells"].attrs["read_noise_kev"]),
-            float(handle["cells"].attrs["photon_energy_kev"]),
-        )
         lit = [int(c) for c in handle["cells/lit"][:]]
         train_ids = handle["trains/trainId"][:]
         first = handle["trains/first"][:]
@@ -234,9 +291,14 @@ def stage_reference(
         chosen = evenly_spaced(np.array(fully_ok, dtype=np.uint64), n_trains)
         dc = dc if dc is not None else open_run(cfg.proposal, cfg.run, data="proc")
         det = open_detector(cfg, dc)
+        bits = np.uint32(cfg.mask_bits)
+        pixel = np.arange(MODULE_SHAPE[0] * MODULE_SHAPE[1])
+        asic = (pixel // MODULE_SHAPE[1] // 256) * 4 + (pixel % MODULE_SHAPE[1]) // 256
 
         worst_intensity = 0.0
+        worst_level = 0.0
         bins_agree = True
+        level_gaps_agree = True
         compared = []
         for index in chosen.tolist():
             index = int(index)
@@ -246,6 +308,8 @@ def stage_reference(
             stored_norm = (
                 handle["frames/normalization"][rows].astype(np.float64).sum(axis=0)
             )
+            stored_levels = handle["frames/asic_level"][rows]
+            stored_cells = handle["frames/cellId"][rows]
 
             selected = det.select_trains(by_id[[train_id]])
             data = np.asarray(selected["data.adc"].ndarray())[0, 0]
@@ -255,10 +319,40 @@ def stage_reference(
 
             ref_signal = np.zeros(op.npt)
             ref_norm = np.zeros(op.npt)
-            for cell in lit:
-                position = positions[cell]
-                bad = frame_bad(mask[position], cfg.mask_bits, op.static_bad)
-                signal, norm, _ = reference_frame(ai, op, model, data[position], bad)
+            for row, cell in enumerate(lit):
+                if int(stored_cells[row]) != cell:
+                    return {
+                        "passed": False,
+                        "reason": f"row {row} holds a cell != {cell}",
+                    }
+                x = data[positions[cell]].reshape(-1)
+                dynamic = (mask[positions[cell]].reshape(-1) & bits) != 0
+                finite = np.isfinite(x)
+                usable = ~dynamic & finite
+                if cfg.level_pixels == "kept":
+                    usable &= ~op.static_bad
+                levels = template_levels(cfg, x, usable).astype(np.float32)
+
+                stored = stored_levels[row]
+                if not np.array_equal(np.isnan(levels), np.isnan(stored)):
+                    level_gaps_agree = False
+                both = np.isfinite(levels) & np.isfinite(stored)
+                if both.any():
+                    worst_level = max(
+                        worst_level, float(np.abs(levels - stored)[both].max())
+                    )
+
+                bad = dynamic | op.static_bad
+                extreme = ~bad & (
+                    ~finite | (np.abs(np.where(finite, x, 0)) > cfg.max_abs_kev)
+                )
+                excluded = bad | extreme | np.isnan(levels)[asic]
+                photons = np.clip(
+                    np.rint((x.astype(np.float32) - levels[asic]) / energy),
+                    np.float32(0),
+                    None,
+                )
+                signal, norm, _ = reference_frame(ai, op, photons, excluded)
                 ref_signal += signal
                 ref_norm += norm
 
@@ -283,10 +377,18 @@ def stage_reference(
             )
 
     return {
-        "passed": bool(bins_agree and worst_intensity < tolerance),
+        "passed": bool(
+            bins_agree
+            and level_gaps_agree
+            and worst_intensity < tolerance
+            and worst_level < LEVEL_TOLERANCE_KEV
+        ),
         "trains": compared,
         "max_rel_intensity": worst_intensity,
         "tolerance": tolerance,
+        "max_abs_level_difference_kev": worst_level,
+        "level_tolerance_kev": LEVEL_TOLERANCE_KEV,
+        "missing_levels_agree": level_gaps_agree,
         "empty_bin_sets_equal": bins_agree,
     }
 
@@ -330,6 +432,20 @@ def stage_timing(output: Path, wall_s: float | None) -> dict[str, Any]:
     }
 
 
+# ── gate E: the stored σ against the frames ──────────────────────────────────
+def stage_scatter(output: Path, overlap: tuple[float, float]) -> dict[str, Any]:
+    """Reported, never failed: see :mod:`analysis.waxs.scatter`."""
+    return {
+        "passed": None,
+        "whole_range": frame_scatter(output),
+        "overlap": frame_scatter(output, q_range=overlap),
+        "w7_expectation": (
+            "D = 0.93-0.95 per pixel on r0423 predicts a sigma ratio of ~0.97 "
+            "for pure counting noise"
+        ),
+    }
+
+
 # ── gate D: the ledger ───────────────────────────────────────────────────────
 def stage_ledger(cfg: Any, output: Path, pool: bool = True) -> dict[str, Any]:
     """The ledger, plus the one number that tests D3's actual claim.
@@ -348,6 +464,12 @@ def stage_ledger(cfg: Any, output: Path, pool: bool = True) -> dict[str, Any]:
         bits = int(handle["provenance"].attrs.get("bits_present", 0))
         lit = [int(c) for c in handle["cells/lit"][:]]
         negative = handle["frames/n_negative_variance_bins"][:]
+        ok = status == FrameStatus.OK
+        levels = handle["frames/asic_level"][:][ok]
+        level_missing = handle["frames/n_level_missing"][:][ok]
+        energies = np.unique(handle["frames/count_energy_kev"][:][ok])
+        photons = handle["frames/n_photons"][:][ok]
+        units = handle["provenance"].attrs.get("units")
 
     counts = {
         code.name: int((status == code).sum())
@@ -397,13 +519,31 @@ def stage_ledger(cfg: Any, output: Path, pool: bool = True) -> dict[str, Any]:
     present = {b for b in range(32) if bits >> b & 1}
     unexpected = present - set(EXPECTED_BITS)
     reconciles = int(count.sum()) == status.size
+    with np.errstate(invalid="ignore"):
+        level_median = np.nanmedian(levels, axis=0).tolist() if levels.size else []
+        level_rms = np.nanstd(levels, axis=0).tolist() if levels.size else []
+    counted = {
+        "units": units,
+        "count_energy_kev": [float(e) for e in energies],
+        "frames_with_a_missing_level": int((level_missing > 0).sum()),
+        "asic_levels_missing": int(level_missing.astype(np.int64).sum()),
+        "asic_level_median_kev": level_median,
+        "asic_level_frame_to_frame_rms_kev": level_rms,
+        "photons_per_frame_median": float(np.median(photons)) if photons.size else 0,
+        # Poisson on counts cannot go negative; a non-zero here is a bug.
+        "negative_variance_bins": int(negative.sum()),
+    }
     return {
         "passed": bool(
             reconciles
             and set(counts) == {"OK"}
             and not unexpected
             and _lit_as_configured(cfg, lit)
+            and units == PHOTONS
+            and energies.size == 1
+            and int(negative.sum()) == 0
         ),
+        "photon_counting": counted,
         "status_counts": counts,
         "train_status_counts": train_counts,
         "offending_trains": offenders,
@@ -534,6 +674,7 @@ def main(argv=None) -> int:
     )
     report["gates"]["C_timing"] = stage_timing(output, wall)
     report["gates"]["D_ledger"] = stage_ledger(cfg, output)
+    report["gates"]["E_scatter"] = stage_scatter(output, OVERLAP_NM)
 
     verdicts = {k: v.get("passed") for k, v in report["gates"].items()}
     report["passed"] = all(v is not False for v in verdicts.values())
@@ -556,7 +697,16 @@ def main(argv=None) -> int:
             f"{selftest['n_frames']} frames"
         )
     reference = report["gates"]["B_reference"]
-    print(f"  gate B max rel intensity {reference.get('max_rel_intensity')}")
+    print(
+        f"  gate B max rel intensity {reference.get('max_rel_intensity')}, "
+        f"max level difference {reference.get('max_abs_level_difference_kev')} keV"
+    )
+    scatter = report["gates"]["E_scatter"]["whole_range"]
+    print(
+        f"  gate E sigma ratio {scatter.get('sigma_ratio_median')} "
+        f"(p05-p95 {scatter.get('sigma_ratio_p05_p95')}), per-train relative std "
+        f"{scatter.get('relative_std_between_trains')}"
+    )
     ledger = report["gates"]["D_ledger"]
     print(f"  ledger frames {ledger.get('status_counts')}")
     print(

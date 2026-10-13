@@ -108,7 +108,16 @@ def test_provenance_records_what_was_decided(cfg, mock_run_factory, tmp_path):
         error_model = json.loads(attrs["error_model"])
         assert error_model["source"] == "measured"
         assert error_model["read_noise_kev"] == pytest.approx(0.32, rel=0.05)
-        assert "unclamped" in error_model["note"]
+        assert error_model["variance"] == "poisson"
+        assert "diagnostic" in error_model["note"]
+        assert attrs["units"] == "photons"
+        counting = json.loads(attrs["photon_counting"])
+        assert counting["energy_kev"] == cfg.count_energy_kev
+        assert counting["level_pixels"] == cfg.level_pixels
+        assert "rint" in counting["method"]
+        levels = json.loads(attrs["photon_levels"])
+        assert levels["n_frames_with_a_missing_level"] == 0
+        assert len(levels["median_kev"]) == 8
         cells = json.loads(attrs["cells"])
         assert cells["lit"] == list(mock.lit_cells)
         selftest = json.loads(attrs["selftest"])

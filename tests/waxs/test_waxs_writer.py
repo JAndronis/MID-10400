@@ -70,7 +70,7 @@ def test_a_repeated_memory_cell_is_a_label_mismatch(
     op, ai = operator
     det = open_detector(cfg, dc)
     plan = build_plan(cfg, LIT_CELLS, dc=dc, control_dc=dc, det=det)
-    worker.init_from_detector(cfg, op, ai, model, LIT_CELLS, det)
+    worker.init_from_detector(cfg, op, ai, LIT_CELLS, det)
     try:
         statuses = {}
         for block in plan.blocks:
@@ -100,7 +100,7 @@ def test_an_extreme_pixel_costs_the_pixel_and_not_the_frame(
     op, ai = operator
     det = open_detector(cfg, dc)
     plan = build_plan(cfg, LIT_CELLS, dc=dc, control_dc=dc, det=det)
-    worker.init_from_detector(cfg, op, ai, model, LIT_CELLS, det)
+    worker.init_from_detector(cfg, op, ai, LIT_CELLS, det)
     try:
         rows = []
         for block in plan.blocks:
@@ -133,7 +133,7 @@ def _written_with_an_extreme_pixel(cfg, mock_run_factory, operator, model, tmp_p
     op, ai = operator
     det = open_detector(cfg, dc)
     plan = build_plan(cfg, LIT_CELLS, dc=dc, control_dc=dc, det=det)
-    worker.init_from_detector(cfg, op, ai, model, LIT_CELLS, det)
+    worker.init_from_detector(cfg, op, ai, LIT_CELLS, det)
     path = tmp_path / "extreme.h5"
     try:
         with JungfrauWaxsWriter.open_or_create(cfg, plan, path) as out:
@@ -219,7 +219,7 @@ def test_a_wild_pixel_data_mask_already_removes_is_not_counted(
     op, ai = operator
     det = open_detector(cfg, dc)
     plan = build_plan(cfg, LIT_CELLS, dc=dc, control_dc=dc, det=det)
-    worker.init_from_detector(cfg, op, ai, model, LIT_CELLS, det)
+    worker.init_from_detector(cfg, op, ai, LIT_CELLS, det)
     try:
         for block in plan.blocks:
             result = worker.process_block(block)
@@ -269,6 +269,10 @@ def test_the_schema_is_the_jungfrau_one(worker_ready, tmp_path):
             "max_kev",
             "max_kev_static",
             "n_extreme_pixels",
+            "n_photons",
+            "n_level_missing",
+            "count_energy_kev",
+            "asic_level",
             "signal",
             "normalization",
             "variance",
@@ -286,11 +290,70 @@ def test_the_schema_is_the_jungfrau_one(worker_ready, tmp_path):
 
 
 def test_there_are_no_nan_sentinels_anywhere(worker_ready, tmp_path):
+    """``asic_level`` may hold NaN — an ASIC with no level — but only then."""
     path = written(worker_ready, tmp_path)
     with h5py.File(path) as handle:
-        for name in ("signal", "normalization", "variance", "energy_valid", "max_kev"):
+        for name in (
+            "signal",
+            "normalization",
+            "variance",
+            "energy_valid",
+            "max_kev",
+            "count_energy_kev",
+            "asic_level",
+        ):
             values = handle[f"frames/{name}"][:]
             assert np.isfinite(values).all(), name
+        assert (handle["frames/n_level_missing"][:] == 0).all()
+
+
+def test_the_file_counts_photons_and_says_so(worker_ready, tmp_path):
+    from waxs_mockrun import PHOTON_KEV
+
+    from analysis.waxs.writer import PHOTONS, file_units
+
+    path = written(worker_ready, tmp_path)
+    assert file_units(path) == PHOTONS
+    with h5py.File(path) as handle:
+        frames = handle["frames"]
+        ok = frames["status"][:] == FrameStatus.OK
+        photons = frames["n_photons"][:][ok]
+        energy = frames["energy_valid"][:][ok]
+        assert frames["count_energy_kev"][:][ok] == pytest.approx(PHOTON_KEV)
+        # Raw keV over photons: E plus the zero level spread over every pixel.
+        assert (energy / photons).mean() == pytest.approx(PHOTON_KEV, rel=0.05)
+        assert (frames["variance"][:][ok] >= 0).all()
+    assert per_cell(path).attrs["units"] == PHOTONS
+    assert pooled_per_train(path).attrs["units"] == PHOTONS
+
+
+def test_each_frames_zero_level_is_the_one_put_in(worker_ready, tmp_path):
+    """End to end: the mock's per-train common mode and lit shift come back.
+
+    The frame's own level, not a dark cell's: lit cells sit higher (W7: 0.06 to
+    0.17 keV on r0423), so a dark-cell level would be the wrong one.
+    """
+    from waxs_mockrun import injected_level
+
+    path = written(worker_ready, tmp_path)
+    run = worker_ready.run
+    with h5py.File(path) as handle:
+        train_ids = handle["frames/trainId"][:]
+        levels = handle["frames/asic_level"][:]
+        status = handle["frames/status"][:]
+    assert (status == FrameStatus.OK).all()
+    for row, train_id in enumerate(train_ids.tolist()):
+        want = injected_level(run, train_id, lit=True)
+        assert np.abs(levels[row] - want).max() < 0.01, (row, train_id)
+
+
+def test_a_kev_file_is_never_resumed_as_photons(worker_ready, tmp_path):
+    """A file without ``units`` predates photon counting and counts keV."""
+    path = written(worker_ready, tmp_path)
+    with h5py.File(path, "r+") as handle:
+        del handle["provenance"].attrs["units"]
+    with pytest.raises(SchemaMismatch, match="no units attribute"):
+        JungfrauWaxsWriter.open_or_create(worker_ready.cfg, worker_ready.plan, path)
 
 
 def test_rows_are_written_by_label(worker_ready, tmp_path):
@@ -392,7 +455,7 @@ def test_per_cell_leaves_a_missing_train_as_zeros(
     op, ai = operator
     det = open_detector(cfg, dc)
     plan = build_plan(cfg, LIT_CELLS, dc=dc, control_dc=dc, det=det)
-    worker.init_from_detector(cfg, op, ai, model, LIT_CELLS, det)
+    worker.init_from_detector(cfg, op, ai, LIT_CELLS, det)
     try:
         path = tmp_path / "gap.h5"
         with JungfrauWaxsWriter.open_or_create(cfg, plan, path) as out:
