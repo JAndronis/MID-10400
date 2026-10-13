@@ -52,11 +52,17 @@ def expected_operator(
 
 
 def operator_differences(handle: h5py.File, op: WaxsOperator) -> list[str]:
-    """How the operator stored in ``handle`` differs from ``op``; empty if not."""
+    """How the operator stored in ``handle`` differs from ``op``; empty if not.
+
+    An equal sha256 settles it without reading the arrays, as for AGIPD
+    (:func:`analysis.saxs.complete.operator_differences`).
+    """
     group = handle.get("operator")
     names = ("q", "omega", "static_bad_packed")
     if group is None or any(name not in group for name in names):
         return ["the file stores no complete operator"]
+    if group.attrs.get("sha256") == op.sha256:
+        return []
     reasons = []
     if not np.array_equal(group["static_bad_packed"][()], np.packbits(op.static_bad)):
         reasons.append("operator static mask differs from the one built now")

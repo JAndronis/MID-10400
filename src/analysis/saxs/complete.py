@@ -71,12 +71,16 @@ def operator_differences(handle: h5py.File, op: SparseOperator) -> list[str]:
     """How the operator stored in ``handle`` differs from ``op``; empty if not.
 
     :data:`EXACT_ARRAYS` must be equal, ``omega`` equal to :data:`OMEGA_RTOL`.
-    Not the sha256, which differs between node classes (see :data:`OMEGA_RTOL`).
+    An equal sha256 settles it without reading the arrays — it is written with
+    them and covers all of them — but an unequal one does not: it differs
+    between node classes (see :data:`OMEGA_RTOL`).
     """
     group = handle.get("operator")
     names = (*EXACT_ARRAYS, "omega")
     if group is None or any(name not in group for name in names):
         return ["the file stores no complete operator"]
+    if group.attrs.get("sha256") == op.sha256:
+        return []
     reasons = [
         f"operator {name} differs from the one built now"
         for name in EXACT_ARRAYS

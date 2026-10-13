@@ -89,7 +89,9 @@ def test_another_pyfai_or_operator_is_not_complete(cfg, mock_run_factory, tmp_pa
     path = tmp_path / "run.h5"
     run(cfg, mock, dc, output_path=path)
     op = expected_operator(cfg)
-    moved = is_complete(path, cfg, operator=dataclasses.replace(op, q=op.q * 1.01))
+    moved = is_complete(
+        path, cfg, operator=dataclasses.replace(op, q=op.q * 1.01, sha256="b" * 64)
+    )
     assert moved.reasons == ("operator q differs by more than 1e-06 relative",)
     set_pyfai(path, "2000.1.0")
     verdict = is_complete(path, cfg)
@@ -108,6 +110,9 @@ def test_a_float32_ulp_in_the_stored_solid_angle_is_complete(
         omega = handle["operator/omega"][()]
         omega[::10] = np.nextafter(omega[::10], np.float32(np.inf))
         handle["operator/omega"][...] = omega
+        # The other node class's file carries its own sha256, everywhere.
+        handle["operator"].attrs["sha256"] = "a" * 64
+        handle["provenance"].attrs["operator_sha256"] = "a" * 64
     assert is_complete(path, cfg)
 
 

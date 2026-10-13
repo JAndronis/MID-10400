@@ -222,7 +222,7 @@ def test_is_complete_says_why_not(pipeline, complete_run, tmp_path, change, expe
 def test_another_operator_or_config_is_not_complete(pipeline, complete_run):
     directory, _ = complete_run
     kwargs = {"pixel_sums_path": directory / FILE_NAME}
-    moved = replace(pipeline.op, q=pipeline.op.q * 1.001)
+    moved = replace(pipeline.op, q=pipeline.op.q * 1.001, sha256="b" * 64)
     other_operator = is_complete(
         directory / "out.h5", pipeline.cfg, operator=moved, **kwargs
     )
@@ -237,7 +237,27 @@ def test_another_operator_or_config_is_not_complete(pipeline, complete_run):
 
 
 # ── node classes ──────────────────────────────────────────────────────────────
-def _nudge_omega(directory, relative=None):
+def _restamp(handle, op):
+    """Give the stored operator the sha256 its arrays now hash to, everywhere
+    the file records it — as a file written on another node class has."""
+    sha = operator_module.operator_sha256(
+        *(handle[f"operator/{name}"][()] for name in ("coef", "bins", "indptr")),
+        handle["operator/omega"][()],
+        handle["operator/q"][()],
+        npt=op.npt,
+        shape=op.shape,
+        method=op.method,
+        sdd_m=op.sdd_m,
+        wavelength_m=op.wavelength_m,
+        beam_center=op.beam_center,
+    )
+    assert sha != op.sha256
+    handle["operator"].attrs["sha256"] = sha
+    if "operator_sha256" in handle["provenance"].attrs:
+        handle["provenance"].attrs["operator_sha256"] = sha
+
+
+def _nudge_omega(directory, op, relative=None):
     """Move every tenth stored solid angle: one ULP, or by ``relative``."""
     with h5py.File(directory / "out.h5", "r+") as handle:
         omega = handle["operator/omega"][()]
@@ -246,6 +266,7 @@ def _nudge_omega(directory, relative=None):
         else:
             omega[::10] *= 1 + relative
         handle["operator/omega"][...] = omega
+        _restamp(handle, op)
 
 
 def test_a_one_ulp_solid_angle_from_another_node_class_is_complete(
@@ -254,7 +275,7 @@ def test_a_one_ulp_solid_angle_from_another_node_class_is_complete(
     """AVX2 and AVX-512 nodes build omega one ULP apart on ~10 % of pixels
     (S3, 2026-10-13), and allcpu mixes both: that must not refuse a file."""
     copy_of(complete_run, tmp_path)
-    _nudge_omega(tmp_path)
+    _nudge_omega(tmp_path, pipeline.op)
     before = stats(tmp_path)
     kwargs = {"pixel_sums_path": tmp_path / FILE_NAME, "geometry": pipeline.geometry}
     assert is_complete(tmp_path / "out.h5", pipeline.cfg, **kwargs)
@@ -270,7 +291,7 @@ def test_a_one_ulp_solid_angle_from_another_node_class_is_complete(
 
 def test_a_real_change_to_the_solid_angle_is_not(pipeline, complete_run, tmp_path):
     copy_of(complete_run, tmp_path)
-    _nudge_omega(tmp_path, relative=1e-9)
+    _nudge_omega(tmp_path, pipeline.op, relative=1e-9)
     verdict = is_complete(
         tmp_path / "out.h5",
         pipeline.cfg,
@@ -404,6 +425,7 @@ def test_a_file_from_another_operator_is_refused_not_resumed(
     monkeypatch.undo()
     with h5py.File(tmp_path / "out.h5", "r+") as handle:
         handle["operator/coef"][0] *= 2
+        _restamp(handle, pipeline.op)
     before = stats(tmp_path)
 
     with pytest.raises(OperatorMismatch, match="operator coef differs"):

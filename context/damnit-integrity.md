@@ -229,6 +229,101 @@ exits 0, with `ctx = None` and the traceback in `error_info`. The pickled `Conte
 functions stripped, so its dependency graph reads as empty; check the dependency wiring with
 `tests/test_context.py` instead.
 
-## 6–7. Install, reprocess
+## 6. `scripts/install_context.py`
 
-To be filled in by Phase C.
+DAMNIT reads `usr/Shared/amore`, and others edit it, so an install is guarded. Without
+`--install` the script is a dry run. In order:
+
+1. **Clean source.** Refuse a dirty `src/amore`, so the recorded commit is what is installed.
+2. **Show what changes.** Print the diff live → repo for `context.py` and `analysis_helpers.py`,
+   and a 12-character **live-state id** naming both live files' sha256s.
+3. **Guard.** The live sha256s must equal the ones recorded by the last install, in
+   `backups/installed.json`. The first time there is no record, so `--accept-live <id>` is
+   required. A stale id — the files changed after the diff was read — is refused.
+4. **Evaluate both contexts as DAMNIT does.** Run `<context_python> -m ctxrunner ctx` in a scratch
+   copy, with the listener's own `ctxsupport` on `PYTHONPATH`. Both settings come from
+   `runs.sqlite`, opened read-only. Fail unless the pickled `error_info` is `None`. Report the
+   variables added or removed.
+5. **Deploy gate.** The commit must be an ancestor of the deploy clone's HEAD, so DAMNIT never
+   evaluates a context calling code it does not have. **Install only after S1 is merged.**
+6. **`--install`.**
+   - Write a timestamped backup of both live files, `install_<stamp>.diff` and
+     `install_<stamp>.sha256` to `usr/Shared/amore/backups/`.
+   - Re-check each live sha256, then replace each file atomically (temp file + `os.replace`),
+     keeping its mode. The owner becomes the installer.
+   - Write `installed.json`: sha256s, commit, time, user, backups. Append the same to
+     `install_log.jsonl`.
+
+**Real dry run, 2026-10-13** (HEAD `7ebeaa8`, report `scripts/install_context_*.json`):
+- both contexts evaluate, 37 variables each, none added or removed;
+- refused for exactly two reasons: first install (`--accept-live 44561ba487b3` for the live
+  state of 2026-10-07), and the commit not yet deployed;
+- the live files were untouched and no `backups/` was created.
+
+**Exercised end to end on a copy of the live directory** (`--live-dir`, with this worktree as
+`--deploy-dir`): first-install refusal, a wrong id refused, the install itself (contents equal the
+repo, mode 644 kept, backup equal to the old live file), a clean rerun, and an edit after the
+install refused with the edited file left alone.
+
+## 7. `scripts/reprocess_safe.py`
+
+`status | start | check | cleanup | restore <runs> -d agipd|jf1|jf2 [--dry-run] [-j N]`. Runs are
+numbers, ranges `a-b`, or `all`. The config each detector is judged under is DAMNIT's:
+`analysis.saxs.damnit.config_for` and `analysis.waxs.damnit.damnit_config`.
+
+**`status`** shows, per run and detector: the output, complete or the reasons it is not, a lock,
+a DAMNIT job, and backups with their check verdict.
+
+**What counts as busy.** A job named `r<run>-p10400-damnit`, from `squeue --clusters=all` over all
+users. Any active job array `p10400-damnit` counts every run as busy, because squeue cannot say
+which runs it covers.
+
+**`start`.** Refuses everything unless every selected run is idle:
+- no DAMNIT job and no lock;
+- no leftover backup;
+- room on the fileset: free ≥ 1.2 × the outputs' size, from `mmlsattr -L` → fileset,
+  `df` → filesystem, `mmlsquota -j … --block-size K`.
+
+It then renames each output to `<stem>_before_reprocess_<UTC stamp>.h5` and runs `bash -lc 'module
+load exfel damnit/stable && damnit reprocess --in usr/Shared/amore --match … <runs>'`. The
+`--match` titles:
+- AGIPD: `AGIPD I(q)`, which also matches the overview;
+- JF: `JF1 I(q)` or `JF2 I(q)`, plus `JUNGFRAU I(q)`, so the overview and combined curve are
+  rebuilt; the other detector is answered from its file.
+
+`--no-trigger` renames only. **The AGIPD window sums are never moved.**
+
+**`check`.** Requires exactly one backup, no job and no lock. It then needs `is_complete` on the
+new output, every dataset of it read back (and of the window sums for AGIPD), and the backup's
+frame count and trains, unless `--accept-count-change`. It writes `<backup>.check.json` with the
+verdict and the new output's (inode, mtime, size).
+
+**`cleanup`** deletes a backup only if its check passed and the new output is still the file that
+was checked.
+
+**`restore`** keeps the new output as `<stem>_failed_reprocess_<stamp>.h5` and renames the backup
+back.
+
+**Exercised on copies of r0423's JF files** under proposal scratch (`--root`, DAMNIT never
+called):
+- `--dry-run` moves nothing; `--no-trigger` moves the output aside;
+- `start` refuses a leftover backup;
+- `check` fails with no new output, passes a complete one, and fails one with 16 frames
+  `WORKER_ERROR`;
+- `cleanup` deletes the passed backup, keeps the failed one, and keeps one whose output was touched
+  after its check;
+- `restore` puts the backup back and keeps the failed output.
+
+**Real runs, read-only, 2026-10-13.**
+- **`start 423-428 -d agipd --dry-run`:** 14.1 GB would move; 190.9 TB free on
+  `bt_scratch_MID_202601_p010400`; no busy run.
+- **`status all -d agipd -d jf1 -d jf2 -j 4`** (5.8 min, login node):
+  - AGIPD: all 459 complete; r0356 and r0382 have no output.
+  - jf1 and jf2: 418 complete each, and 43 dark runs without a file.
+  - Incomplete: r0016, r0017 and r0041 jf1, at `npt` 500 (r0041 also pyFAI 2026.9.0), which are
+    commissioning runs not used.
+- **The array comparison matters in practice.** 119 of the 459 AGIPD files carry the AVX-512
+  operator sha256 `a59609c8…`, and 140 of the 418 per JF detector carry their class's other sha256.
+  An exact-sha256 gate would have called about a quarter of the archive incomplete.
+- **The sha256 shortcut.** When the stored sha256 equals the one built on the checking node, the
+  arrays are not read back (they are covered by it). Otherwise they are read and compared.
