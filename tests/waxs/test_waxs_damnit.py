@@ -63,6 +63,19 @@ def test_the_grid_survives_damnits_netcdf_round_trip(grid, tmp_path):
     assert back.values == pytest.approx(grid.values)
 
 
+def test_the_damnit_variable_runs_at_the_stored_npt(monkeypatch):
+    """836 of 839 stored files are npt 200; the variable must build that config."""
+    seen = []
+    monkeypatch.setattr(
+        "analysis.waxs.run.run_jungfrau_waxs", lambda cfg, **kwargs: seen.append(cfg)
+    )
+    damnit.jungfrau_waxs(10400, 423, "jf2")
+    damnit.jungfrau_waxs(10400, 423, "jf2", npt=500)
+    assert [cfg.npt for cfg in seen] == [200, 500]
+    assert seen[0] == damnit.damnit_config(10400, 423, "jf2")
+    assert damnit.config_for(10400, 423, "jf2").npt == 500
+
+
 def test_jungfrau_waxs_does_not_swallow_an_incomplete_run(monkeypatch):
     """Failing loudly needs no code here — only that nothing catches it."""
     from analysis.common.writer import IncompleteRun

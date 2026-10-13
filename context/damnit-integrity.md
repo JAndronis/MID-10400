@@ -165,6 +165,46 @@ resume.
 - **`operator.npz` and `masks.npz` are written atomically**: `analysis.common.arrays.atomic_savez`
   writes a temporary file, fsyncs it, then `os.replace`s it.
 
-## 5–7. Context, install, reprocess
+## 5. Reconciling the live and repo context (2026-10-13)
 
-To be filled in by Phases B and C.
+DAMNIT reads `usr/Shared/amore/context.py` (pitfall 27). The repo copy is now authoritative and
+is installed with `scripts/install_context.py` (§6). The live file of 2026-10-07 (sha256
+`21e42116…`) differed in five hunks. Each was decided by the user:
+
+| Hunk | Live | Decision |
+|---|---|---|
+| `selected_trains = None` | a stub, used nowhere | dropped |
+| XPCS `remove_outer_points` | an `if run_type == "XPCS"` branch, both arms `False`. The XPCS arm carried commented-out overrides: `motor_moving='MID_EXP_SAM/MDL/DATA_SELECTOR_2'`, a `motor_key` holding a source *and* a key, and `motor_range=(-24, 24)` | the repo's one-line `False`. Same behaviour. If it is ever set True, extra_speckle's defaults apply (`MID_SAE_FSSS/MOTOR/SCANNERX`, `actualPosition`, `(-22.5, 22.5)`) unless the overrides are added back |
+| `agipd_saxs(..., overwrite=True)` | — | dropped |
+| `jungfrau_waxs(..., npt=200, overwrite=True)` ×2 | — | `overwrite` dropped. `npt` 200 kept, but moved into `analysis.waxs.damnit.DAMNIT_OVERRIDES` |
+| comments and the JF1 docstring | — | the repo's |
+
+**Why `npt` lives in the package, not the context file.** 836 of the 839 stored JF files are at
+`npt` 200. The config default stays 500, which W4 ran at. `damnit_config()` is the one place
+that says what DAMNIT runs, so `reprocess_safe` and `is_complete` judge DAMNIT's files under the
+config DAMNIT actually uses.
+
+**`tests/test_context.py` enforces both:**
+- no call in the context file passes `overwrite`;
+- the integration wrappers pass no keyword at all.
+
+Both fail on the live file of 2026-10-07 (lines 378, 393 and 401).
+
+**`analysis_helpers.py`.** The repo's 7.8 KB copy is the live 24 KB v2 minus nine functions the
+context no longer calls (`integrate_run`, `get_integrator`, `integrate_frame`, …). The five it
+imports have the same code, apart from docstrings and one f-string. The user confirmed that
+nobody else imports the live copy, so the repo's copy is installed with the context.
+
+**Not reconciled, because it is the same in both:** `xpcs_pipeline` returns `"Incomplete"`, or
+`"Done"`, and its 14 dependants read a module-global `XPCS_RESULTS` that only that job fills.
+This is for the XPCS owner (follow-up).
+
+**ctxrunner check** (deploy venv, damnit 0.4.0, scratch copy of the repo context and helpers):
+`error_info` None, 37 variables, 22 of them `cluster=True`. A copy with a dangling `var#` also
+exits 0, with `ctx = None` and the traceback in `error_info`. The pickled `ContextFile` has its
+functions stripped, so its dependency graph reads as empty; check the dependency wiring with
+`tests/test_context.py` instead.
+
+## 6–7. Install, reprocess
+
+To be filled in by Phase C.

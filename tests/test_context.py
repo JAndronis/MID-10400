@@ -139,3 +139,55 @@ def test_the_context_file_holds_no_heavy_integration_logic(name):
     assert kinds == ["ImportFrom", "Return"], (
         f"{name} does something other than import and call: {kinds}"
     )
+
+
+def _context_tree():
+    import ast
+
+    return ast.parse((CONTEXT_DIR / "context.py").read_text())
+
+
+def test_no_call_in_the_context_file_passes_overwrite():
+    """CLAUDE.md pitfalls 26-27: DAMNIT reruns a pass whenever a dependant is
+    requested, and with ``overwrite=True`` every rerun truncates the file.
+    Reprocessing is done by moving the output aside
+    (``scripts/reprocess_safe.py``), never from the context file."""
+    import ast
+
+    offenders = [
+        f"line {node.lineno}"
+        for node in ast.walk(_context_tree())
+        if isinstance(node, ast.Call)
+        for keyword in node.keywords
+        if keyword.arg == "overwrite"
+        or (
+            keyword.arg is None
+            and isinstance(keyword.value, ast.Dict)
+            and any(
+                isinstance(key, ast.Constant) and key.value == "overwrite"
+                for key in keyword.value.keys
+            )
+        )
+    ]
+    assert not offenders, f"overwrite passed at {offenders}"
+
+
+@pytest.mark.parametrize(
+    "name", ["agipd_saxs", "jungfrau_waxs_jf1", "jungfrau_waxs_jf2"]
+)
+def test_the_integration_wrappers_pass_no_config(name):
+    """The config DAMNIT runs with lives in ``analysis.*.damnit``, in one place.
+
+    A keyword here — ``npt=200`` was one — is a config that scripts judging
+    DAMNIT's files (``reprocess_safe``, ``is_complete``) cannot see.
+    """
+    import ast
+
+    function = next(
+        node
+        for node in _context_tree().body
+        if isinstance(node, ast.FunctionDef) and node.name == name
+    )
+    call = function.body[-1].value
+    assert isinstance(call, ast.Call)
+    assert not call.keywords, f"{name} passes {[k.arg for k in call.keywords]}"

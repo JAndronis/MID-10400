@@ -27,8 +27,10 @@ from analysis.waxs.config import DETECTORS, JungfrauWaxsConfig, config_for
 from analysis.waxs.writer import per_cell
 
 __all__ = [
+    "DAMNIT_OVERRIDES",
     "combined_curve",
     "config_for",
+    "damnit_config",
     "jungfrau_waxs",
     "overview_figure",
     "per_cell_from_file",
@@ -36,6 +38,26 @@ __all__ = [
 ]
 
 log = logging.getLogger(__name__)
+
+#: Where the DAMNIT variables depart from the config defaults. Kept here rather
+#: than in the context file, so that a script judging DAMNIT's files
+#: (``scripts/reprocess_safe.py``) builds the config DAMNIT builds.
+#:
+#: ``npt`` 200: 836 of the 839 files under ``scratch/jungfrau_waxs`` were written
+#: at 200 on 2026-09-14, by a live context that passed it; kept on 2026-10-13
+#: (open task 17d). The config default stays 500, which W4 was run at.
+DAMNIT_OVERRIDES: dict[str, Any] = {"npt": 200}
+
+
+def damnit_config(
+    proposal: int, run_no: int, detector: str, **overrides: Any
+) -> JungfrauWaxsConfig:
+    """The config the DAMNIT variables run with.
+
+    :param overrides: any config field, taking precedence over
+        :data:`DAMNIT_OVERRIDES`.
+    """
+    return config_for(proposal, run_no, detector, **(DAMNIT_OVERRIDES | overrides))
 
 
 def jungfrau_waxs(proposal: int, run_no: int, detector: str, **overrides: Any) -> Any:
@@ -54,7 +76,7 @@ def jungfrau_waxs(proposal: int, run_no: int, detector: str, **overrides: Any) -
     """
     from analysis.waxs.run import run_jungfrau_waxs
 
-    cfg: JungfrauWaxsConfig = config_for(proposal, run_no, detector, **overrides)
+    cfg = damnit_config(proposal, run_no, detector, **overrides)
     log.info(
         "jungfrau_waxs on p%d r%d %s -> %s", proposal, run_no, detector, cfg.output_file
     )
