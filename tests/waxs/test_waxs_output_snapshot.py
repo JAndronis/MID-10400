@@ -20,9 +20,17 @@ from test_waxs_run import InlinePool, run  # noqa: E402  (tests/waxs is on sys.p
 #: (platform.system(), platform.machine()). Linux x86_64 is the locked
 #: environment on Maxwell, where it is stable across SIMD level, OpenMP threads
 #: and BLAS kernel; the pre-cleanup tree produces the same value.
+#:
+#: Moved with pyFAI 2026.5.0 -> 2026.9.0 (was ``7b81f29b…``, 2026-10-13). The
+#: fixture's jf1 PONI has detector orientation 4, and 2026.9 makes orientation
+#: a re-indexing of pixels, which rounds the full-split coefficients
+#: differently: per-frame sums move by at most 4.1e-6 relative, pooled I(q) by
+#: 2.6e-7, with the same empty bins and no other dataset changed. The real
+#: detectors have orientation 3 and are bit-identical between the two versions
+#: (``context/performance.md`` §2).
 EXPECTED_DIGEST = {
     ("Linux", "x86_64"): (
-        "7b81f29bccd82f9060f1b8a311b203edec6f5923740b9e3ee82d333b8d149f11"
+        "b696948b3cd4bd5ce2eed5f7035cb9e468bef361a53470c45425ccfc3295ab5f"
     ),
 }
 

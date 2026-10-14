@@ -13,6 +13,7 @@ import time
 from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import BrokenExecutor, as_completed
 from dataclasses import dataclass, field
+from datetime import timedelta
 from typing import Any
 
 from analysis.common.cpu import default_pool, package_versions
@@ -38,6 +39,52 @@ class FanOutTotals:
     extra: dict[str, int] = field(default_factory=dict)
 
 
+class _Progress:
+    """An INFO line each time another tenth of the blocks is done.
+
+    A SLURM log has no terminal for a progress bar, and without these lines a
+    pass that is slow and one that has hung look the same until the time
+    limit. Fewer than ten blocks get a line each.
+    """
+
+    def __init__(self, todo: Sequence[Block]) -> None:
+        self.n_blocks = len(todo)
+        self.n_frames = sum(block.n_frames for block in todo)
+        self.blocks = 0
+        self.frames = 0
+        self.tenths = 0
+        self.started = time.perf_counter()
+
+    def done(self, block: Block) -> None:
+        """Count ``block`` as finished, written or failed alike."""
+        self.blocks += 1
+        self.frames += block.n_frames
+        tenths = self.blocks * 10 // self.n_blocks
+        if tenths == self.tenths and self.n_blocks >= 10:
+            return
+        self.tenths = tenths
+        elapsed = time.perf_counter() - self.started
+        rate = self.frames / elapsed if elapsed > 0 else float("inf")
+        remaining = (self.n_frames - self.frames) / rate if rate > 0 else None
+        log.info(
+            "%d/%d blocks (%.0f %%), %d/%d frames, %.0f frames/s, elapsed %s, "
+            "remaining ~%s",
+            self.blocks,
+            self.n_blocks,
+            100 * self.blocks / self.n_blocks,
+            self.frames,
+            self.n_frames,
+            rate,
+            _duration(elapsed),
+            "?" if remaining is None else _duration(remaining),
+        )
+
+
+def _duration(seconds: float) -> str:
+    """``H:MM:SS``, to the second."""
+    return str(timedelta(seconds=round(seconds)))
+
+
 def fan_out(
     out: Any,
     todo: Sequence[Block],
@@ -56,6 +103,10 @@ def fan_out(
     takes the run with it: every unwritten row is marked ``NOT_PROCESSED``
     first, so the ledger never leaves a row silently unaccounted for.
 
+    Progress goes to this module's logger, at INFO, once per tenth of the
+    blocks: frames/s, elapsed and remaining time, all from the moment the pool
+    is asked for, so worker start-up counts.
+
     :param out: the open writer; the only thing that touches the output file.
     :param todo: blocks not already complete in that file.
     :param process: the worker entry point, submitted once per block.
@@ -72,6 +123,7 @@ def fan_out(
         return totals
 
     factory = pool_factory or default_pool
+    progress = _Progress(todo)
     try:
         with factory(n_workers, initializer=initializer, initargs=initargs) as pool:
             futures = {pool.submit(process, block): block for block in todo}
@@ -85,6 +137,7 @@ def fan_out(
                 except Exception as error:  # noqa: BLE001 - into the ledger
                     log.exception("block %d failed", block.index)
                     out.mark(block, FrameStatus.WORKER_ERROR, repr(error))
+                    progress.done(block)
                     continue
                 write_started = time.perf_counter()
                 out.write_block(block, block_result)
@@ -94,6 +147,7 @@ def fan_out(
                     totals.extra[name] += getattr(block_result, name)
                 for key, value in block_result.timings.items():
                     totals.timings[key] = totals.timings.get(key, 0.0) + value
+                progress.done(block)
     except BrokenExecutor:
         out.mark_remaining(FrameStatus.NOT_PROCESSED)
         raise
