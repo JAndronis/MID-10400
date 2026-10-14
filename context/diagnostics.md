@@ -15,7 +15,9 @@ the XPCS keep rule is `context/run-triage.md` §4.6, the photon-statistics quali
   `context/xpcs-quality.md` §7.1. Its product is
   `usr/cached_files/agipd_photon_stats/r{run:04d}/agipd_photon_stats.h5`, written for those three
   runs only.
-- Phases D–F are to come.
+- Phase D (`*_frames_used` cells) passed 2026-10-14: §6.
+- Phase E (droplet videos, `analysis.camera`) passed 2026-10-14 on r0423, r318 and r0426: §7.
+- Phase F (`notebooks/diagnostics.ipynb`) is left to another session (user, 2026-10-14).
 
 ---
 
@@ -208,3 +210,107 @@ the ROI-mean level.
 
 On r120 the mean k̄ over all trains is 4e-4 in every ROI. Over the hits it is 2.5–5.4e-3, which
 is why the score is taken over the hits.
+
+## 6. Frames used per detector (phase D, 2026-10-14)
+
+Three DAMNIT variables, appended to `src/amore/context.py`: `agipd_frames_used`,
+`jf1_frames_used`, `jf2_frames_used` (titles "AGIPD / JF1 / JF2 frames used"). Each is an import
+plus a call to `analysis.diagnostics.damnit.frames_used(proposal, run_no, detector)`.
+- **What it reads.** The pass's frame table at the path its own config names
+  (`analysis.saxs.damnit.config_for(...).output_file`, `analysis.waxs.config.config_for(...)`).
+  There is no `var#` dependency, so asking for the cell never relaunches the cluster job
+  (CLAUDE.md pitfall 26). It is not a cluster variable either: it reads one status column.
+- **What it shows.** `Cell(data=used, summary_value="used / total (pct%)")`, where used is the
+  number of OK rows and total the number of rows.
+  - Green: every frame OK.
+  - Red: any WORKER_ERROR or LABEL_MISMATCH, or a file HDF5 cannot read.
+  - Amber: anything else (NOT_PROCESSED = incomplete, MISSING_MODULES, NO_FRAMES,
+    DATA_CHECK_FAILED), or "busy".
+  - When not green, the code that set the colour follows, e.g. `· WORKER_ERROR 1`.
+  - `Skip` when the file does not exist.
+- **Refreshing.** The cell shows the file as it was when the cell ran. After a reprocess, run
+  `damnit reprocess --match "frames used"` (user decision, 2026-10-13). In damnit 0.4.0
+  `--match` compares variable **titles**, case-insensitive, not names.
+- **"busy" is rare inside DAMNIT.** `import extra_speckle` sets
+  `HDF5_USE_FILE_LOCKING=FALSE` for the whole process (`extra_speckle/xcca/tools.py:2`), and the
+  context imports it at the top. Inside DAMNIT, then, a file being written reads as it stands
+  (amber, NOT_PROCESSED rows), or red if HDF5 trips over it mid-write.
+  - The same switch means HDF5 does not refuse a second writer in any DAMNIT job. That is
+    pitfall 26's double write, with S1's lock file as the only guard (told to S1 on
+    2026-10-14).
+  - The mock test of "busy" sets `HDF5_USE_FILE_LOCKING=TRUE` for itself and its writer.
+    HDF5 reads the variable at every open, so this works after `extra_speckle` has been
+    imported.
+
+**Acceptance.** ctxrunner `exec 10400 <run> proc --var …` on a scratch copy of the context, run
+as DAMNIT runs it: `python -m ctxrunner`, with ctxsupport on `PYTHONPATH` and the copy's
+directory as cwd, so `analysis_helpers` imports. Results:
+- r0423: all three green, 465 000 / 465 000 (AGIPD) and 24 000 / 24 000 (each JF), 0.2–1.3 s
+  per cell;
+- r0016: AGIPD 1440 / 1440 and JF1 86 064 / 86 064 green; JF2 skipped (no file).
+- **Every existing file, read-only** (`frames_used` over every run directory, login node,
+  2026-10-14): all green. That is 459 AGIPD, 421 JF1 and 418 JF2 frame tables. The other runs
+  have no file and would be skipped. A cold AGIPD file takes about 3 s, because GPFS has to
+  fetch the status column of a 2.3 GB file.
+- 9 mock tests (`tests/diagnostics/test_diagnostics_damnit.py`) cover the colours, Skip, busy and
+  unreadable files, and the paths. `tests/test_context.py` checks that the three have no
+  dependency, are not cluster jobs, share "frames used" in their titles, and are an import plus
+  a call.
+
+## 7. Droplet videos (phase E, 2026-10-14)
+
+**The camera.** `MID_EXP_SAM/CAM/CAM5:daqOutput`, key `data.image.pixels`: (494, 659) uint16,
+one image per train (10 Hz), no gaps on r0016, r0060, r0318 and r0423 (`camera_facts`). Also in
+raw: CAM1 (2052 × 2456) and two XTD6 beam viewers; none of them gets a video.
+
+**`analysis.camera`** (no DAMNIT import), adapted from p010646 (`transfer_context/09`):
+- `write_camera_video(run, path, label=, binning=1, fps=30, crf=23, workers=8)`;
+- `count_frames(path)`, which decodes every frame with the same ffmpeg;
+- `first_image(run)`, which reads one image;
+- `camera_facts(run)` and `gaps(train_ids)`.
+
+How a video is made:
+- **Grey levels** are the 0.5 / 99.5 % percentiles of 8 images spread over the run.
+- **Frames** are cropped to even sides (659 → 658) and labelled with Pillow: the run, the train
+  ID, and the seconds since the first image.
+- **Order.** A bounded thread pool (blocks of 4 images, at most 2 × workers waiting) feeds
+  ffmpeg in train order. Each block checks the train IDs the reader returns against the ones it
+  asked for (pitfall 4).
+- **Encoding:** H.264 with yuv420p, preset veryfast, `+faststart`, at 30 fps (3× real time). The
+  MP4 `comment` records the source, trains, image count, gaps, limits, binning, fps, CRF and
+  version.
+- **Writing.** The file is written under a temporary name in the same directory and renamed
+  into place. A second job on the same run (pitfall 26) therefore cannot leave a truncated
+  video, and a failed write keeps the old one.
+- **ffmpeg** is `imageio-ffmpeg` 0.6.0's static ffmpeg 7.0.2 with libx264, added with `pillow`
+  to the `euxfel` extra (uv.lock adds only imageio-ffmpeg). It has no ffprobe.
+- **Output:** `usr/cached_files/droplet_videos/r{run:04d}_cam5.mp4`.
+
+**DAMNIT** (`analysis.diagnostics.damnit`; context variables "Droplet video" and "Droplet first
+image"):
+- `droplet_video` is `cluster=True` and raw. It writes the video, decodes it again, and raises
+  if the frame count is not the number of images. It returns `Cell(path, "N frames, G gaps")`,
+  and `Skip` without images.
+- `droplet_first_image` is raw and not a cluster job. It returns the first image as a (y, x)
+  DataArray with its trainId, which DAMNIT shows as a thumbnail, and reads only that image.
+
+**Acceptance** (job 25295822, max-wn074, EPYC 7402, 16 threads; JSON
+`scripts/droplet_video_acceptance_20261014T072337Z.json`):
+
+| Run | Images | Decoded (ours / EuXFEL ffprobe) | Size | Per frame | Wall | Limits |
+|---|---|---|---|---|---|---|
+| r0423 | 3002 | 3002 / 3002 | 1.00 MB | 331 B | 16.6 s | 65–3042 |
+| r318 (mesh) | 722 | 722 / 722 | 0.44 MB | 609 B | 3.9 s | 493–3629 |
+
+- **ctxrunner on r0426**, from a scratch copy:
+  - `droplet_first_image`: computed in 0.85 s, 310 MB peak RSS for the whole process;
+  - `droplet_video` with `--cluster-job`: computed in 14.3 s, 470 MB peak. It stored
+    "3002 frames, 0 gaps" and the path; the file is 1.04 MB.
+- **Looked at, not only counted.** The first, middle and last frames of r0423 and r318 show the
+  droplet's silhouette with a legible label, and r0423's droplet shrinks over 300 s. The files
+  are small because the backlit images are smooth (median frame-to-frame change 0.14–0.22 grey
+  levels), not because they are blank.
+- **A bulk run, if wanted.** The proposal's ~617 000 trains come to about 0.2–0.4 GB and about
+  1 h of one node at these rates. `mmlsquota` reports no quota-enabled fileset for p010400, and
+  exflu has 480 TB free (2026-10-14). Not run: it needs the user's go, or comes with the
+  DAMNIT reprocess once the context is installed.

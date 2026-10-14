@@ -31,7 +31,12 @@ euxfel = [
     "dask_jobqueue",
     "scikit-image",
     "damnit",
-    "pybaselines"
+    "pybaselines",
+    # analysis.camera: ffmpeg for the droplet videos (no ffmpeg on PATH, and the
+    # EuXFEL env's is redeployed nightly), and Pillow to label the frames.
+    # Pillow came only through matplotlib; named because it is imported by name.
+    "imageio-ffmpeg",
+    "pillow",
 ]
 plotting = [
     "matplotlib<3.9",

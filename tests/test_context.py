@@ -104,8 +104,35 @@ INTEGRATION_VARIABLES = (
     "jungfrau_waxs_combined",
 )
 
+FRAMES_USED_VARIABLES = ("agipd_frames_used", "jf1_frames_used", "jf2_frames_used")
 
-@pytest.mark.parametrize("name", INTEGRATION_VARIABLES)
+
+@pytest.mark.parametrize("name", FRAMES_USED_VARIABLES)
+def test_frames_used_never_waits_on_the_pass(variables, name):
+    """No var# on the pass, so asking for the cell cannot relaunch it (pitfall 26).
+
+    Not a cluster job either: it reads one status column. The titles share
+    "frames used", which is what ``damnit reprocess --match`` compares against.
+    """
+    variable = variables[name]
+    assert variable.arg_dependencies() == {}
+    assert variable.cluster is False
+    assert "frames used" in variable.title.lower()
+
+
+def test_the_droplet_video_is_a_cluster_job_and_the_image_is_not(variables):
+    """The video reads every image of the run; the first image reads one."""
+    video, image = variables["droplet_video"], variables["droplet_first_image"]
+    assert video.cluster is True and image.cluster is False
+    assert video.data.value == image.data.value == "raw"  # the camera is raw
+
+
+CAMERA_VARIABLES = ("droplet_video", "droplet_first_image")
+
+
+@pytest.mark.parametrize(
+    "name", INTEGRATION_VARIABLES + FRAMES_USED_VARIABLES + CAMERA_VARIABLES
+)
 def test_the_context_file_holds_no_heavy_integration_logic(name):
     """DAMNIT execs this file, so nothing defined here can reach a worker.
 

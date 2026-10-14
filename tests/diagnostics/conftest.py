@@ -1,4 +1,5 @@
-"""The XPCS diagnostics reuse the triage's synthetic XPCS run (`triage_fakes`)."""
+"""The XPCS diagnostics reuse the triage's synthetic XPCS run (`triage_fakes`), and
+the camera cells the mock CAM5 of ``tests/camera_fakes.py``."""
 
 from __future__ import annotations
 
@@ -10,3 +11,7 @@ from pathlib import Path
 TRIAGE_TESTS = str(Path(__file__).resolve().parents[1] / "triage")
 if TRIAGE_TESTS not in sys.path:
     sys.path.append(TRIAGE_TESTS)
+
+SHARED_FAKES = str(Path(__file__).resolve().parents[1])
+if SHARED_FAKES not in sys.path:
+    sys.path.append(SHARED_FAKES)

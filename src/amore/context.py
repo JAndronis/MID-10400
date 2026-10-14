@@ -436,3 +436,66 @@ def jungfrau_waxs_combined(
     from analysis.waxs import damnit
 
     return damnit.combined_curve(jf1, jf2)
+
+
+# ── Diagnostics (analysis.diagnostics; context/diagnostics.md) ──────────────────
+# Frames used per detector, read straight from each pass's frame table. There is
+# deliberately no var# dependency on the pass: asking for one of these never
+# relaunches the cluster job (CLAUDE.md pitfall 26). The price is that a cell
+# shows the file as it was when the cell ran, so refresh after a reprocess with
+# `damnit reprocess --match "frames used"` (--match compares titles).
+
+
+@Variable("AGIPD frames used", data="proc", tags=["diagnostics"])
+def agipd_frames_used(run, proposal: "meta#proposal", run_no: "meta#run_number"):
+    """OK frames over all rows of the agipd_saxs frame table, coloured by status.
+
+    Green: all OK. Red: a WORKER_ERROR or LABEL_MISMATCH, or an unreadable file.
+    Amber: anything else, e.g. an incomplete run or a file still being written.
+    Skipped when the pass has not written the run.
+    """
+    from analysis.diagnostics import damnit
+
+    return damnit.frames_used(proposal, run_no, "agipd")
+
+
+@Variable("JF1 frames used", data="proc", tags=["diagnostics"])
+def jf1_frames_used(run, proposal: "meta#proposal", run_no: "meta#run_number"):
+    """As agipd_frames_used, for jungfrau_waxs_jf1.h5 (one row per lit cell)."""
+    from analysis.diagnostics import damnit
+
+    return damnit.frames_used(proposal, run_no, "jf1")
+
+
+@Variable("JF2 frames used", data="proc", tags=["diagnostics"])
+def jf2_frames_used(run, proposal: "meta#proposal", run_no: "meta#run_number"):
+    """As agipd_frames_used, for jungfrau_waxs_jf2.h5 (one row per lit cell)."""
+    from analysis.diagnostics import damnit
+
+    return damnit.frames_used(proposal, run_no, "jf2")
+
+
+# ── Droplet camera (analysis.camera; context/diagnostics.md §6) ──────────────────
+# CAM5's images go to tape with raw, so each run keeps a labelled video in
+# usr/cached_files/droplet_videos/. Both are raw variables: the camera is a raw
+# source.
+
+
+@Variable("Droplet video", cluster=True, tags=["diagnostics"])
+def droplet_video(run, run_no: "meta#run_number"):
+    """Every CAM5 image as r{run:04d}_cam5.mp4, 3× real time, labelled per frame.
+
+    The cell holds the path and "N frames, G gaps"; N is counted by decoding
+    the written file and must equal the number of trains with an image.
+    """
+    from analysis.diagnostics import damnit
+
+    return damnit.droplet_video(run, run_no)
+
+
+@Variable("Droplet first image", tags=["diagnostics"])
+def droplet_first_image(run):
+    """The run's first CAM5 image, reading only that one."""
+    from analysis.diagnostics import damnit
+
+    return damnit.droplet_first_image(run)
