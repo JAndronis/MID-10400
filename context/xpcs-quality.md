@@ -242,7 +242,14 @@ diagnostic(run) = diagnostic over hits(run) only; n_hits always reported beside 
   is documented in run-triage §4.4 "As built": mesh runs by block, static runs by an out-of-beam
   rule. Every diagnostic takes its `train_ids`.
 
-## 6. Where it is computed — a separate pass (user, 2026-10-13)
+## 6. Where it is computed — now inside the `agipd_saxs` pass (user, 2026-10-14)
+
+**Changed on 2026-10-14** (user: "minimize duplicate calculations… if one variable calculates
+detector sums, another variable should make use of them. Same with statistics"). The
+`agipd_saxs` workers now histogram every frame from the read they already make, with
+`AgipdSaxsConfig.photon_stats` on by default. The separate pass is kept, as
+`run_photon_stats`, for backfills. §7.2 has the design and its measurement. What follows is
+the 2026-10-13 record.
 
 The user chose a separate pass. Ideally the histograms would come out of an XPCS worker, beside
 the correlations, but those are extra-speckle's, and building them into it is not in reach now.
@@ -426,6 +433,56 @@ In the low-k̄ limit its R3 is the negative binomial's times two factors:
   A3_pix as a pointer, not the rule.
 - **No overflow:** no count reached K + 1 = 16 on r0423 or r0450.
 
+### 7.2 Inside the `agipd_saxs` pass (user, 2026-10-14)
+
+**Design** (`analysis.saxs.run`, `.worker`, `.photon_stats`, `.complete`):
+- **Config.** `AgipdSaxsConfig.photon_stats` (default True) and `photon_stats_root`. Both
+  are excluded from the frame table's hash, so no stored hash moved (pitfall 12).
+- **Worker.** It gets a `PhotonSpec`: the ring map, the static mask, K and the blocks to
+  histogram. In the frame loop it calls `histogram_frame` after the frame's mask and data
+  check, so a frame has one status in both files.
+- **Output.** `agipd_photon_stats.h5` is the standalone pass's format and hash, so the two
+  paths write interchangeable files.
+- **Locking and completeness.** The file joins S1's locked outputs and `is_complete`.
+  - `photon_stats_reasons`: the frame table's checks, then the ring edges, K and the pixel
+    → ring map, label by label.
+  - The operator's sha256 sits in `/rings`, not in provenance.
+- **Only incomplete products are opened.** A run whose frame table is complete gets its sums
+  or statistics with no base masks, no self-test, no `operator.npz`/`masks.npz`, and neither
+  the frame table nor the sums reopened.
+- **Standalone.** `run_photon_stats` remains for backfills. It is now locked too, and returns
+  without writing when its file is complete.
+
+**Acceptance** (`scripts/photon_stats_fused_acceptance.py`, job 25297714, max-exfl473, EPYC
+9374F, 32 workers, commit 80a09e1, r0423; JSON
+`photon_stats_fused_acceptance_20261014T121159Z.json`). Four passes into a scratch directory:
+
+| Pass | Wall | Per frame and core |
+|---|---|---|
+| statistics off, cold | 225 s | data 2.42, mask 4.58, integrate 3.11, sums 1.23 ms |
+| fused | 261 s | data 2.34, mask 4.37, integrate 3.12, sums 1.22, **statistics 2.33** ms |
+| statistics off, warm | 192 s | data 2.37, mask 4.42, integrate 3.14, sums 1.23 ms |
+| backfill into the warm run | 211 s | data 2.37, mask 4.46, **statistics 4.20** ms |
+
+- **Every gate passes.**
+  - The fused statistics equal the backfilled ones and Q1's standalone file in every column
+    and in the ring map.
+  - The fused frame table equals the warm one dataset by dataset.
+  - The backfill left the frame table, the sums, `operator.npz` and `masks.npz` with the same
+    inode, mtime and size.
+  - All 465 000 frames are OK.
+- **The cost is +36 % wall on a warm r0423** (261 against 192 s), +21 % of worker CPU.
+  - The parent's block writing is 80–84 s either way, so it is not the cause.
+  - The histogram's 2.33 ms/frame is the sparse `frame_stats`, which rescans each frame.
+  - §6 measured an in-worker form at 0.15–0.41 ms that reuses the integrator's nonzero and
+    mask-difference indices. It is not built: it changes `integrate_frame`.
+- **A backfill costs one read of proc.** About 211 s per 465 k-frame run here, against 340 s
+  for the standalone pass on an EPYC 7402 (§7.1; not the same CPU).
+- **Preemption.** The first submission (25297694, `allcpu`) was preempted and requeued under
+  the same job id, and its stale locks would have refused the restart on another node. S1
+  fixed that in `analysis.common.lock` (efd6b0a, `SLURM_RESTART_COUNT`). DAMNIT submits to
+  `allcpu` too.
+
 ## 8. Phases and acceptance
 
 | Phase | Content | Acceptance |
@@ -433,6 +490,7 @@ In the low-k̄ limit its R3 is the negative binomial's times two factors:
 | **Q0** | this spec | reviewed 2026-10-13 (§9) |
 | **Q1** | the separate pass (`analysis.saxs.photon_stats`, `scripts/photon_stats_acceptance.py`), its file and hash, the reader (`analysis.diagnostics.photon_stats`); mock tests with a synthetic negative binomial of known β, one with injected hot pixels, and the mock AGIPD run frame by frame | β recovered within its σ from the mock; histograms equal the dense computation frame by frame; on r0423 and r0450 the probe's 20 trains reproduce its numbers exactly; time and size per run measured on r0423, r0450 and one mesh run (r318). **Passed 2026-10-14** (§7.1): all frames OK, 17/17 rings exact on both runs, 340 / 365 / 205 s and 200 / 243 / 145 B per frame |
 | **H** | mesh hits: run-triage T2 `classify` (§4.4) and the static out-of-beam rule (§5.1); every diagnostic takes the hit trains | **passed 2026-10-14**: r318 agrees with lowq_report's rule on 99.6 % of trains; r68–69 and r140 ambiguous, r309–311 all on; r307 reports 46 hits with WAXS z 0.8 (flagged by the WAXS check, not by the classifier); hit fractions per run in the report (r120 11 %, r318 36 %) |
+| **Q1b** | the statistics from the `agipd_saxs` pass's own read (§7.2) | **passed 2026-10-14** on r0423: fused = backfill = standalone, frame table unchanged, backfill touches nothing else; +36 % wall |
 | **Q2** | β_sf along one droplet series against V/V₀, per 30 s slice, on hits only | a trend with droplet volume measured or excluded at stated precision. A diagnostic only: the keep rule keeps the fixed β (§9) |
 | **Q3** | β_sf against the TTCF intercept on the reference runs, with the TTCF rebuilt on our pixels | the 0.79–0.94 ratio on r0450 explained: geometry (our ROIs vs extra-speckle's), normalisation, or charge sharing |
 | **Q4** | the outlier rule for low-k̄ rings (pixels whose counts are impossible for the ring's k̄; A3_pix finds the rings, §7.1), and a per-run shape flag from the per-frame third factorial moment g3 (W3 beside W1, W2), replacing the pooled R3 | r0423 at 0.75–0.86 nm⁻¹ gives a β_sf within 2σ of its neighbours once the rule is applied; g3 on r0450 within its σ, or its excess stated |
@@ -440,7 +498,11 @@ In the low-k̄ limit its R3 is the negative binomial's times two factors:
 ## 9. Decisions (user, 2026-10-13)
 
 1. **A separate pass**, not the `agipd_saxs` worker (§6). The ideal would be an XPCS worker
-   beside the correlations, but those are extra-speckle's.
+   beside the correlations, but those are extra-speckle's. **Reversed 2026-10-14:**
+   - the statistics are written by the `agipd_saxs` pass from its own read, on by default;
+   - in DAMNIT, one `agipd_preprocessing` variable reads proc, and `agipd_saxs`,
+     `photon_statistics` and the diagnostics read its files (§7.2; `context/diagnostics.md`
+     §8).
 2. **Per frame** (§5). Rings or ROIs was left to whichever gives more realistic results: 17
    rings, for the reason in §5.
 3. **The keep rule keeps the fixed β** (`REFERENCE_BETA`). β_sf is a diagnostic; the user is
