@@ -62,6 +62,7 @@ __all__ = [
     "hits",
     "otsu_split",
     "run_blocks",
+    "signals_from",
     "static_hits",
     "train_signals",
     "waxs_check",
@@ -93,25 +94,88 @@ def _band_mean(path: Path, group: str, band) -> tuple | None:
         if group not in f or "intensity" not in f[group]:
             return None
         g = f[group]
-        q = g["q"][:]
-        cols = np.flatnonzero((q >= band[0]) & (q < band[1]))
-        if cols.size == 0:
-            raise ValueError(f"{path}:{group} has no q bin in {band}")
-        lo, hi = int(cols[0]), int(cols[-1]) + 1
-        if not np.array_equal(cols, np.arange(lo, hi)):
-            raise ValueError(f"{path}:{group}: q is not sorted")
-        tids = g["trainId"][:].astype(np.uint64)
-        values = np.full(tids.size, np.nan)
-        present = np.zeros(tids.size, dtype=np.int32)
-        for s in range(0, tids.size, TRAIN_CHUNK):
-            frames = g["n_frames"][s : s + TRAIN_CHUNK] > 0  # (n, P)
-            band_mean = g["intensity"][s : s + TRAIN_CHUNK, :, lo:hi].mean(axis=-1)
-            n = frames.sum(axis=1)
-            total = np.where(frames, band_mean, 0.0).sum(axis=1)
-            with np.errstate(invalid="ignore", divide="ignore"):
-                values[s : s + n.size] = np.where(n > 0, total / n, np.nan)
-            present[s : s + n.size] = n
+        return _band_mean_of(g, band, f"{path}:{group}")
+
+
+def _band_mean_of(g, band, label: str) -> tuple:
+    """`_band_mean` on a group or Dataset with ``q``, ``trainId``, ``intensity``
+    (train, frame, q) and ``n_frames`` (train, frame), read in train chunks."""
+    q = np.asarray(g["q"][:])
+    cols = np.flatnonzero((q >= band[0]) & (q < band[1]))
+    if cols.size == 0:
+        raise ValueError(f"{label} has no q bin in {band}")
+    lo, hi = int(cols[0]), int(cols[-1]) + 1
+    if not np.array_equal(cols, np.arange(lo, hi)):
+        raise ValueError(f"{label}: q is not sorted")
+    tids = np.asarray(g["trainId"][:]).astype(np.uint64)
+    values = np.full(tids.size, np.nan)
+    present = np.zeros(tids.size, dtype=np.int32)
+    for s in range(0, tids.size, TRAIN_CHUNK):
+        frames = np.asarray(g["n_frames"][s : s + TRAIN_CHUNK]) > 0  # (n, P)
+        chunk = np.asarray(g["intensity"][s : s + TRAIN_CHUNK, :, lo:hi])
+        band_mean = chunk.mean(axis=-1)
+        n = frames.sum(axis=1)
+        total = np.where(frames, band_mean, 0.0).sum(axis=1)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            values[s : s + n.size] = np.where(n > 0, total / n, np.nan)
+        present[s : s + n.size] = n
     return tids, values, present
+
+
+class _Grid:
+    """A DAMNIT grid held in memory, indexed as `_band_mean_of` indexes a group.
+
+    In memory the value is the DataArray the variable returned (its values the
+    intensity, ``n_frames`` a coordinate); read back from DAMNIT's file it is a
+    Dataset with ``intensity`` as a variable. Both are accepted.
+    """
+
+    def __init__(self, ds):
+        self._ds = ds
+
+    def __getitem__(self, name):
+        import xarray as xr
+
+        if isinstance(self._ds, xr.DataArray) and name not in self._ds.coords:
+            return self._ds.values
+        return self._ds[name].values
+
+
+def signals_from(saxs, xgm, transmission, jf1=None):
+    """`train_signals` from DAMNIT values in memory rather than from its file.
+
+    Inside DAMNIT's cluster job a run's ``agipd_saxs`` is not in the per-run file
+    until the job ends, so a variable that needs this run's hits takes the
+    values as dependencies instead. Same estimator as `train_signals`.
+
+    :param saxs: the ``agipd_saxs`` value: ``intensity`` (trainId, pulse, q) and
+        ``n_frames`` (trainId, pulse) with ``q`` and ``trainId``.
+    :param xgm: ``xgm_intensity``, per train [µJ].
+    :param transmission: ``total_transmission``, per train.
+    :param jf1: ``jungfrau_waxs_jf1`` for the WAXS cross-check, or None.
+    """
+    import xarray as xr
+
+    from analysis.diagnostics.curves import flux_from
+
+    tids, mid, present = _band_mean_of(_Grid(saxs), MID_BAND_NM, "agipd_saxs")
+    ds = xr.Dataset(
+        {"saxs_mid": ("trainId", mid), "n_frames": ("trainId", present)},
+        coords={"trainId": tids},
+    )
+    flux = flux_from(xgm, transmission).reindex(trainId=tids)
+    for name in ("xgm_uJ", "total_transmission", "flux"):
+        ds[name] = flux[name]
+    waxs = None if jf1 is None else _band_mean_of(_Grid(jf1), WAXS_RING_NM, "jf1")
+    ds["waxs_ring"] = (
+        ("trainId", np.full(tids.size, np.nan))
+        if waxs is None
+        else xr.DataArray(waxs[1], dims="trainId", coords={"trainId": waxs[0]}).reindex(
+            trainId=tids
+        )
+    )
+    ds.attrs["source"] = "DAMNIT values in memory"
+    return ds
 
 
 def train_signals(
@@ -444,6 +508,7 @@ def hits(
     proposal: int = 10400,
     cache_dir: str | Path | None = CACHE_DIR,
     runs_table=None,
+    signals=None,
 ) -> dict:
     """The trains of one run that hit the droplet, and why.
 
@@ -453,6 +518,10 @@ def hits(
 
     :param runs_table: DAMNIT's run table (`inventory.read_run_table`); read from
         ``damnit_root`` when not given.
+    :param signals: this run's `train_signals`, when they come from memory
+        (`signals_from`) rather than DAMNIT's file. The other runs of a mesh
+        block are still read from their files; one with no ``agipd_saxs`` yet
+        is left out of the block and named in ``summary["block_missing"]``.
     :returns: ``train_ids`` (the hits), ``classes`` (a DataArray over every train:
         "on"/"edge"/"off"/"none" for mesh runs, "on"/"off"/"none" for the others),
         ``kind`` ("mesh" or "static"), ``block`` and ``summary`` (counts, flags, the
@@ -468,30 +537,35 @@ def hits(
     if run not in table.index:
         raise LookupError(f"r{run} is not in DAMNIT's run table")
     row = table.loc[run]
-    signals = train_signals(run, damnit_root=damnit_root, proposal=proposal,
-                            cache_dir=cache_dir)  # fmt: skip
+    if signals is None:
+        signals = train_signals(run, damnit_root=damnit_root, proposal=proposal,
+                                cache_dir=cache_dir)  # fmt: skip
     tids = signals.trainId.values
     block = row.block if isinstance(row.block, str) else None
+    missing: list[int] = []
     if block is not None:
         members = table.index[table.block == block]
-        xs = {
-            int(r): _log_ratio(
-                train_signals(
-                    int(r),
-                    damnit_root=damnit_root,
-                    proposal=proposal,
+        xs = {int(run): _log_ratio(signals, "saxs_mid")}
+        for r in members:
+            if int(r) == int(run):
+                continue
+            try:
+                member = train_signals(
+                    int(r), damnit_root=damnit_root, proposal=proposal,
                     cache_dir=cache_dir,
-                ),
-                "saxs_mid",
-            )  # fmt: skip
-            for r in members
-        }
+                )  # fmt: skip
+            except (LookupError, FileNotFoundError, OSError):
+                missing.append(int(r))
+                continue
+            xs[int(r)] = _log_ratio(member, "saxs_mid")
+        xs = dict(sorted(xs.items()))
         out = classify_block(xs)
         cls = out["classes"][run]
         summary = {k: v for k, v in out["runs"][run].items()}
         summary["block_cut"] = {
             k: v for k, v in out["block"].items() if k not in ("runs",)
         }
+        summary["block_missing"] = missing
         kind = "mesh"
     else:
         x = _log_ratio(signals, "saxs_mid")

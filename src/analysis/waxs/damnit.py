@@ -32,9 +32,11 @@ __all__ = [
     "config_for",
     "damnit_config",
     "jungfrau_waxs",
+    "jungfrau_waxs_from_file",
     "overview_figure",
     "per_cell_from_file",
     "pooled_from_file",
+    "preprocess",
 ]
 
 log = logging.getLogger(__name__)
@@ -81,6 +83,105 @@ def jungfrau_waxs(proposal: int, run_no: int, detector: str, **overrides: Any) -
         "jungfrau_waxs on p%d r%d %s -> %s", proposal, run_no, detector, cfg.output_file
     )
     return run_jungfrau_waxs(cfg, reduce="per_cell")
+
+
+def preprocess(
+    proposal: int,
+    run_no: int,
+    detectors: tuple[str, ...] = DETECTORS,
+    **overrides: Any,
+) -> Any:
+    """The ``jungfrau_preprocessing`` cell: each detector's pass, one after the other.
+
+    A detector whose file is complete is answered from it without writing
+    (CLAUDE.md pitfall 26). A run with no lit cell writes no file and reads
+    "dark". A failure on one detector does not stop the other; it turns the
+    cell red, and the reader of that detector says what is wrong.
+
+    :returns: a ``Cell``: per detector its outcome (JSON) and a one-line summary.
+    """
+    import json
+
+    import h5py
+    from damnit.context import Cell
+
+    from analysis.common.writer import status_counts
+    from analysis.diagnostics.damnit import COLORS
+    from analysis.waxs.run import run_jungfrau_waxs
+
+    outcome: dict[str, Any] = {}
+    tolerated: dict[str, set[str]] = {}
+    for detector in detectors:
+        cfg = damnit_config(proposal, run_no, detector, **overrides)
+        tolerated[detector] = _tolerated(cfg)
+        try:
+            run_jungfrau_waxs(cfg, reduce="none")
+        except Exception as error:  # noqa: BLE001 - shown in the table, logged
+            log.exception("jungfrau_preprocessing r%d %s failed", run_no, detector)
+            outcome[detector] = {"error": f"{type(error).__name__}: {error}"}
+            continue
+        if not cfg.output_file.exists():
+            outcome[detector] = "dark"
+            continue
+        with h5py.File(cfg.output_file, "r") as handle:
+            outcome[detector] = status_counts(
+                handle["frames/status"][:], nonzero_only=True
+            )
+
+    def line(name: str, value: Any) -> str:
+        if value == "dark":
+            return f"{name.upper()} dark"
+        if "error" in value:
+            return f"{name.upper()} failed"
+        if set(value) <= {"OK"}:
+            return f"{name.upper()} {value.get('OK', 0)} OK"
+        return f"{name.upper()} {value}"
+
+    good = all(
+        v == "dark" or ("error" not in v and set(v) <= tolerated[k])
+        for k, v in outcome.items()
+    )
+    return Cell(
+        json.dumps(outcome),
+        summary_value=" · ".join(line(k, v) for k, v in outcome.items()),
+        background=COLORS["good"] if good else COLORS["error"],
+    )
+
+
+def jungfrau_waxs_from_file(
+    proposal: int, run_no: int, detector: str, **overrides: Any
+) -> Any:
+    """A ``jungfrau_waxs_jf*`` column: the ``(trainId, cellId, q)`` grid, from the file.
+
+    Written by ``jungfrau_preprocessing``; this only reads it.
+
+    :raises Skip: no file — a dark run, or a failed pass (the preprocessing
+        cell says which).
+    :raises IncompleteRun: some frame is not ``OK``, other than the tolerated
+        ``DATA_CHECK_FAILED`` (a frame with every pixel excluded), as the pass.
+    """
+    import h5py
+    from damnit.context import Skip
+
+    from analysis.common.writer import IncompleteRun, status_counts
+
+    cfg = damnit_config(proposal, run_no, detector, **overrides)
+    path = cfg.output_file
+    if not path.exists():
+        raise Skip(f"no {detector} file at {path}: see jungfrau_preprocessing")
+    with h5py.File(path, "r") as handle:
+        summary = status_counts(handle["frames/status"][:], nonzero_only=True)
+    if set(summary) - _tolerated(cfg):
+        raise IncompleteRun(f"not every frame reached OK: {summary}")
+    return per_cell(path)
+
+
+def _tolerated(cfg: JungfrauWaxsConfig) -> set[str]:
+    """Status names a finished run may hold, as the pass's own gate allows."""
+    tolerated = {"OK"}
+    if cfg.allow_data_check_failures:
+        tolerated.add("DATA_CHECK_FAILED")
+    return tolerated
 
 
 def per_cell_from_file(path: str | Path) -> Any:

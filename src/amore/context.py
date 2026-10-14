@@ -351,27 +351,49 @@ def xpcs_saxs_plot(run, ds: "var#xpcs_pipeline"):
     return XPCS_RESULTS["figure_saxs"]
 
 
-# ── AGIPD SAXS integration (analysis.saxs) ───────────────────────────────────
-# The column holds I(q) in nm^-1, undivided. Runs processed before this pass
+# ── AGIPD preprocessing (analysis.saxs) ─────────────────────────────────────
+# One variable reads AGIPD proc, once, and writes three files: the frame table
+# (scratch/agipd_saxs/r####/agipd_saxs.h5), the per-pixel window sums and the
+# per-frame photon statistics (usr/cached_files/agipd_pixel_sums, ..._photon_stats).
+# Every other AGIPD column reads one of those files, so the table shows which
+# variable computes and which only presents (user, 2026-10-14). A complete run
+# is answered from its files without writing (CLAUDE.md pitfall 26).
+#
+# agipd_saxs holds I(q) in nm^-1, undivided. Runs processed before this pass
 # existed hold A^-1 divided by I0, so clear the column for them rather than
 # plotting across the boundary.
 #
-# Both variables are thin on purpose: DAMNIT execs this file into a dict, so a
-# function defined here cannot be pickled to the workers the pass spawns.
+# Thin on purpose: DAMNIT execs this file into a dict, so a function defined
+# here cannot be pickled to the workers the pass spawns.
 
 
-@Variable("AGIPD I(q)", data="proc", cluster=True, tags=["offline"])
-def agipd_saxs(run, proposal: "meta#proposal", run_no: "meta#run_number"):
-    """I(q) per (trainId, pulseId). Raises if any frame did not reach OK.
+@Variable("AGIPD preprocessing", data="proc", cluster=True, tags=["offline"])
+def agipd_preprocessing(run, proposal: "meta#proposal", run_no: "meta#run_number"):
+    """The run's one read of AGIPD proc: frame table, window sums, photon stats.
 
-    `run` is unused: a data="proc" variable is handed a proc-only collection,
-    which holds no XGM, timeserver or motors, so the pass opens proc for the
-    frames and raw for its own run checks. The per-frame sums land in
-    scratch/agipd_saxs/r{run:04d}/; what is returned is the intensity grid.
+    `run` is unused: the pass opens proc for the frames and raw for its own run
+    checks. The cell is a status per product, green when all are complete and
+    OK; a failure is a red cell, and each reader then says what its file lacks.
     """
     from analysis.saxs import damnit
 
-    return damnit.agipd_saxs(proposal, run_no)
+    return damnit.preprocess(proposal, run_no)
+
+
+@Variable("AGIPD I(q)", data="proc", cluster=True, tags=["offline"])
+def agipd_saxs(
+    run,
+    prep: "var#agipd_preprocessing",
+    proposal: "meta#proposal",
+    run_no: "meta#run_number",
+):
+    """I(q) per (trainId, pulseId), read from the frame table.
+
+    Raises unless every frame is OK.
+    """
+    from analysis.saxs import damnit
+
+    return damnit.agipd_saxs_from_file(proposal, run_no)
 
 
 @Variable("AGIPD I(q) overview", data="proc", cluster=True, tags=["offline"])
@@ -381,20 +403,34 @@ def agipd_iq_overview(run, grid: "var#agipd_saxs"):
     return damnit.overview_figure(grid)
 
 
-# ── JUNGFRAU WAXS integration (analysis.waxs; context/jungfrau-waxs-integrator) ─
-# One variable per detector, because the pass is per detector: the two
+# ── JUNGFRAU preprocessing (analysis.waxs; context/jungfrau-waxs-integrator) ──
+# One variable runs the pass for both detectors, one after the other: the two
 # JUNGFRAU-500Ks have different geometries, different static masks and
 # different q ranges, so each gets its own PONI and its own output file under
-# scratch/jungfrau_waxs/r{run:04d}/. They are combined only in the overview,
-# and there as two traces with their overlap visible — never concatenated.
+# scratch/jungfrau_waxs/r{run:04d}/. The per-detector columns read those files.
+# They are combined only in the overview, and there as two traces with their
+# overlap visible — never concatenated. A run with no lit cell writes no file:
+# its column is skipped, and the preprocessing cell says "dark".
 #
-# Thin on purpose, like the AGIPD pair above: DAMNIT execs this file into a
-# dict, so a function defined here cannot be pickled to the spawned workers.
+# Thin on purpose, like the AGIPD ones above.
+
+
+@Variable("JUNGFRAU preprocessing", data="proc", cluster=True, tags=["offline"])
+def jungfrau_preprocessing(run, proposal: "meta#proposal", run_no: "meta#run_number"):
+    """Both detectors' passes: a status per detector (OK counts, dark, failed)."""
+    from analysis.waxs import damnit
+
+    return damnit.preprocess(proposal, run_no)
 
 
 @Variable("JF1 I(q)", data="proc", cluster=True, tags=["offline"])
-def jungfrau_waxs_jf1(run, proposal: "meta#proposal", run_no: "meta#run_number"):
-    """I(q) per (trainId, cellId) for JUNGFRAU 1. Raises unless every frame is OK.
+def jungfrau_waxs_jf1(
+    run,
+    prep: "var#jungfrau_preprocessing",
+    proposal: "meta#proposal",
+    run_no: "meta#run_number",
+):
+    """I(q) per (trainId, cellId) for JUNGFRAU 1, read from its file.
 
     There is no pulse axis: JUNGFRAU's reader has no pulse ids, and which of a
     train's X-ray pulses each memory cell sampled is unresolved, so the cell id
@@ -402,20 +438,25 @@ def jungfrau_waxs_jf1(run, proposal: "meta#proposal", run_no: "meta#run_number")
     """
     from analysis.waxs import damnit
 
-    return damnit.jungfrau_waxs(proposal, run_no, "jf1")
+    return damnit.jungfrau_waxs_from_file(proposal, run_no, "jf1")
 
 
 @Variable("JF2 I(q)", data="proc", cluster=True, tags=["offline"])
-def jungfrau_waxs_jf2(run, proposal: "meta#proposal", run_no: "meta#run_number"):
-    """I(q) per (trainId, cellId) for JUNGFRAU 2."""
+def jungfrau_waxs_jf2(
+    run,
+    prep: "var#jungfrau_preprocessing",
+    proposal: "meta#proposal",
+    run_no: "meta#run_number",
+):
+    """I(q) per (trainId, cellId) for JUNGFRAU 2, read from its file."""
     from analysis.waxs import damnit
 
-    return damnit.jungfrau_waxs(proposal, run_no, "jf2")
+    return damnit.jungfrau_waxs_from_file(proposal, run_no, "jf2")
 
 
 @Variable("JUNGFRAU I(q) overview", data="proc", cluster=True, tags=["offline"])
 def jungfrau_waxs_overview(
-    run, jf1: "var#jungfrau_waxs_jf1", jf2: "var#jungfrau_waxs_jf2"
+    run, jf1: "var#jungfrau_waxs_jf1" = None, jf2: "var#jungfrau_waxs_jf2" = None
 ):
     from analysis.waxs import damnit
 
@@ -424,7 +465,7 @@ def jungfrau_waxs_overview(
 
 @Variable("JUNGFRAU I(q) combined", data="proc", cluster=True, tags=["offline"])
 def jungfrau_waxs_combined(
-    run, jf1: "var#jungfrau_waxs_jf1", jf2: "var#jungfrau_waxs_jf2"
+    run, jf1: "var#jungfrau_waxs_jf1" = None, jf2: "var#jungfrau_waxs_jf2" = None
 ):
     """Both detectors on one scale, jf2 fitted onto jf1 over their overlap.
 
@@ -432,6 +473,8 @@ def jungfrau_waxs_combined(
     chi-squared of the residual. That chi-squared is a cross-check on the two
     PONIs only when the overlap carries a feature: on a run with no Bragg
     peaks a q error is absorbed by the factor instead of showing up here.
+    Either detector may be missing (a dark run): then there is nothing to
+    combine, and the cell is empty.
     """
     from analysis.waxs import damnit
 
@@ -473,6 +516,64 @@ def jf2_frames_used(run, proposal: "meta#proposal", run_no: "meta#run_number"):
     from analysis.diagnostics import damnit
 
     return damnit.frames_used(proposal, run_no, "jf2")
+
+
+# Photon statistics, read from agipd_preprocessing's file (context/xpcs-quality.md).
+# The droplet hits come from DAMNIT's values in memory, because inside the cluster
+# job this run's agipd_saxs is not in the per-run file until the job ends.
+
+
+@Variable("Photon statistics", data="proc", cluster=True, tags=["diagnostics"])
+def photon_statistics(
+    run,
+    prep: "var#agipd_preprocessing",
+    saxs: "var#agipd_saxs",
+    xgm: "var#xgm_intensity",
+    transmission: "var#total_transmission",
+    proposal: "meta#proposal",
+    run_no: "meta#run_number",
+):
+    """k̄ and single-frame contrast per XPCS ROI and ring, over the droplet hits."""
+    from analysis.diagnostics import damnit
+
+    return damnit.photon_statistics(proposal, run_no, saxs, xgm, transmission)
+
+
+@Variable("Photon statistics overview", data="proc", cluster=True,
+          tags=["diagnostics"])  # fmt: skip
+def photon_statistics_overview(run, stats: "var#photon_statistics"):
+    from analysis.diagnostics import damnit
+
+    return damnit.photon_statistics_overview(stats)
+
+
+@Variable("Diagnostics overview", data="proc", cluster=True, tags=["diagnostics"])
+def diagnostics_overview(
+    run,
+    saxs: "var#agipd_saxs",
+    xgm: "var#xgm_intensity",
+    transmission: "var#total_transmission",
+    proposal: "meta#proposal",
+    run_no: "meta#run_number",
+):
+    """SVD, χ² against the median and XGM scatter of the AGIPD curves, over hits."""
+    from analysis.diagnostics import damnit
+
+    return damnit.diagnostics_overview(proposal, run_no, saxs, xgm, transmission)
+
+
+# The XPCS keep criterion in one cell (context/run-triage.md §4.6). It reads what
+# DAMNIT and extra-speckle stored (TTCF, kbar.nc), without a var# dependency on
+# the XPCS variables, so it shows the run as of its last processing: refresh with
+# `damnit reprocess --match "XPCS score"`.
+
+
+@Variable("XPCS score", data="proc", tags=["diagnostics"])
+def xpcs_score(run, proposal: "meta#proposal", run_no: "meta#run_number"):
+    """Hits, ROIs at k̄ ≥ 3e-3, best 30 s SNR with the fixed contrast."""
+    from analysis.diagnostics import damnit
+
+    return damnit.xpcs_score_cell(proposal, run_no)
 
 
 # ── Droplet camera (analysis.camera; context/diagnostics.md §6) ──────────────────

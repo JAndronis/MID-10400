@@ -14,6 +14,7 @@ imports without DAMNIT.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -25,11 +26,15 @@ from analysis.common.status import FrameStatus
 __all__ = [
     "COLORS",
     "DETECTORS",
+    "diagnostics_overview",
     "droplet_first_image",
     "droplet_video",
     "frames_used",
     "frames_used_cell",
     "output_file",
+    "photon_statistics",
+    "photon_statistics_overview",
+    "xpcs_score_cell",
 ]
 
 #: Cell backgrounds (p010646's context, transfer_context/templates).
@@ -178,3 +183,261 @@ def droplet_first_image(run) -> Any:
         dims=("y", "x"),
         attrs={"trainId": train_id, "source": camera.CAMERA_SOURCE},
     )
+
+
+# ── photon statistics (agipd_preprocessing writes them; xpcs-quality.md) ──────
+
+
+def photon_statistics(proposal: int, run_no: int, saxs, xgm, transmission) -> Any:
+    """The ``photon_statistics`` column: k̄ and β_sf per XPCS ROI and ring, over hits.
+
+    Reads the statistics ``agipd_preprocessing`` wrote. The droplet hits are
+    classified from DAMNIT's values in memory (``agipd_saxs``, ``xgm_intensity``,
+    ``total_transmission``), because inside the cluster job this run's values
+    are not in DAMNIT's file yet. The per-pixel weights come from the window
+    sums: every window for a static run, the windows wholly inside the hits for
+    a mesh run; without window sums or masks the estimator is unweighted, and
+    ``attrs["weighted"]`` says so.
+
+    :raises Skip: no statistics file, or no hit train.
+    """
+    from damnit.context import Skip
+
+    from analysis.diagnostics.photon_stats import run_weights, summarise
+    from analysis.saxs.damnit import config_for
+    from analysis.triage.classify import hits, signals_from
+
+    cfg = config_for(proposal, run_no)
+    path = cfg.photon_stats_file
+    if not path.exists():
+        raise Skip(f"no photon statistics at {path}: see agipd_preprocessing")
+    h = hits(run_no, proposal=proposal, signals=signals_from(saxs, xgm, transmission))
+    trains = h["train_ids"]
+    if not trains.size:
+        raise Skip(f"r{run_no}: no droplet hit")
+    masks = cfg.output_file.with_name("masks.npz")
+    weights = None
+    if cfg.pixel_sums_file.exists() and masks.exists():
+        try:
+            weights = run_weights(
+                path,
+                pixel_sums_path=cfg.pixel_sums_file,
+                masks_path=masks,
+                trains=trains if h["kind"] == "mesh" else None,
+            )
+        except ValueError:  # no window wholly inside the hits
+            weights = None
+    out = summarise(path, weights, trains)
+    out.attrs.update(
+        kind=h["kind"],
+        block=h["block"] or "",
+        n_hits=int(trains.size),
+        weights_windows=int(weights.attrs["n_windows"]) if weights is not None else 0,
+    )
+    return out
+
+
+def photon_statistics_overview(stats) -> Any:
+    """Three panels from the ``photon_statistics`` value.
+
+    β_sf per ring against q, with the fixed reference contrast per ROI; the
+    pooled P(k) of each ROI against the negative binomial at its β_sf and k̄;
+    k̄ per ring against q, with the 3e-3 photon/pixel/frame threshold.
+    """
+    import matplotlib.pyplot as plt
+
+    from analysis.diagnostics.xpcs import KBAR_MIN
+    from analysis.triage.xpcs import roi_edges_nm
+
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(14, 4.2))
+    q = 0.5 * (stats.ring_lo.values + stats.ring_hi.values)
+    top = max(0.08, float(np.nanmax(stats.reference_beta)) * 1.6)
+    beta = stats.ring_beta.values
+    shown = beta <= top
+    ax1.errorbar(q[shown], beta[shown], stats.ring_sigma.values[shown], fmt="o",
+                 ms=3, label="β_sf")  # fmt: skip
+    if (~shown).any():  # outlier rings: marked at the edge, value in the label
+        values = ", ".join(f"{b:.2g}" for b in beta[~shown])
+        edge = np.full((~shown).sum(), 0.97 * top)
+        ax1.plot(q[~shown], edge, "^", color="C3", label=f"off scale: {values}")
+    edges = {round(float(lo + hi) / 20.0, 6): (lo, hi) for lo, hi in roi_edges_nm()}
+    for i, roi in enumerate(stats.roi.values):
+        lo, hi = edges.get(round(float(roi), 6), (np.nan, np.nan))
+        ax1.hlines(stats.reference_beta.values[i], lo, hi, colors="k",
+                   label="reference" if i == 0 else None)  # fmt: skip
+    ax1.set_xlabel("q [nm$^{-1}$]")
+    ax1.set_ylabel("single-frame contrast β")
+    ax1.set_ylim(0, top)
+    ax1.legend(fontsize=8)
+
+    k = stats.k.values
+    lowest = 1.0
+    rings_of = {}
+    q_ring = 0.5 * (stats.ring_lo.values + stats.ring_hi.values)
+    for roi in stats.roi.values:
+        lo, hi = edges.get(round(float(roi), 6), (np.nan, np.nan))
+        rings_of[roi] = np.flatnonzero((q_ring >= lo) & (q_ring < hi))
+    for i, roi in enumerate(stats.roi.values):
+        hist = stats.ring_hist.values[rings_of[roi]].sum(axis=0).astype(float)
+        if hist.sum() == 0:
+            continue
+        p = hist[:-1] / hist.sum()  # leave out the overflow bin
+        lowest = min(lowest, float(p[p > 0].min()))
+        (line,) = ax2.semilogy(k[:-1], np.where(p > 0, p, np.nan), "o", ms=3,
+                               label=f"{roi:.4g} Å$^{{-1}}$")  # fmt: skip
+        beta, kbar = float(stats.beta[i]), float(stats.kbar[i])
+        if beta > 0 and kbar > 0:
+            m = 1.0 / beta
+            ks = np.arange(k.size - 1)
+            from scipy.special import gammaln
+
+            nb = np.exp(
+                gammaln(ks + m) - gammaln(ks + 1) - gammaln(m)
+                + ks * np.log(kbar / (kbar + m)) + m * np.log(m / (kbar + m))
+            )  # fmt: skip
+            ax2.semilogy(ks, nb, "-", color=line.get_color(), lw=0.8)
+    ax2.set_xlim(-0.3, 6.3)
+    ax2.set_ylim(lowest / 3, 2.0)
+    ax2.set_xlabel("photons per pixel k")
+    ax2.set_ylabel("P(k)")
+    ax2.legend(fontsize=7)
+
+    ax3.semilogy(q, stats.ring_kbar, "o", ms=3)
+    ax3.axhline(KBAR_MIN, color="r", lw=0.8, label=f"{KBAR_MIN:g}")
+    ax3.set_xlabel("q [nm$^{-1}$]")
+    ax3.set_ylabel("k̄ [photons / pixel / frame]")
+    ax3.legend(fontsize=8)
+    a = stats.attrs
+    weighted = "weighted" if a.get("weighted") else "unweighted"
+    fig.suptitle(
+        f"{a.get('kind', '')} run, {a.get('n_hits', '?')} hit trains, "
+        f"{a.get('n_frames', '?')} frames, {weighted}",
+        fontsize=10,
+    )
+    fig.tight_layout()
+    return fig
+
+
+# ── XPCS score and run diagnostics ────────────────────────────────────────────
+
+
+def xpcs_score_cell(proposal: int, run_no: int) -> Any:
+    """The ``xpcs_score`` cell: hits, ROIs at k̄ ≥ 3e-3, best 30 s SNR.
+
+    Reads what DAMNIT and extra-speckle have stored (``diagnostics.xpcs.
+    xpcs_score``), so it shows the run as of its last processing; refresh with
+    ``damnit reprocess --match "XPCS score"``. Green when some 30 s slice reaches
+    SNR 3 with the fixed contrast, red when none does, amber when unknown.
+
+    :raises Skip: the run is not in DAMNIT or has no ``agipd_saxs`` there yet.
+    """
+    from damnit.context import Cell, Skip
+
+    from analysis.diagnostics.xpcs import xpcs_score
+
+    try:
+        score = xpcs_score(run_no, proposal=proposal)
+    except (LookupError, FileNotFoundError) as error:
+        raise Skip(str(error)) from None
+    snr = score["snr"] or {}
+    best = snr.get("best_snr")
+    ok = score["n_rois_kbar_ok"]
+    plain = score["n_plain_rois_kbar_ok"]
+    parts = [f"{score['n_hits']} hits"]
+    if ok is not None:
+        parts.append(f"k̄ ok {ok}/7 ({plain}/4 plain)")
+    parts.append(
+        "SNR —" if best is None or not np.isfinite(best) else f"SNR {best:.1f}"
+    )
+    extractable = snr.get("extractable")
+    colour = (
+        COLORS["warning"]
+        if extractable is None
+        else COLORS["good"]
+        if extractable
+        else COLORS["error"]
+    )
+    record = {k: v for k, v in score.items() if k not in ("kbar", "hits")}
+    record["snr"] = {k: v for k, v in snr.items() if k != "slices"}
+    return Cell(
+        json.dumps(record, default=_jsonable),
+        summary_value=" · ".join(parts),
+        background=colour,
+    )
+
+
+def _jsonable(value):
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    return str(value)
+
+
+def diagnostics_overview(proposal: int, run_no: int, saxs, xgm, transmission) -> Any:
+    """One figure of the AGIPD run diagnostics over its droplet hits.
+
+    SVD of the per-train curves (divided by the flux and the median curve)
+    against the noise floor; χ² of each train against the run median; the
+    0.3–0.5 nm⁻¹ band against the flux, before and after dividing by it.
+    Inputs as ``photon_statistics``: the frame table, and this run's hits from
+    DAMNIT's values in memory.
+    """
+    import matplotlib.pyplot as plt
+    from damnit.context import Skip
+
+    from analysis.diagnostics.curves import (
+        band_mean,
+        chi2_vs_median,
+        flux_from,
+        svd,
+        xgm_scatter,
+    )
+    from analysis.diagnostics.frames import per_train
+    from analysis.saxs.damnit import config_for
+    from analysis.triage.classify import MID_BAND_NM, hits, signals_from
+
+    path = config_for(proposal, run_no).output_file
+    if not path.exists():
+        raise Skip(f"no frame table at {path}: see agipd_preprocessing")
+    h = hits(run_no, proposal=proposal, signals=signals_from(saxs, xgm, transmission))
+    trains = h["train_ids"]
+    if trains.size < 3:
+        raise Skip(f"r{run_no}: {trains.size} droplet hits, too few to diagnose")
+    curves = per_train(path).sel(trainId=trains)
+    flux = flux_from(xgm, transmission).flux.reindex(trainId=trains)
+    decomposition = svd(curves, k=5, flux=flux)
+    chi2 = chi2_vs_median(curves, flux=flux)
+    signal = band_mean(curves, MID_BAND_NM)
+    scatter = xgm_scatter(signal, flux)
+
+    fig, axes = plt.subplots(1, 3, figsize=(14, 4.2))
+    ax = axes[0]
+    s = decomposition.singular_value.values
+    ax.semilogy(np.arange(s.size), s, "o-")
+    floor = decomposition.attrs.get("noise_floor")
+    if floor is not None and np.isfinite(floor):
+        ax.axhline(floor, color="r", lw=0.8, label="noise floor")
+        ax.legend(fontsize=8)
+    ax.set_xlabel("component")
+    ax.set_ylabel("singular value")
+    ax.set_title("SVD of curves / flux / median", fontsize=9)
+
+    ax = axes[1]
+    t = (chi2.trainId.values - chi2.trainId.values[0]) / 10.0
+    ax.plot(t, chi2.chi2.values, ".", ms=2)
+    ax.set_yscale("log")
+    ax.set_xlabel("time since first hit [s]")
+    ax.set_ylabel("reduced χ² against the median")
+    ax.set_title("each train against the run median", fontsize=9)
+
+    ax = axes[2]
+    ax.plot(flux.values, signal.values, ".", ms=2)
+    ax.set_xlabel("flux = XGM × transmission [µJ]")
+    ax.set_ylabel(f"I in {MID_BAND_NM[0]}–{MID_BAND_NM[1]} nm$^{{-1}}$")
+    ratio = scatter.get("robust_ratio_detrended", scatter.get("robust_ratio"))
+    ax.set_title(f"flux division: robust spread ×{float(ratio):.2f}", fontsize=9)
+    fig.suptitle(f"r{run_no:04d}, {h['kind']} run, {trains.size} hit trains",
+                 fontsize=10)  # fmt: skip
+    fig.tight_layout()
+    return fig

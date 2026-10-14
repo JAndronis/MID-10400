@@ -11,6 +11,7 @@ work from a notebook or from a Slurm script.
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -24,9 +25,12 @@ from analysis.saxs.writer import per_pulse
 __all__ = [
     "config_for",
     "agipd_saxs",
+    "agipd_saxs_from_file",
     "overview_figure",
     "per_pulse_from_file",
     "pooled_from_file",
+    "preprocess",
+    "product_status",
 ]
 
 log = logging.getLogger(__name__)
@@ -59,6 +63,112 @@ def agipd_saxs(proposal: int, run_no: int, **overrides: Any) -> Any:
     cfg = config_for(proposal, run_no, **overrides)
     log.info("agipd_saxs on p%d r%d -> %s", proposal, run_no, cfg.output_file)
     return run_agipd_saxs(cfg, reduce="per_pulse")
+
+
+def preprocess(proposal: int, run_no: int, **overrides: Any) -> Any:
+    """The ``agipd_preprocessing`` cell: the run's one read of AGIPD proc.
+
+    Writes whichever of the frame table, the window sums and the photon
+    statistics are not complete yet, from one read (``run_agipd_saxs``), and
+    answers a complete run from its files without writing (CLAUDE.md pitfall 26).
+    Every column that shows one of these products reads it from its file.
+
+    Failures are a red cell rather than an exception, so the readers still run
+    and each says what is wrong with its own file.
+
+    :returns: a ``Cell``: per product, its status counts (JSON) as data, and a
+        one-line summary.
+    """
+    from damnit.context import Cell
+
+    from analysis.common.lock import OutputBusy
+    from analysis.diagnostics.damnit import COLORS
+    from analysis.saxs.run import run_agipd_saxs
+
+    cfg = config_for(proposal, run_no, **overrides)
+    log.info("agipd_preprocessing on p%d r%d -> %s", proposal, run_no, cfg.output_file)
+    try:
+        run_agipd_saxs(cfg, reduce="none")
+    except OutputBusy as error:
+        return Cell(str(error), summary_value="busy", background=COLORS["warning"])
+    except Exception as error:  # noqa: BLE001 - shown in the table, logged in full
+        log.exception("agipd_preprocessing r%d failed", run_no)
+        status = product_status(cfg)
+        return Cell(
+            json.dumps(status | {"error": f"{type(error).__name__}: {error}"}),
+            summary_value=f"failed: {type(error).__name__}",
+            background=COLORS["error"],
+        )
+    status = product_status(cfg)
+    return Cell(
+        json.dumps(status),
+        summary_value=_status_line(status),
+        background=COLORS["good"] if _all_ok(status) else COLORS["error"],
+    )
+
+
+def product_status(cfg: AgipdSaxsConfig) -> dict[str, Any]:
+    """Status counts of each product the pass writes for ``cfg``, or ``None``."""
+    import h5py
+
+    from analysis.common.writer import status_counts
+
+    def counts(path: Path, column: str) -> dict[str, int] | None:
+        if not path.exists():
+            return None
+        try:
+            with h5py.File(path, "r") as handle:
+                return status_counts(handle[column][:], nonzero_only=True)
+        except (OSError, KeyError):
+            return {"unreadable": 1}
+
+    status = {"frames": counts(cfg.output_file, "frames/status")}
+    if cfg.pixel_sum_trains is not None:
+        status["window_sums"] = counts(cfg.pixel_sums_file, "trains/status")
+    if cfg.photon_stats:
+        status["photon_stats"] = counts(cfg.photon_stats_file, "frames/status")
+    return status
+
+
+def _all_ok(status: dict[str, Any]) -> bool:
+    return all(c is not None and set(c) <= {"OK"} for c in status.values())
+
+
+def _status_line(status: dict[str, Any]) -> str:
+    names = {"frames": "frames", "window_sums": "sums", "photon_stats": "stats"}
+    parts = []
+    for key, counts in status.items():
+        if counts is None:
+            parts.append(f"{names[key]} missing")
+        elif set(counts) <= {"OK"}:
+            parts.append(f"{names[key]} {counts.get('OK', 0)} OK")
+        else:
+            bad = {k: v for k, v in counts.items() if k != "OK"}
+            parts.append(f"{names[key]} {bad}")
+    return " · ".join(parts)
+
+
+def agipd_saxs_from_file(proposal: int, run_no: int, **overrides: Any) -> Any:
+    """The ``agipd_saxs`` column: ``I(q)`` per (trainId, pulseId), from the file.
+
+    Written by ``agipd_preprocessing``; this only reads it.
+
+    :raises Skip: the run has no frame table.
+    :raises IncompleteRun: some frame is not ``OK``, as the pass itself would.
+    """
+    import h5py
+    from damnit.context import Skip
+
+    from analysis.common.writer import IncompleteRun, status_counts
+
+    path = config_for(proposal, run_no, **overrides).output_file
+    if not path.exists():
+        raise Skip(f"no frame table at {path}: see agipd_preprocessing")
+    with h5py.File(path, "r") as handle:
+        summary = status_counts(handle["frames/status"][:], nonzero_only=True)
+    if set(summary) - {"OK"}:
+        raise IncompleteRun(f"not every frame reached OK: {summary}")
+    return per_pulse(path)
 
 
 def per_pulse_from_file(path: str | Path) -> Any:

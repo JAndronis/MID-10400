@@ -346,3 +346,82 @@ def test_the_grid_survives_damnits_writer(finished, tmp_path):
     # The table cell must read like the old pipeline's, not "Dataset (930MB)".
     summary = Cell(grid).get_summary("agipd_saxs")
     assert summary == f"{grid.dtype}: {grid.shape}"
+
+
+# ── agipd_preprocessing and the agipd_saxs reader (user, 2026-10-14) ──────────
+def _roots(tmp_path):
+    return {
+        "output_root": str(tmp_path / "saxs"),
+        "pixel_sums_root": str(tmp_path / "sums"),
+        "photon_stats_root": str(tmp_path / "stats"),
+    }
+
+
+@pytest.fixture
+def preprocessed(mock_pipeline, geom, tmp_path):
+    """The mock run written at its config's own paths, as ``preprocess`` writes it,
+    and the overrides that rebuild that config through ``config_for``."""
+    from dataclasses import fields, replace
+
+    from analysis.saxs.run import run_agipd_saxs
+
+    cfg = replace(mock_pipeline.cfg, **_roots(tmp_path))
+    run_agipd_saxs(
+        cfg,
+        dc=mock_pipeline.dc,
+        geometry=geom,
+        run_dir=mock_pipeline.run.path,
+        pool_factory=InlinePool,
+        reduce="none",
+    )
+    overrides = {
+        f.name: getattr(cfg, f.name)
+        for f in fields(cfg)
+        if f.name not in ("proposal", "run")
+    }
+    assert damnit.config_for(cfg.proposal, cfg.run, **overrides) == cfg
+    return cfg, overrides
+
+
+def _colour(cell) -> str:
+    return "#" + bytes(cell.background).hex()
+
+
+def test_the_reader_returns_what_the_pass_wrote(preprocessed):
+    import xarray as xr
+
+    cfg, overrides = preprocessed
+    grid = damnit.agipd_saxs_from_file(cfg.proposal, cfg.run, **overrides)
+    xr.testing.assert_identical(grid, per_pulse(cfg.output_file))
+    status = damnit.product_status(cfg)
+    assert set(status) == {"frames", "window_sums", "photon_stats"}
+    assert all(set(counts) == {"OK"} for counts in status.values())
+
+
+def test_preprocess_is_a_status_cell_and_a_failure_is_red(preprocessed, monkeypatch):
+    pytest.importorskip("damnit")
+    from analysis.diagnostics.damnit import COLORS
+
+    cfg, overrides = preprocessed
+    monkeypatch.setattr("analysis.saxs.run.run_agipd_saxs", lambda c, **kw: None)
+    cell = damnit.preprocess(cfg.proposal, cfg.run, **overrides)
+    assert (
+        cell.summary_value.startswith("frames ") and " · stats " in cell.summary_value
+    )
+    assert _colour(cell) == COLORS["good"]
+
+    def boom(c, **kwargs):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr("analysis.saxs.run.run_agipd_saxs", boom)
+    cell = damnit.preprocess(cfg.proposal, cfg.run, **overrides)
+    assert cell.summary_value == "failed: RuntimeError"
+    assert _colour(cell) == COLORS["error"]
+    assert "disk full" in json.loads(cell.data)["error"]
+
+
+def test_the_reader_skips_a_run_without_a_frame_table(tmp_path):
+    damnit_ctx = pytest.importorskip("damnit.context")
+
+    with pytest.raises(damnit_ctx.Skip):
+        damnit.agipd_saxs_from_file(10400, 423, **_roots(tmp_path))

@@ -40,6 +40,8 @@ __all__ = [
     "ring_weights",
     "roi_groups",
     "run_weights",
+    "summarise",
+    "summary_of",
 ]
 
 #: Jackknife blocks of contiguous trains (as triage.xpcs: σ good to ~10 %).
@@ -297,3 +299,58 @@ def nb_checks(ds, beta=None):
         with np.errstate(invalid="ignore", divide="ignore"):
             out["r3_z"] = ("ring", (r3 - (1 + 2 * b) / (1 + b)) / r3_sigma)
     return out
+
+
+def summarise(path: str | Path, weights=None, trains=None, n_blocks: int = N_BLOCKS):
+    """A run's photon statistics in brief, per plain XPCS ROI and per ring.
+
+    :param weights: `run_weights`, or None for the unweighted estimator.
+    :param trains: the trains to use (a run's droplet hits); None for every one.
+    :returns: a Dataset: per ROI (``roi``, its centre in Å⁻¹) ``beta``, ``sigma``,
+        ``kbar`` and ``reference_beta`` (the fixed table); per ring ``ring_beta``,
+        ``ring_sigma``, ``ring_kbar``, ``ring_max_k`` and the pooled histogram
+        ``ring_hist`` (ring, k). ``attrs``: ``n_frames``, ``n_trains``, ``weighted``.
+    """
+    ds = read_photon_stats(path, trains=trains)
+    if not ds.sizes["frame"]:
+        raise ValueError(f"{path}: no OK frame among the trains asked for")
+    out = summary_of(ds, weights, n_blocks)
+    out.attrs["file"] = str(path)
+    return out
+
+
+def summary_of(ds, weights=None, n_blocks: int = N_BLOCKS):
+    """`summarise` on frames already read (`read_photon_stats`)."""
+    import xarray as xr
+
+    from analysis.triage.xpcs import REFERENCE_BETA
+
+    groups = roi_groups(ds)
+    rings = contrast(ds, weights, n_blocks=n_blocks)
+    rois = contrast(ds, weights, groups=groups, n_blocks=n_blocks)
+    centres = list(groups)
+    return xr.Dataset(
+        {
+            "beta": ("roi", rois.beta.values),
+            "sigma": ("roi", rois.sigma.values),
+            "kbar": ("roi", rois.kbar.values),
+            "reference_beta": ("roi", [REFERENCE_BETA[q][0] for q in centres]),
+            "ring_beta": ("ring", rings.beta.values),
+            "ring_sigma": ("ring", rings.sigma.values),
+            "ring_kbar": ("ring", rings.kbar.values),
+            "ring_max_k": ("ring", ds.max_k.max("frame").values),
+            "ring_hist": (("ring", "k"), ds.hist.sum("frame").values),
+        },
+        coords={
+            "roi": centres,
+            "ring": ds.ring.values,
+            "ring_lo": ("ring", ds.ring_lo.values),
+            "ring_hi": ("ring", ds.ring_hi.values),
+            "k": ds.k.values,
+        },
+        attrs={
+            "n_frames": int(ds.sizes["frame"]),
+            "n_trains": int(np.unique(ds.trainId.values).size),
+            "weighted": int(weights is not None),
+        },
+    )

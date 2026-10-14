@@ -163,3 +163,18 @@ def test_the_reader_keeps_ok_frames_and_selects_trains(tmp_path):
     some = read_photon_stats(path, trains=[1000, 1002])
     assert set(some.trainId.values) == {1000, 1002}
     assert some.sizes["k"] == K_MAX + 2
+
+
+def test_the_summary_reports_rois_rings_and_the_reference(frames):
+    from analysis.diagnostics.photon_stats import summary_of
+    from analysis.triage.xpcs import REFERENCE_BETA
+
+    ds, weights, _ = frames
+    s = summary_of(ds, weights)
+    assert list(s.roi.values) == [0.04]  # both rings lie in 0.35-0.45 nm^-1
+    assert abs(float(s.beta[0]) - BETA) < 4 * float(s.sigma[0])
+    assert float(s.reference_beta[0]) == REFERENCE_BETA[0.04][0]
+    np.testing.assert_array_equal(
+        s.ring_hist.sum("k").values, ds.n_valid.sum("frame").values
+    )
+    assert s.attrs["n_frames"] == ds.sizes["frame"] and s.attrs["weighted"] == 1

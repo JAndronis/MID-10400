@@ -96,13 +96,64 @@ def test_the_saxs_variables_keep_their_names(variables):
 
 
 INTEGRATION_VARIABLES = (
+    "agipd_preprocessing",
     "agipd_saxs",
     "agipd_iq_overview",
+    "jungfrau_preprocessing",
     "jungfrau_waxs_jf1",
     "jungfrau_waxs_jf2",
     "jungfrau_waxs_overview",
     "jungfrau_waxs_combined",
 )
+
+DIAGNOSTIC_VARIABLES = (
+    "photon_statistics",
+    "photon_statistics_overview",
+    "diagnostics_overview",
+    "xpcs_score",
+)
+
+#: The only variables that read detector proc; every other column reads a file
+#: one of them wrote (user, 2026-10-14: one read, the table says who computes).
+PREPROCESSING = {
+    "agipd_preprocessing": "preprocess",
+    "jungfrau_preprocessing": "preprocess",
+}
+
+
+def test_one_variable_per_detector_kind_reads_proc(variables):
+    """The preprocessing variables are cluster jobs; the readers wait on them."""
+    for name in PREPROCESSING:
+        assert variables[name].cluster is True
+        assert variables[name].arg_dependencies() == {}
+    assert variables["agipd_saxs"].arg_dependencies() == {"prep": "agipd_preprocessing"}
+    for detector in ("jf1", "jf2"):
+        deps = variables[f"jungfrau_waxs_{detector}"].arg_dependencies()
+        assert deps == {"prep": "jungfrau_preprocessing"}
+    stats = variables["photon_statistics"].arg_dependencies()
+    assert stats["prep"] == "agipd_preprocessing" and stats["saxs"] == "agipd_saxs"
+
+
+def test_only_the_preprocessing_variables_call_a_pass():
+    """``preprocess`` appears in their bodies and nowhere else, and no body calls
+    the computing entry points of the old layout."""
+    import ast
+
+    for node in _context_tree().body:
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        called = node.body[-1].value.func.attr if isinstance(
+            node.body[-1], ast.Return
+        ) and isinstance(node.body[-1].value, ast.Call) and isinstance(
+            node.body[-1].value.func, ast.Attribute
+        ) else None  # fmt: skip
+        if node.name in PREPROCESSING:
+            assert called == PREPROCESSING[node.name], node.name
+        else:
+            assert called not in ("preprocess", "agipd_saxs", "jungfrau_waxs"), (
+                f"{node.name} calls {called}"
+            )
+
 
 FRAMES_USED_VARIABLES = ("agipd_frames_used", "jf1_frames_used", "jf2_frames_used")
 
@@ -131,7 +182,11 @@ CAMERA_VARIABLES = ("droplet_video", "droplet_first_image")
 
 
 @pytest.mark.parametrize(
-    "name", INTEGRATION_VARIABLES + FRAMES_USED_VARIABLES + CAMERA_VARIABLES
+    "name",
+    INTEGRATION_VARIABLES
+    + FRAMES_USED_VARIABLES
+    + CAMERA_VARIABLES
+    + DIAGNOSTIC_VARIABLES,
 )
 def test_the_context_file_holds_no_heavy_integration_logic(name):
     """DAMNIT execs this file, so nothing defined here can reach a worker.
@@ -200,7 +255,14 @@ def test_no_call_in_the_context_file_passes_overwrite():
 
 
 @pytest.mark.parametrize(
-    "name", ["agipd_saxs", "jungfrau_waxs_jf1", "jungfrau_waxs_jf2"]
+    "name",
+    [
+        "agipd_preprocessing",
+        "jungfrau_preprocessing",
+        "agipd_saxs",
+        "jungfrau_waxs_jf1",
+        "jungfrau_waxs_jf2",
+    ],
 )
 def test_the_integration_wrappers_pass_no_config(name):
     """The config DAMNIT runs with lives in ``analysis.*.damnit``, in one place.

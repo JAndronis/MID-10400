@@ -23,6 +23,7 @@ from analysis.triage.classify import (
     otsu_split,
     run_blocks,
     run_levels,
+    signals_from,
     static_hits,
     train_signals,
     waxs_check,
@@ -255,3 +256,74 @@ def test_hits_end_to_end_on_a_small_block(tmp_path):
     assert s["train_ids"].size == 600
     with pytest.raises(LookupError):
         hits(999, damnit_root=root, cache_dir=tmp_path / "cache")
+
+
+def in_memory(path):
+    """What DAMNIT hands a variable: agipd_saxs as the DataArray the variable
+    returned (``trainId``, ``pulseId``, ``q`` and ``n_frames`` as coordinates),
+    XGM and transmission as per-train arrays, jf1 likewise or None."""
+
+    def grid(g, frame_dim):
+        return xr.DataArray(
+            g["intensity"][()],
+            dims=("trainId", frame_dim, "q"),
+            coords={
+                "trainId": g["trainId"][()],
+                frame_dim: g[frame_dim][()],
+                "q": g["q"][()],
+                "n_frames": (("trainId", frame_dim), g["n_frames"][()]),
+            },
+            name="intensity",
+        )
+
+    with h5py.File(path, "r") as f:
+        saxs = grid(f["agipd_saxs"], "pulseId")
+        jf1 = (
+            grid(f["jungfrau_waxs_jf1"], "cellId") if "jungfrau_waxs_jf1" in f else None
+        )
+    xgm = xr.open_dataset(path, group="xgm_intensity").load().Energy
+    trans = xr.open_dataset(path, group="total_transmission").load()
+    return saxs, xgm, trans.__xarray_dataarray_variable__, jf1
+
+
+def test_signals_from_memory_equal_those_from_the_file(tmp_path):
+    root = tmp_path / "amore"
+    (root / "extracted_data").mkdir(parents=True)
+    rng = np.random.default_rng(8)
+    n_frames = (rng.random((6, 3)) > 0.2).astype(float)
+    path, _ = write_damnit(
+        root / "extracted_data" / "p10400_r5.h5", rng.random((6, 3, 50)),
+        n_frames=n_frames, xgm=rng.random(6) * 500, trans=rng.random(6) * 0.1,
+        waxs=rng.random((6, 2, 20)),
+    )  # fmt: skip
+    want = train_signals(5, damnit_root=root, cache_dir=None)
+    got = signals_from(*in_memory(path))
+    for name in want.data_vars:
+        np.testing.assert_array_equal(got[name].values, want[name].values, name)
+
+
+def test_hits_take_this_run_from_memory_and_skip_members_not_yet_stored(tmp_path):
+    rng = np.random.default_rng(6)
+    root = tmp_path / "amore"
+    (root / "extracted_data").mkdir(parents=True)
+    rows = []
+    for r in (120, 121, 122):
+        x, _ = mesh_run(rng, -4.3, 0.2, n=400)
+        saxs = np.broadcast_to((10.0**x)[:, None, None], (400, 2, 30)).copy()
+        write_damnit(root / "extracted_data" / f"p10400_r{r}.h5", saxs,
+                     xgm=np.full(400, 10.0))  # fmt: skip
+        rows.append(run_row(r, scan_type="dmesh SSHEX", total_transmission=0.0123,
+                            pulses=350.0))  # fmt: skip
+    write_sqlite(root / "runs.sqlite", rows)
+    stored = hits(121, damnit_root=root, cache_dir=None)
+
+    memory = in_memory(root / "extracted_data" / "p10400_r121.h5")
+    # in the DAMNIT job, r121 itself is not in its file yet
+    (root / "extracted_data" / "p10400_r121.h5").unlink()
+    got = hits(121, damnit_root=root, cache_dir=None, signals=signals_from(*memory))
+    np.testing.assert_array_equal(got["train_ids"], stored["train_ids"])
+    assert got["summary"]["block_missing"] == []
+    (root / "extracted_data" / "p10400_r122.h5").unlink()
+    fewer = hits(121, damnit_root=root, cache_dir=None, signals=signals_from(*memory))
+    assert fewer["summary"]["block_missing"] == [122]
+    assert fewer["kind"] == "mesh" and fewer["train_ids"].size > 0

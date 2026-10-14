@@ -26,6 +26,7 @@ __all__ = [
     "cell_xgm_correlation",
     "chi2_vs_median",
     "detrend",
+    "flux_from",
     "per_train_flux",
     "svd",
     "xgm_scatter",
@@ -55,23 +56,28 @@ def per_train_flux(damnit_file: str | Path):
     Outer-joined on trainId: a train missing either input has NaN flux, which every
     function here then drops, rather than silently pairing values by position.
     """
+    path = Path(damnit_file)
+    ds = flux_from(
+        _damnit_array(path, XGM_VARIABLE), _damnit_array(path, TRANSMISSION_VARIABLE)
+    )
+    ds.attrs["source"] = str(path)
+    return ds
+
+
+def flux_from(xgm, transmission):
+    """`per_train_flux` from the two per-train arrays themselves (DAMNIT values
+    in memory, inside a DAMNIT job)."""
     import xarray as xr
 
-    path = Path(damnit_file)
-    xgm, trans = xr.align(
-        _damnit_array(path, XGM_VARIABLE),
-        _damnit_array(path, TRANSMISSION_VARIABLE),
-        join="outer",
-    )
+    xgm, trans = xr.align(xr.DataArray(xgm), xr.DataArray(transmission), join="outer")
     ds = xr.Dataset(
         {
-            "xgm_uJ": xgm.astype(np.float64),
-            "total_transmission": trans.astype(np.float64),
+            "xgm_uJ": xgm.astype(np.float64).reset_coords(drop=True),
+            "total_transmission": trans.astype(np.float64).reset_coords(drop=True),
         }
     )
     ds["flux"] = ds.xgm_uJ * ds.total_transmission
     ds.flux.attrs["description"] = FLUX_DESCRIPTION
-    ds.attrs["source"] = str(path)
     return ds
 
 

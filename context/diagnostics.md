@@ -18,6 +18,9 @@ the XPCS keep rule is `context/run-triage.md` §4.6, the photon-statistics quali
 - Phase D (`*_frames_used` cells) passed 2026-10-14: §6.
 - Phase E (droplet videos, `analysis.camera`) passed 2026-10-14 on r0423, r318 and r0426: §7.
 - Phase F (`notebooks/diagnostics.ipynb`) is left to another session (user, 2026-10-14).
+- The DAMNIT layout (user, 2026-10-14): one preprocessing variable per detector kind reads
+  proc; every other column reads its files (§8). The photon statistics come out of the
+  `agipd_saxs` pass itself (`context/xpcs-quality.md` §7.2).
 
 ---
 
@@ -314,3 +317,55 @@ image"):
   1 h of one node at these rates. `mmlsquota` reports no quota-enabled fileset for p010400, and
   exflu has 480 TB free (2026-10-14). Not run: it needs the user's go, or comes with the
   DAMNIT reprocess once the context is installed.
+
+## 8. The DAMNIT layout: who computes, who reads (user, 2026-10-14)
+
+The user wanted the table to say which variable computes what, and no detector data read
+twice. So **two variables read detector proc, and every other column reads the files they
+write.** In `src/amore/context.py`:
+
+| Column (title) | Kind | What it does |
+|---|---|---|
+| `agipd_preprocessing` ("AGIPD preprocessing") | cluster, proc | `analysis.saxs.damnit.preprocess`: one read of AGIPD proc, writing whichever of the frame table, window sums and photon statistics are incomplete. A complete run is answered from its files. The cell is a status per product (green when all are complete and OK); a failure is a red cell, not an exception, so each reader still says what its own file lacks |
+| `agipd_saxs` ("AGIPD I(q)") | reader, depends on `agipd_preprocessing` | the per-pulse grid from the frame table; same name and content as before |
+| `agipd_iq_overview` | reader | unchanged |
+| `photon_statistics` | reader, depends on `agipd_preprocessing`, `agipd_saxs`, `xgm_intensity`, `total_transmission` | `analysis.diagnostics.damnit.photon_statistics`: k̄ and β_sf per plain XPCS ROI and per ring, the pooled P(k), and the reference contrast, over the droplet hits |
+| `photon_statistics_overview` | reader | β_sf against q with the reference; P(k) against the negative binomial; k̄ against q with 3e-3. Off-scale rings are marked at the edge with their values |
+| `diagnostics_overview` | reader, same inputs as `photon_statistics` | SVD against the noise floor, χ² of each train against the median, the 0.3–0.5 nm⁻¹ band against the flux; over hits |
+| `jungfrau_preprocessing` ("JUNGFRAU preprocessing") | cluster, proc | `analysis.waxs.damnit.preprocess`: JF1, then JF2, each answered from its file when complete. Status per detector: OK counts, "dark" (no lit cell, no file), or failed |
+| `jungfrau_waxs_jf1` / `_jf2` | readers, depend on `jungfrau_preprocessing` | the grid from the file; skipped without one |
+| `jungfrau_waxs_overview` / `_combined` | readers | unchanged, except that their inputs are optional: a dark detector no longer skips them |
+| `*_frames_used`, `xpcs_score` | proc, not cluster, no dependency | read stored files: the frame tables; DAMNIT's TTCF and extra-speckle's `kbar.nc` |
+| `droplet_video`, `droplet_first_image` | raw | as §7 |
+
+- **Hits inside the cluster job.** `photon_statistics` and `diagnostics_overview` need this
+  run's droplet hits. Inside DAMNIT's cluster job, though, this run's `agipd_saxs` reaches the
+  per-run file only when the job ends.
+  - So they take `agipd_saxs`, `xgm_intensity` and `total_transmission` as dependencies.
+    `triage.classify.signals_from` builds the per-train signals from those values with the
+    estimator `train_signals` uses. The two agree exactly on r318 and in the tests.
+  - `hits(run, signals=...)` uses them for this run. A mesh block's other runs come from their
+    files; one not yet in DAMNIT is left out and listed in `summary["block_missing"]`.
+  - ctxrunner re-runs raw dependencies such as XGM and transmission inside the proc job, on
+    `open_run(data="all")` (damnit 0.4.0, `Pipeline.execute`).
+- **`xpcs_score` reads stored values.** It has no `var#` dependency on the XPCS variables,
+  because S1's side session has proposed reworking those (`context/xpcs-results-proposal.md`
+  on `claude/gracious-wing-15f275`). It therefore shows the run as of its last processing:
+  refresh with `--match "XPCS score"`, as with the frames-used cells.
+- **Reprocessing.** `scripts/reprocess_safe.py` matches the new titles: "AGIPD
+  preprocessing", "AGIPD I(q)", "Photon statistics", "Diagnostics overview", "JUNGFRAU
+  preprocessing" and the JF ones. The statistics are a companion it test-reads and never moves.
+- **Install.** None of this reaches DAMNIT until the context is installed with S1's
+  `scripts/install_context.py`. DAMNIT reads `usr/Shared/amore/context.py` (pitfall 27).
+
+**Checked on real data, outside DAMNIT** (login node, 2026-10-14), with DAMNIT's stored values
+standing in for the in-memory ones:
+- **`photon_statistics`**:
+  - r0423: static, 3000 hit trains, weighted over 301 windows, β per ROI 0.0151 / 0.0118 /
+    0.0134 / 0.46, 14 s;
+  - r318: mesh, 259 hits, 20 windows, 0.40 / 0.097 / 0.51 / 2.6, 7 s.
+
+  Both equal the Q1 acceptance (`context/xpcs-quality.md` §7.1).
+- **`diagnostics_overview`**: 18 s and 12 s.
+- **`xpcs_score`**: r0423 "3000 hits · k̄ ok 6/7 (3/4 plain) · SNR 32.2", r318 "259 hits · k̄ ok
+  4/7 (3/4 plain) · SNR 10.0", both green, as in §5.

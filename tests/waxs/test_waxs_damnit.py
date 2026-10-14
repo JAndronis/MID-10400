@@ -169,3 +169,49 @@ def test_the_file_readers_return_the_same_thing_as_the_pass(
 
     pooled = damnit.pooled_from_file(path)
     assert set(pooled.data_vars) == {"intensity", "sigma", "n_frames"}
+
+
+# ── jungfrau_preprocessing and the per-detector readers (user, 2026-10-14) ────
+def _colour(cell) -> str:
+    return "#" + bytes(cell.background).hex()
+
+
+def test_preprocess_reports_each_detector(monkeypatch, tmp_path):
+    pytest.importorskip("damnit")
+    from analysis.diagnostics.damnit import COLORS
+
+    def fake(cfg, **kwargs):
+        if cfg.detector == "jf2":
+            raise RuntimeError("no PONI")
+        return None  # jf1: no lit cell, so no file
+
+    monkeypatch.setattr("analysis.waxs.run.run_jungfrau_waxs", fake)
+    cell = damnit.preprocess(10400, 423, output_root=str(tmp_path))
+    assert cell.summary_value == "JF1 dark · JF2 failed"
+    assert _colour(cell) == COLORS["error"]
+    dark = damnit.preprocess(10400, 423, ("jf1",), output_root=str(tmp_path))
+    assert dark.summary_value == "JF1 dark"
+    assert _colour(dark) == COLORS["good"]
+
+
+def test_the_reader_returns_the_grid_and_skips_a_missing_file(grid, cfg, tmp_path):
+    import shutil
+
+    import xarray as xr
+
+    damnit_ctx = pytest.importorskip("damnit.context")
+    root = tmp_path / "root"
+    target = damnit.damnit_config(
+        cfg.proposal, cfg.run, cfg.detector, output_root=str(root)
+    ).output_file
+    target.parent.mkdir(parents=True)
+    shutil.copy2(tmp_path / "damnit.h5", target)
+    got = damnit.jungfrau_waxs_from_file(
+        cfg.proposal, cfg.run, cfg.detector, output_root=str(root)
+    )
+    xr.testing.assert_identical(got, grid)
+    other = "jf2" if cfg.detector == "jf1" else "jf1"
+    with pytest.raises(damnit_ctx.Skip):
+        damnit.jungfrau_waxs_from_file(
+            cfg.proposal, cfg.run, other, output_root=str(root)
+        )

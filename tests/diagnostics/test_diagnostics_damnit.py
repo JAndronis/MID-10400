@@ -153,3 +153,59 @@ def test_a_run_without_the_camera_is_skipped(tmp_path):
         droplet_first_image(run)
     with pytest.raises(Skip):
         droplet_video(run, 1, root=tmp_path)
+
+
+# ── photon statistics, XPCS score, overview (user, 2026-10-14) ────────────────
+def test_the_statistics_overview_draws_three_panels(tmp_path):
+    import matplotlib
+
+    matplotlib.use("Agg")
+    from test_diagnostics_photon_stats import nb_frames
+
+    from analysis.diagnostics.damnit import photon_statistics_overview
+    from analysis.diagnostics.photon_stats import summary_of
+
+    ds, weights, _ = nb_frames(np.random.default_rng(9), 300)
+    s = summary_of(ds, weights)
+    s.attrs.update(kind="static", n_hits=30)
+    fig = photon_statistics_overview(s)
+    assert len(fig.axes) == 3
+
+
+def test_photon_statistics_skip_without_a_file(tmp_path):
+    from analysis.diagnostics.damnit import photon_statistics
+
+    with pytest.raises(Skip, match="no photon statistics"):
+        photon_statistics(10400, 9999, None, None, None)
+
+
+@pytest.mark.parametrize(
+    ("extractable", "best", "expected"),
+    [(True, 10.04, "good"), (False, 1.7, "error"), (None, float("nan"), "warning")],
+)
+def test_the_xpcs_score_cell(monkeypatch, extractable, best, expected):
+    from analysis.diagnostics.damnit import xpcs_score_cell
+
+    score = {
+        "run": 318, "kind": "mesh", "block": "x", "n_hits": 259,
+        "hits": {}, "kbar": None, "n_rois_kbar_ok": 4, "n_plain_rois_kbar_ok": 3,
+        "snr": {"best_snr": best, "extractable": extractable, "slices": []},
+    }  # fmt: skip
+    monkeypatch.setattr(
+        "analysis.diagnostics.xpcs.xpcs_score", lambda run, proposal: score
+    )
+    cell = xpcs_score_cell(10400, 318)
+    snr = "SNR —" if extractable is None else f"SNR {best:.1f}"
+    assert cell.summary_value == f"259 hits · k̄ ok 4/7 (3/4 plain) · {snr}"
+    assert colour(cell) == COLORS[expected]
+
+
+def test_the_xpcs_score_skips_a_run_not_in_damnit(monkeypatch):
+    from analysis.diagnostics.damnit import xpcs_score_cell
+
+    def missing(run, proposal):
+        raise LookupError("r5 is not in DAMNIT's run table")
+
+    monkeypatch.setattr("analysis.diagnostics.xpcs.xpcs_score", missing)
+    with pytest.raises(Skip, match="run table"):
+        xpcs_score_cell(10400, 5)

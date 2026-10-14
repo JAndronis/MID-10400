@@ -72,7 +72,8 @@ class Detector:
     name: str
     #: DAMNIT variable titles to ``--match``. A JF detector also matches the
     #: overview and the combined curve, which depend on both detectors; the one
-    #: not reprocessed is answered from its file.
+    #: not reprocessed is answered from its file, as is the other detector in
+    #: ``JUNGFRAU preprocessing``, which runs both.
     titles: tuple[str, ...]
     #: ``--root``: where the outputs live instead of the config's default, for
     #: exercising this script on copies. ``output_root`` is operational, so it
@@ -88,6 +89,7 @@ class Detector:
 
             if self.root_override:
                 roots["pixel_sums_root"] = self.root_override
+                roots["photon_stats_root"] = self.root_override
             return config_for(PROPOSAL, run, **roots)
         from analysis.waxs.damnit import damnit_config
 
@@ -119,9 +121,20 @@ class Detector:
 
 
 DETECTORS = {
-    "agipd": Detector("agipd", ("AGIPD I(q)",)),
-    "jf1": Detector("jf1", ("JF1 I(q)", "JUNGFRAU I(q)")),
-    "jf2": Detector("jf2", ("JF2 I(q)", "JUNGFRAU I(q)")),
+    # The preprocessing variable reads proc and writes the files; the others
+    # read them (user, 2026-10-14). --match takes titles by substring, so
+    # "AGIPD I(q)" also matches its overview and "Photon statistics" its own.
+    "agipd": Detector(
+        "agipd",
+        (
+            "AGIPD preprocessing",
+            "AGIPD I(q)",
+            "Photon statistics",
+            "Diagnostics overview",
+        ),
+    ),
+    "jf1": Detector("jf1", ("JUNGFRAU preprocessing", "JF1 I(q)", "JUNGFRAU I(q)")),
+    "jf2": Detector("jf2", ("JUNGFRAU preprocessing", "JF2 I(q)", "JUNGFRAU I(q)")),
 }
 
 
