@@ -4,13 +4,18 @@ Context file for CLAUDE.md open task 20 (session S4, 2026-10-13). Read `CLAUDE.m
 the XPCS keep rule is `context/run-triage.md` §4.6, the photon-statistics quality check
 `context/xpcs-quality.md`.
 
-**State (2026-10-13):**
+**State (2026-10-14):**
 - Phase A (`analysis.diagnostics.frames`, `.curves`) is done: 22 mock tests, ruff clean,
   smoke-tested on r0423 and r0426.
 - Phase B (`analysis.diagnostics.xpcs`, a fixed reference β) is done: §4.
 - Phase C (the photon-statistics spec, `context/xpcs-quality.md`) is reviewed.
 - Phase H (droplet hits, `triage.classify`; the per-run score with k̄ per ROI) is done: §5.
-- Q1 and phases D–F are to come.
+- Q1 (the photon-statistics pass, `analysis.saxs.photon_stats`, and its reader
+  `analysis.diagnostics.photon_stats`) passed 2026-10-14 on r0423, r0450 and r318:
+  `context/xpcs-quality.md` §7.1. Its product is
+  `usr/cached_files/agipd_photon_stats/r{run:04d}/agipd_photon_stats.h5`, written for those three
+  runs only.
+- Phases D–F are to come.
 
 ---
 

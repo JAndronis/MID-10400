@@ -139,7 +139,10 @@ What this says, as far as 20 trains can:
   4–7σ in the three lower-q ROIs: too many 3-photon pixels. A ring mixture can lift R3 by
   ~w_cv² ≈ 1 %, not 5–12 %. Candidates: AGIPD photonisation, crystallite speckle (r0450 is a
   late PEG 6K droplet) or pile-up. It does not change β_sf, which uses only the first two
-  factorial moments, but it is what the flag is for.
+  factorial moments, but it is what the flag is for. **Corrected by Q1 (§7.1):** a pooled
+  histogram also mixes frames of different k̄, which lifts R3 by A3_frame = 1.02–1.04 on a whole
+  run. In a wide ROI the rings' different k̄ add to that. So most of the 5–12 % is mixing.
+  What survives, measured per frame, is a 2–10 % excess at third order.
 - **0.75–0.86 nm⁻¹ on r0423 is dominated by artefacts.** k̄ = 0.0024, and a few pixels give
   k = 5–12 in single frames (13 counts at k = 5, 7 at k = 12). That makes β_sf 0.46 and R3 3.8.
   These are the pixels `max_count` already records per frame. The ROI needs an outlier rule
@@ -283,29 +286,156 @@ workers over trains:
   - Pulse IDs follow detector numbering (2, 4, …), not `XrayPulses`' 200, 202, ….
   - Option W reads proc once for the integrator anyway, so none of this applies there.
 
-## 7. Reading it back (to implement with Q1)
+## 7. As built (Q1, 2026-10-14)
 
-`analysis.diagnostics.photon_stats`, plain functions:
+**The pass: `analysis.saxs.photon_stats`**, beside the window sums since it is AGIPD's.
+- `PhotonStatsConfig(saxs=AgipdSaxsConfig(...))` with `rings_nm` (`default_rings()`: the 17
+  rings, Bragg overlap refused) and `k_max` = 15. Its hash covers what changes a count: rings,
+  K, sdd, energy, beam centre, mask bits, seams, min_modules, and the geometry and pixel-mask
+  files' sha256. Not `npt`, the method, workers or outputs (pitfall 12). It pickles by name
+  (pitfall 20).
+- `run_photon_stats(cfg)` builds the plan (`build_plan`, the frame table's rows), the ring
+  map (`ring_labels`: `build_operator`, pixel-centre q) and the static mask, then fans blocks
+  out (`fan_out`). Workers read `image.data` and `image.mask` (`decompress_threads=1`), check
+  labels as the integrator does, and run `frame_stats` (the sparse form).
+- The file is `PhotonStatsWriter`, a `FrameTableWriter`: trainId, reader_pulseId, cellId and
+  status per frame, plus `n_valid`, `hist (n, 17, 17)`, `s1`, `s2` and `max_k`. `/rings` holds
+  the edges, the pixel → ring labels with their sha256, and the operator's sha256. It shares
+  the frame table's resume, label checks, ledger and hash refusal.
+- Output: `usr/cached_files/agipd_photon_stats/r{run:04d}/agipd_photon_stats.h5`.
 
-```
-read(run) -> xr.Dataset (frame, ring, k) + (frame,) trainId, pulseId, cellId
-weights(run) -> w_p per ring, from the window sums; W1, W2 per (cell, ring) from /masks
-contrast(ds, by=None | "slice" | "pulse_quarter" | trainIds, rings=XPCS ROI or ring)
-    -> β_sf, σ (jackknife over trains), n frames
-nb_checks(ds, ...) -> R2, R3, their expectations and Poisson σ
-compare_ttcf(run, ...) -> β_sf / A per XPCS ROI, using triage.xpcs.measure_run
-```
+**Reading it back: `analysis.diagnostics.photon_stats`**, plain functions.
+- `read_photon_stats(path, trains=None)`: OK frames, as (frame, ring, k).
+- `run_weights(path, pixel_sums_path=, masks_path=, trains=None)`: W1, W2 per (cell, ring). The
+  per-pixel means come from the window sums, every window or only those wholly inside
+  `trains` (a mesh run's hits). The cells' base masks are the SAXS pass's `masks.npz`.
+- `contrast(ds, weights=None, groups=None)`: β per ring, or per XPCS ROI with
+  `groups=roi_groups(ds)`. A group pools S2 and the per-ring expectations, so intensity
+  differences between rings cancel as well. σ by jackknife over 50 contiguous blocks of trains.
+- `nb_checks(ds, beta)`: R2, R3, their expectations and `r3_z`. The sign means something:
+  extra 3-photon pixels read above; hot pixels far in the tail inflate the moment β and read
+  below (mock test: |z| > 5 with three 10-photon pixels per frame). **On real runs it is not a
+  speckle test** (§7.1): the pooled ratios carry the spread of k̄ between frames and between
+  pixels, and over a whole run that alone is worth 15–30σ. Q4 replaces it.
+- Still to come (Q3): `compare_ttcf`, β_sf over the TTCF intercept per XPCS ROI.
+
+**Why not extra-speckle's XSVS.** `extra_speckle.xsvs.calc_xsvs_agipd` computes P(k) per
+(train, pulse, q-bin), checked 2026-10-14 in the installed source. But:
+- `PhotonCalculator` keeps only k ≤ `ph_max` (default 5), and its docstring speaks of 1-, 2- and
+  3-photon pixels;
+- it counts pixels per train, not per frame;
+- it stores no exact Σk(k − 1);
+- its q-bins and masks come from its `Setup` (pitfall 16).
+
+It stays a possible cross-check for Q3.
+
+### 7.1 Q1 acceptance (2026-10-14)
+
+`scripts/photon_stats_acceptance.py --runs 423 450 318 --workers 32`: job 25295674 on
+max-wn072 (EPYC 7402), commit 1f1dd34 plus Q1. Its JSON is
+`photon_stats_acceptance_20261014T064115Z.json`. Then
+`scripts/photon_stats_shape_check.py` on the login node, JSON
+`photon_stats_shape_check_20261014T064804Z.json`.
+
+**The gates pass.**
+- Every frame is OK on all three runs.
+- On r0423 and r0450, the probe's 20 trains (evenly spaced, as in §3) reproduce its
+  narrow-ring counts exactly in all 17 rings.
+- The mock tests pass: β is recovered within its σ, and every histogram equals the dense count
+  frame by frame (13 tests).
+
+| Run | Frames | Wall, 32 workers | Frames/s | File | Per frame |
+|---|---|---|---|---|---|
+| r0423 | 465 000 | 340 s | 1366 | 92.8 MB | 200 B |
+| r0450 | 465 000 | 365 s | 1272 | 113.0 MB | 243 B |
+| r318 (mesh) | 252 000 | 205 s | 1230 | 36.6 MB | 145 B |
+
+- **Cost.** Per frame and core, the workers spend:
+  - 3.2–4.3 ms reading `image.data`;
+  - 6.7–6.8 ms reading `image.mask`;
+  - 7.3–8.3 ms on the per-frame mask, the data check and the histogram.
+
+  17–19 ms in all, which a separate pass pays because it re-reads both datasets (§6).
+- **Projection at these rates.** The proposal's 1.486 × 10⁸ frames cost 22–36 GB and about
+  32 h of one node at 32 workers. Not run: a bulk extraction needs the user's go.
+
+**β_sf per XPCS ROI, whole run, weighted** (± jackknife):
+
+| ROI [Å⁻¹] | r0450 | REFERENCE_BETA | r0423 | r318, 259 hits |
+|---|---|---|---|---|
+| 0.02875 | 0.0425 ± 0.0005 | 0.0478 | 0.0150 ± 0.0006 | 0.40 ± 0.04 |
+| 0.04 | 0.0328 ± 0.0005 | 0.0390 | 0.0118 ± 0.0004 | 0.097 ± 0.009 |
+| 0.0505 | 0.0267 ± 0.0004 | 0.0295 | 0.0134 ± 0.0006 | 0.51 ± 0.04 |
+| 0.0805 | 0.0221 ± 0.0008 | 0.0186 | 0.46 ± 0.07 | 2.6 ± 0.2 |
+
+- **r0450.** The ratio to REFERENCE_BETA is 0.84–0.91 at the three lower-q ROIs and 1.19 at
+  0.0805. The 20-train probe agrees (0.043 / 0.032 / 0.029). Explaining it is Q3.
+- **r0423** reads 0.35–0.50 of r0450 at the three lower-q ROIs (the probe said about a third).
+  Its 0.0805 ROI is dominated by outlier pixels, as the probe found.
+- **The "unweighted" column of the acceptance JSON pools per-ring unweighted estimates.** It
+  reads only 0.002–0.006 high, the within-ring w_cv². The wide-ROI bias of §3 (0.006–0.017)
+  includes the spread between rings, which pooling per ring removes.
+- **On r318's hits, β_sf is not speckle contrast.**
+  - In rings 0, 1, 3 and 8, where g3 also passes (|z| ≤ 1.2), it is 0.019–0.057
+    (σ 0.005–0.017).
+  - Rings 2, 5, 10 and 13–16 read 0.37–3.5. Counts reach 28 in ring 10.
+  - The weights come from the 20 windows wholly inside the hits. A hit's pixel pattern
+    changes from frame to frame (droplet edge, surface scattering, §5.1), and run-mean weights
+    cannot follow it.
+  - The per-run score (`diagnostics.xpcs.xpcs_score`) is unaffected: it uses k̄ and the fixed β,
+    not β_sf (§9, decision 3).
+
+**The shape check, measured** (`photon_stats_shape_check`). A pooled histogram is a mixture.
+In the low-k̄ limit its R3 is the negative binomial's times two factors:
+- the frame factor A3_frame = ⟨m⟩⟨m³⟩/⟨m²⟩², over frames, with m = S1/W1 (k̄ varies between
+  frames: SASE pulse energy, transmission);
+- the pixel factor A3_pix = ⟨w⟩⟨w³⟩/⟨w²⟩², over the ring's pixels.
+
+| | r0450 rings 0–12 | r0423 rings 0–12 | r318 hits |
+|---|---|---|---|
+| A3_frame | 1.022–1.039 | 1.022–1.023 | 1.072–1.099 |
+| r3_z against the negative binomial | +15 to +31 | +2.7 to +9.8 | (outlier rings, below) |
+| r3_z after A3_frame × A3_pix | +3.6 to +11 | −0.6 to +7.3 | (outlier rings) |
+| g3 / expected, per frame | 1.024–1.10 (z 7–21) | 1.02–3.3 (z 1.7–9.5) | (outlier rings) |
+
+- **The frame factor is most of r0450's failure.** A pooled ratio over many frames is
+  therefore no speckle test, and `nb_checks` is kept only as a record of the raw ratios.
+- **The per-frame check.** S3 = Σ k(k − 1)(k − 2)·h_k is per frame, and it is normalised per
+  frame like β:
+
+  ```
+  g3 = Σ_f S3 / Σ_f S1(S1 − 1)(S1 − 2)·W3/W1³ = (1 + β)(1 + 2β) for a negative binomial
+  ```
+
+  Neither mixing factor touches it.
+- **On r0450 it still reads 2.4–10 % high** in rings 0–12. That is an intensity distribution
+  heavier-tailed than a gamma at third order: real, small, cause open (photonisation,
+  crystallites, frame-specific pixel patterns).
+- **A3_pix finds rings where a few pixels carry the run-mean weight.**
+  - r0423: ring 11 (1.15), rings 13–16 (1.09–4.9);
+  - r318: rings 2 (10), 14 (48), 15 (5.0), 16 (2.1);
+  - against 1.002–1.04 elsewhere.
+
+  It catches most of the absurd β_sf (r0423 rings 13, 14, 16; r318 rings 2 and 13–16), but
+  not all of them, and not only them:
+  - r318's rings 5 and 10 read 0.37 and 2.0 at A3_pix 1.02 and 1.18. Their pixels misbehave
+    in some frames, not on average.
+  - r0423's ring 11 reads a sane 0.013 at 1.15.
+
+  So the Q4 outlier rule has to work per frame (counts impossible for the frame's k̄), with
+  A3_pix as a pointer, not the rule.
+- **No overflow:** no count reached K + 1 = 16 on r0423 or r0450.
 
 ## 8. Phases and acceptance
 
 | Phase | Content | Acceptance |
 |---|---|---|
 | **Q0** | this spec | reviewed 2026-10-13 (§9) |
-| **Q1** | the separate pass (`analysis.photon_stats`, node script), its file and hash, the reader; mock tests with a synthetic negative binomial of known β, one with injected hot pixels, and one with a dropped train | β recovered within its σ from the mock; histograms equal the dense computation frame by frame; on r0423 and r0450 the first 20 trains reproduce this probe's numbers exactly; time and size per run measured on r0423, r0450 and one mesh run (r318) |
+| **Q1** | the separate pass (`analysis.saxs.photon_stats`, `scripts/photon_stats_acceptance.py`), its file and hash, the reader (`analysis.diagnostics.photon_stats`); mock tests with a synthetic negative binomial of known β, one with injected hot pixels, and the mock AGIPD run frame by frame | β recovered within its σ from the mock; histograms equal the dense computation frame by frame; on r0423 and r0450 the probe's 20 trains reproduce its numbers exactly; time and size per run measured on r0423, r0450 and one mesh run (r318). **Passed 2026-10-14** (§7.1): all frames OK, 17/17 rings exact on both runs, 340 / 365 / 205 s and 200 / 243 / 145 B per frame |
 | **H** | mesh hits: run-triage T2 `classify` (§4.4) and the static out-of-beam rule (§5.1); every diagnostic takes the hit trains | **passed 2026-10-14**: r318 agrees with lowq_report's rule on 99.6 % of trains; r68–69 and r140 ambiguous, r309–311 all on; r307 reports 46 hits with WAXS z 0.8 (flagged by the WAXS check, not by the classifier); hit fractions per run in the report (r120 11 %, r318 36 %) |
 | **Q2** | β_sf along one droplet series against V/V₀, per 30 s slice, on hits only | a trend with droplet volume measured or excluded at stated precision. A diagnostic only: the keep rule keeps the fixed β (§9) |
 | **Q3** | β_sf against the TTCF intercept on the reference runs, with the TTCF rebuilt on our pixels | the 0.79–0.94 ratio on r0450 explained: geometry (our ROIs vs extra-speckle's), normalisation, or charge sharing |
-| **Q4** | the outlier rule for low-k̄ rings (pixels whose counts are impossible for the ring's k̄), and R3 per run as a flag | r0423 at 0.75–0.86 nm⁻¹ gives a β_sf within 2σ of its neighbours once the rule is applied |
+| **Q4** | the outlier rule for low-k̄ rings (pixels whose counts are impossible for the ring's k̄; A3_pix finds the rings, §7.1), and a per-run shape flag from the per-frame third factorial moment g3 (W3 beside W1, W2), replacing the pooled R3 | r0423 at 0.75–0.86 nm⁻¹ gives a β_sf within 2σ of its neighbours once the rule is applied; g3 on r0450 within its σ, or its excess stated |
 
 ## 9. Decisions (user, 2026-10-13)
 
