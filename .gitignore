@@ -34,3 +34,6 @@ data/
 
 # Figures made by the notebooks (figures/droplets/... per droplet); not committed
 figures/
+
+# Logs
+logs/
