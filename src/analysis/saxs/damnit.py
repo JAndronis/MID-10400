@@ -130,8 +130,26 @@ def product_status(cfg: AgipdSaxsConfig) -> dict[str, Any]:
     return status
 
 
+def _failures(key: str, counts: dict[str, int]) -> dict[str, int]:
+    """The codes that make a product incomplete, as the pass itself judges them.
+
+    Every non-OK frame does, in the frame table and the statistics. A window-sums
+    train does only with a code in ``pixel_sums.FAILED``: ``NO_FRAMES`` and
+    ``MISSING_MODULES`` trains own no rows and are final.
+    """
+    if key == "window_sums":
+        from analysis.saxs.pixel_sums import FAILED
+
+        failed = {code.name for code in FAILED}
+        return {k: v for k, v in counts.items() if k in failed or k == "unreadable"}
+    return {k: v for k, v in counts.items() if k != "OK"}
+
+
 def _all_ok(status: dict[str, Any]) -> bool:
-    return all(c is not None and set(c) <= {"OK"} for c in status.values())
+    return all(
+        counts is not None and not _failures(key, counts)
+        for key, counts in status.items()
+    )
 
 
 def _status_line(status: dict[str, Any]) -> str:
@@ -140,11 +158,10 @@ def _status_line(status: dict[str, Any]) -> str:
     for key, counts in status.items():
         if counts is None:
             parts.append(f"{names[key]} missing")
-        elif set(counts) <= {"OK"}:
-            parts.append(f"{names[key]} {counts.get('OK', 0)} OK")
-        else:
-            bad = {k: v for k, v in counts.items() if k != "OK"}
+        elif bad := _failures(key, counts):
             parts.append(f"{names[key]} {bad}")
+        else:
+            parts.append(f"{names[key]} {counts.get('OK', 0)} OK")
     return " · ".join(parts)
 
 

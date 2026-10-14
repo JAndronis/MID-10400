@@ -425,3 +425,22 @@ def test_the_reader_skips_a_run_without_a_frame_table(tmp_path):
 
     with pytest.raises(damnit_ctx.Skip):
         damnit.agipd_saxs_from_file(10400, 423, **_roots(tmp_path))
+
+
+def test_trains_without_frames_do_not_fail_the_window_sums():
+    """r0423 (2026-10-14): one train of 3001 has no frames. The sums record it
+    as NO_FRAMES, which the pass treats as final, so the cell stays green."""
+    status = {
+        "frames": {"OK": 465000},
+        "window_sums": {"OK": 3000, "NO_FRAMES": 1},
+        "photon_stats": {"OK": 465000},
+    }
+    assert damnit._all_ok(status)
+    assert damnit._status_line(status) == (
+        "frames 465000 OK · sums 3000 OK · stats 465000 OK"
+    )
+    status["window_sums"]["LABEL_MISMATCH"] = 2
+    assert not damnit._all_ok(status)
+    assert "sums {'LABEL_MISMATCH': 2}" in damnit._status_line(status)
+    status["photon_stats"] = None
+    assert "stats missing" in damnit._status_line(status)

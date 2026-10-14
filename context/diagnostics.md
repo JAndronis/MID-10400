@@ -369,3 +369,26 @@ standing in for the in-memory ones:
 - **`diagnostics_overview`**: 18 s and 12 s.
 - **`xpcs_score`**: r0423 "3000 hits · k̄ ok 6/7 (3/4 plain) · SNR 32.2", r318 "259 hits · k̄ ok
   4/7 (3/4 plain) · SNR 10.0", both green, as in §5.
+
+**Acceptance, through DAMNIT's own runner** (job 25297808, max-exfl473, commit 4bcbb55 on S1's
+efd6b0a, 2026-10-14). ctxrunner ran on a scratch copy of the context, as DAMNIT runs it, for
+r0423 (static) and r318 (mesh). Both runs' products were already complete.
+- **The proc stage** (`--var` the frames-used cells and `xpcs_score`) takes 33 s and 19 s.
+  - Frames used: r0423 465 000 / 24 000 / 24 000, r318 252 000 / 11 552 / 11 552, all green.
+  - XPCS score: r0423 "3000 hits · k̄ ok 6/7 (3/4 plain) · SNR 32.2", r318 "259 hits · k̄ ok 4/7
+    (3/4 plain) · SNR 10.0".
+- **The cluster stage** (`--cluster-job`, both preprocessing variables, every reader, the
+  overviews; XGM and the transmissions re-run as dependencies) takes 59 s and 36 s, with peak
+  RSS 4.4 and 2.2 GB.
+  - Every variable is computed, and none fails or is skipped.
+  - `agipd_preprocessing` answers from the files in 5.3–5.5 s, and `jungfrau_preprocessing`
+    in 0.4–0.5 s, writing nothing.
+  - The frame tables and window sums keep their 2026-10-07 mtimes.
+  - The two Q1 statistics files were finalised again. Their provenance had kept an
+    `operator_sha256` the completeness check now reads as a mismatch, and `is_complete` is
+    true for both runs afterwards. r0450's file shows the same leftover until its next
+    preprocessing.
+- **Fixed after this run.** `agipd_preprocessing` was red on both runs, because r0423 has one
+  train (r318 two) with no frames. The window sums record them as `NO_FRAMES`, which the
+  pass treats as final. The cell now judges the sums by `pixel_sums.FAILED`, as
+  `run_agipd_saxs` does, and reads "frames 465000 OK · sums 3000 OK · stats 465000 OK".
