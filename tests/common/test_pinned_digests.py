@@ -34,7 +34,7 @@ SAXS_FIELDS = (
     "expected_bits", "use_asic_seams", "pixel_mask_file", "base_mask_trains",
     "detector_name", "min_modules", "trains_per_block", "n_workers",
     "selftest_frames", "output_root", "allow_incomplete", "overwrite",
-    "pixel_sum_trains", "pixel_sums_root",
+    "pixel_sum_trains", "pixel_sums_root", "photon_stats", "photon_stats_root",
 )  # fmt: skip
 
 WAXS_FIELDS = (
@@ -195,10 +195,12 @@ EXPECTED_ALL: dict[str, tuple[str, ...]] = {
 
     # DEFAULT_PIXEL_SUMS_ROOT and SAXS_OPERATIONAL_FIELDS added for the window
     # sums (context file §15); the operator, masks and frame table are unchanged.
+    # DEFAULT_PHOTON_STATS_ROOT likewise for the photon statistics (S4,
+    # context/xpcs-quality.md), whose two fields the frame table's hash excludes.
     "analysis.saxs.config": (
         "AgipdSaxsConfig", "DEFAULT_BEAM_CENTER_PX",
         "DEFAULT_BEAM_CENTER_PY", "DEFAULT_GEOMETRY_FILE",
-        "DEFAULT_OUTPUT_ROOT", "DEFAULT_PIXEL_MASK_FILE",
+        "DEFAULT_OUTPUT_ROOT", "DEFAULT_PHOTON_STATS_ROOT", "DEFAULT_PIXEL_MASK_FILE",
         "DEFAULT_PIXEL_SUMS_ROOT", "EXPECTED_BITS", "METHOD", "NPIX",
         "SAXS_OPERATIONAL_FIELDS", "SHAPE",
     ),

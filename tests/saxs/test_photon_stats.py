@@ -166,3 +166,120 @@ def test_a_frame_that_is_not_counts_is_recorded_not_histogrammed(
         assert (status == FrameStatus.DATA_CHECK_FAILED).any()
         assert (f["frames/hist"][:][status != FrameStatus.OK] == 0).all()
     pass_on(bad, replace(run_cfg, allow_incomplete=True), geom, tmp_path / "again.h5")
+
+
+# ── written by the agipd_saxs pass from its own read (user, 2026-10-14) ──────
+
+
+@pytest.fixture(scope="module")
+def fused(mock_pipeline, geom, tmp_path_factory):
+    """A whole mock run through ``run_agipd_saxs``: frame table, sums, statistics."""
+    from test_run import run_on_mock
+
+    mock_pipeline.geometry = geom
+    directory = tmp_path_factory.mktemp("fused")
+    run_on_mock(mock_pipeline, directory)
+    return directory
+
+
+def contents(path):
+    """Every per-frame column, the ring map and the hash of a statistics file."""
+    with h5py.File(path, "r") as f:
+        out = {f"frames/{name}": f["frames"][name][:] for name in f["frames"]}
+        out["rings/labels"] = f["rings/labels"][:]
+        out["rings/edges_nm"] = f["rings/edges_nm"][:]
+        out["config_hash"] = f["provenance"].attrs["config_hash"]
+    return out
+
+
+def test_the_saxs_pass_writes_what_the_standalone_pass_writes(
+    fused, mock_pipeline, tmp_path
+):
+    from analysis.saxs.photon_stats import FILE_NAME, PhotonStatsConfig
+
+    alone = tmp_path / "alone.h5"
+    run_photon_stats(
+        PhotonStatsConfig.for_saxs(mock_pipeline.cfg),
+        dc=mock_pipeline.dc,
+        geometry=mock_pipeline.geometry,
+        run_dir=mock_pipeline.run.path,
+        output_path=alone,
+        pool_factory=InlinePool,
+    )
+    got, want = contents(fused / FILE_NAME), contents(alone)
+    assert got.keys() == want.keys()
+    for name in want:
+        np.testing.assert_array_equal(got[name], want[name], name)
+    assert (got["frames/status"] == FrameStatus.OK).all()
+
+
+def _stat(path):
+    return path.stat().st_ino, path.stat().st_mtime_ns, path.stat().st_size
+
+
+def test_statistics_alone_leave_the_frame_table_and_sums_untouched(
+    fused, mock_pipeline, tmp_path, monkeypatch
+):
+    """A finished run gains its statistics without its other files being opened."""
+    import shutil
+
+    from test_run import run_on_mock
+
+    from analysis.saxs import masks as masks_module
+    from analysis.saxs import operator as operator_module
+    from analysis.saxs import run as run_module
+    from analysis.saxs.photon_stats import FILE_NAME
+    from analysis.saxs.pixel_sums import FILE_NAME as SUMS
+
+    for name in ("out.h5", SUMS):
+        shutil.copy2(fused / name, tmp_path / name)
+    before = {name: _stat(tmp_path / name) for name in ("out.h5", SUMS)}
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("nothing of the integration may run")
+
+    for module, name in [
+        (run_module, "_build_base_masks"),
+        (run_module, "_run_selftest"),
+        (operator_module, "save_operator"),
+        (masks_module, "save_masks"),
+    ]:
+        monkeypatch.setattr(module, name, forbidden)
+
+    run_on_mock(mock_pipeline, tmp_path)
+    assert {name: _stat(tmp_path / name) for name in before} == before
+    assert not list(tmp_path.glob("*.npz")) and not list(tmp_path.glob("*.lock"))
+    got, want = contents(tmp_path / FILE_NAME), contents(fused / FILE_NAME)
+    for name in want:
+        np.testing.assert_array_equal(got[name], want[name], name)
+
+
+def test_a_run_without_its_statistics_is_not_complete(fused, mock_pipeline, tmp_path):
+    import shutil
+
+    from analysis.saxs.complete import is_complete
+    from analysis.saxs.photon_stats import FILE_NAME
+    from analysis.saxs.pixel_sums import FILE_NAME as SUMS
+
+    for name in ("out.h5", SUMS):
+        shutil.copy2(fused / name, tmp_path / name)
+    kwargs = {"pixel_sums_path": tmp_path / SUMS, "geometry": mock_pipeline.geometry}
+    verdict = is_complete(
+        tmp_path / "out.h5",
+        mock_pipeline.cfg,
+        photon_stats_path=tmp_path / FILE_NAME,
+        **kwargs,
+    )
+    assert verdict.reasons == ("photon statistics: no file",)
+    off = replace(mock_pipeline.cfg, photon_stats=False)
+    assert is_complete(tmp_path / "out.h5", off, **kwargs)
+
+
+def test_the_statistics_can_be_switched_off(mock_pipeline, geom, tmp_path):
+    from test_run import run_on_mock
+
+    from analysis.saxs.photon_stats import FILE_NAME
+
+    mock_pipeline.geometry = geom
+    run_on_mock(mock_pipeline, tmp_path, photon_stats=False)
+    assert (tmp_path / "out.h5").exists() and not (tmp_path / FILE_NAME).exists()

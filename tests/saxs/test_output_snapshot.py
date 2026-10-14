@@ -25,9 +25,14 @@ from test_run import InlinePool, run_on_mock  # noqa: E402  (tests/saxs is on sy
 #: config gained ``pixel_sum_trains`` and ``pixel_sums_root`` and the recorded
 #: operational set gained both. With those two attributes left out, the file
 #: digests to 9c3ca19e…f2e6 before and after, so no dataset moved.
+#:
+#: Re-pinned 2026-10-14 for the photon statistics (S4, xpcs-quality.md): the
+#: recorded config gained ``photon_stats`` and ``photon_stats_root`` and the
+#: operational set both. Every dataset and every other attribute, the config
+#: hash included, is identical to the previous commit's output (65182c66…cdc6).
 EXPECTED_DIGEST = {
     ("Linux", "x86_64"): (
-        "65182c6646ac8354113a1d76b8faeae9511995dfbde03ebc10388d98af91cdc6"
+        "f82b98f3bf8a9b4f20e0d0f417097268488b775b15515b9561e5460daa77957d"
     ),
 }
 

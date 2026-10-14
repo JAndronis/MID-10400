@@ -23,6 +23,7 @@ __all__ = [
     "DEFAULT_BEAM_CENTER_PY",
     "DEFAULT_GEOMETRY_FILE",
     "DEFAULT_OUTPUT_ROOT",
+    "DEFAULT_PHOTON_STATS_ROOT",
     "DEFAULT_PIXEL_MASK_FILE",
     "DEFAULT_PIXEL_SUMS_ROOT",
     "EXPECTED_BITS",
@@ -67,13 +68,20 @@ DEFAULT_OUTPUT_ROOT = f"{_PROPOSAL_ROOT}/scratch/agipd_saxs"
 #: taped these sums are the only 2D record of a run left on disk.
 DEFAULT_PIXEL_SUMS_ROOT = f"{_PROPOSAL_ROOT}/usr/cached_files/agipd_pixel_sums"
 
+#: Where the per-frame photon statistics are written (context/xpcs-quality.md),
+#: beside the window sums and for the same reason.
+DEFAULT_PHOTON_STATS_ROOT = f"{_PROPOSAL_ROOT}/usr/cached_files/agipd_photon_stats"
+
 #: Fields the frame table's hash excludes. The shared operational set, plus the
-#: two window-sum fields: those sums go to a separate file with a hash of its
-#: own, so neither field can change a number in ``agipd_saxs.h5`` — and adding
-#: them left the hash of every file already written unchanged.
+#: window-sum and photon-statistics fields: those go to separate files with
+#: hashes of their own, so none of them can change a number in
+#: ``agipd_saxs.h5`` — and adding them left the hash of every file already
+#: written unchanged.
 SAXS_OPERATIONAL_FIELDS: frozenset[str] = OPERATIONAL_FIELDS | {
     "pixel_sum_trains",
     "pixel_sums_root",
+    "photon_stats",
+    "photon_stats_root",
 }
 
 #: Beam centre in Fit2D pixel coordinates, agreed with the beamline scientist.
@@ -145,6 +153,11 @@ class AgipdSaxsConfig(PassConfigMembers):
     #: of trains. ``overwrite`` never applies to these: see §15.3.
     pixel_sum_trains: int | None = 10
     pixel_sums_root: str = DEFAULT_PIXEL_SUMS_ROOT
+    # ── per-frame photon statistics (context/xpcs-quality.md) ──────
+    #: Histogram every frame per ring from the same read (``photon_stats``).
+    #: ``overwrite`` never applies to these either.
+    photon_stats: bool = True
+    photon_stats_root: str = DEFAULT_PHOTON_STATS_ROOT
 
     def __post_init__(self) -> None:
         if self.npt < 1:
@@ -223,6 +236,12 @@ class AgipdSaxsConfig(PassConfigMembers):
     def pixel_sums_file(self) -> Path:
         """``{pixel_sums_root}/r{run:04d}/agipd_pixel_sums.h5``."""
         return Path(self.pixel_sums_root) / f"r{self.run:04d}" / "agipd_pixel_sums.h5"
+
+    @property
+    def photon_stats_file(self) -> Path:
+        """``{photon_stats_root}/r{run:04d}/agipd_photon_stats.h5``."""
+        root = Path(self.photon_stats_root)
+        return root / f"r{self.run:04d}" / "agipd_photon_stats.h5"
 
     @property
     def input_files(self) -> dict[str, str | None]:

@@ -4,9 +4,10 @@ One single-threaded worker per core, spawned. The worker owns nothing but its
 own reads: the operator and the masks come from files written by the parent,
 and the results go back as plain arrays. Only the parent writes the output files.
 
-The same read feeds the per-pixel window sums (context file §15) when the
-parent asks for them, so they cost an add per train rather than a second read.
-A block the parent needs only for its windows skips the integration.
+The same read feeds the per-pixel window sums (context file §15) and the
+per-frame photon statistics (``analysis.saxs.photon_stats``) when the parent asks
+for them, so they cost an add per train and a histogram per frame rather than a
+second read. A block the parent needs only for those skips the integration.
 
 Thread limits are inherited from the parent's environment — a
 spawned child has already imported numpy by the time an initializer runs, so
@@ -30,8 +31,14 @@ from analysis.common.status import DataCheckFailed, FrameStatus
 from analysis.saxs.config import AgipdSaxsConfig
 from analysis.saxs.masks import BaseMasks, load_masks
 from analysis.saxs.operator import SparseOperator, load_operator
+from analysis.saxs.photon_stats import (
+    PhotonBlockResult,
+    PhotonSpec,
+    empty_result,
+    histogram_frame,
+)
 from analysis.saxs.pixel_sums import BlockSums, WindowSpec
-from analysis.saxs.sparse import integrate_frame
+from analysis.saxs.sparse import frame_data_status, integrate_frame
 
 __all__ = [
     "BlockResult",
@@ -64,6 +71,9 @@ class _WorkerState:
     detector: Any
     windows: WindowSpec | None = None
     skip_integration: frozenset[int] = frozenset()
+    photon: PhotonSpec | None = None
+    #: ``(ring_n, in_ring)`` of ``photon``, built once.
+    rings: tuple[np.ndarray, np.ndarray] | None = None
 
 
 _STATE: _WorkerState | None = None
@@ -74,12 +84,14 @@ def init(
     cfg: AgipdSaxsConfig,
     windows: WindowSpec | None = None,
     skip_integration: frozenset[int] = frozenset(),
+    photon: PhotonSpec | None = None,
 ) -> None:
     """Process initializer: load the operator and masks, open the run.
 
     :param windows: sum pixels into these windows; ``None`` sums nothing.
     :param skip_integration: blocks to read and sum without integrating —
         those whose frames the output file already holds.
+    :param photon: histogram the frames of ``photon.blocks``; ``None`` none.
     """
     set_thread_env()
 
@@ -110,6 +122,8 @@ def init(
         detector=detector,
         windows=windows,
         skip_integration=frozenset(skip_integration),
+        photon=photon,
+        rings=photon.ring_counts() if photon is not None else None,
     )
 
 
@@ -120,6 +134,7 @@ def init_from_detector(
     detector: Any,
     windows: WindowSpec | None = None,
     skip_integration: frozenset[int] = frozenset(),
+    photon: PhotonSpec | None = None,
 ) -> None:
     """In-process initializer for tests and single-process runs."""
     global _STATE
@@ -130,6 +145,8 @@ def init_from_detector(
         detector=detector,
         windows=windows,
         skip_integration=frozenset(skip_integration),
+        photon=photon,
+        rings=photon.ring_counts() if photon is not None else None,
     )
 
 
@@ -159,6 +176,8 @@ class BlockResult:
     pixel_partials: dict[int, Any] = field(default_factory=dict)
     #: Train id → the ``FrameStatus`` that kept it out of the window sums.
     pixel_excluded: dict[int, int] = field(default_factory=dict)
+    #: The block's photon statistics, when the parent asked for them.
+    photon: PhotonBlockResult | None = None
 
     @property
     def n_frames(self) -> int:
@@ -184,12 +203,14 @@ def _empty_result(block: Block, npt: int) -> BlockResult:
 
 
 def process_block(block: Block) -> BlockResult:
-    """Read and integrate one block, and sum its pixels if asked to.
+    """Read and integrate one block; sum its pixels and histogram its frames if asked.
 
     Every frame's identity comes from the reader's coordinates, never from its
     position in the array. A train whose labels or frame
     count disagree with the plan is marked ``LABEL_MISMATCH`` and none of its
-    frames are integrated or summed.
+    frames are integrated, summed or histogrammed. The histogram sees the same
+    bad pixels and the same data check as the integration, so a frame has one
+    status in both files.
     """
     if _STATE is None:
         raise RuntimeError("worker.init has not run in this process")
@@ -202,16 +223,25 @@ def process_block(block: Block) -> BlockResult:
             "initialised without an operator"
         )
     sums = BlockSums(state.windows) if state.windows is not None else None
+    spec = state.photon
+    photon = (
+        empty_result(block, spec.n_rings, spec.k_max + 2)
+        if spec is not None and block.index in spec.blocks
+        else None
+    )
 
     from extra_data import by_id
 
     result = _empty_result(block, op.npt if op is not None else 0)
     result.integrated = integrate
+    result.photon = photon
     timings = {"read_data": 0.0, "read_mask": 0.0}
     if integrate:
         timings["integrate"] = 0.0
     if sums is not None:
         timings["pixel_sums"] = 0.0
+    if photon is not None:
+        timings["photon_stats"] = 0.0
     bits_present = 0
     unseen_cells = 0
     offset = 0
@@ -245,49 +275,75 @@ def process_block(block: Block) -> BlockResult:
             result.status[rows] = FrameStatus.LABEL_MISMATCH
             if sums is not None:
                 sums.exclude(train_id, FrameStatus.LABEL_MISMATCH)
+            if photon is not None:
+                photon.status[rows] = FrameStatus.LABEL_MISMATCH
             continue
 
         result.train_id[rows] = train_ids
         result.pulse_id[rows] = pulse_ids
         result.cell_id[rows] = cell_ids
         bits_present |= int(np.bitwise_or.reduce(mask, axis=None))
+        if photon is not None:
+            photon.train_id[rows] = train_ids
+            photon.pulse_id[rows] = pulse_ids
+            photon.cell_id[rows] = cell_ids
 
         if sums is not None:
             started = time.perf_counter()
             sums.add_train(train_id, data, mask)
             timings["pixel_sums"] += time.perf_counter() - started
-        if not integrate:
+        if not integrate and photon is None:
             continue
 
-        started = time.perf_counter()
         for frame in range(expected):
             row = rows.start + frame
-            cell = int(cell_ids[frame])
-            if not masks.has_cell(cell):
-                unseen_cells += 1
-            base_bad, base_denominator = masks.for_cell(cell)
             counts = data[:, frame].reshape(-1)
-            bad = frame_bad(mask[:, frame], cfg.mask_bits, masks.static_bad)
-            try:
-                frame_result = integrate_frame(
-                    op, counts, bad, base_bad, base_denominator
-                )
-            except DataCheckFailed:
-                result.status[row] = FrameStatus.DATA_CHECK_FAILED
+            # The mask is the integration's cost when it runs (as before the
+            # statistics joined), else the histogram's.
+            started = time.perf_counter()
+            static_bad = masks.static_bad if masks is not None else spec.static_bad
+            bad = frame_bad(mask[:, frame], cfg.mask_bits, static_bad)
+            if integrate:
+                cell = int(cell_ids[frame])
+                if not masks.has_cell(cell):
+                    unseen_cells += 1
+                base_bad, base_denominator = masks.for_cell(cell)
+                try:
+                    frame_result = integrate_frame(
+                        op, counts, bad, base_bad, base_denominator
+                    )
+                except DataCheckFailed:
+                    result.status[row] = FrameStatus.DATA_CHECK_FAILED
+                    if photon is not None:
+                        photon.status[row] = FrameStatus.DATA_CHECK_FAILED
+                    timings["integrate"] += time.perf_counter() - started
+                    continue
+                result.signal[row] = frame_result.signal
+                result.normalization[row] = frame_result.normalization
+                result.variance[row] = frame_result.variance
+                result.photons_valid[row] = frame_result.photons_valid
+                result.n_bad_pixels[row] = frame_result.n_bad_pixels
+                result.n_frame_specific[row] = frame_result.n_frame_specific
+                result.max_count[row] = frame_result.max_count
+                result.status[row] = FrameStatus.OK
+                timings["integrate"] += time.perf_counter() - started
+                started = time.perf_counter()
+            elif frame_data_status(counts) != FrameStatus.OK:
+                photon.status[row] = FrameStatus.DATA_CHECK_FAILED
+                timings["photon_stats"] += time.perf_counter() - started
                 continue
-            result.signal[row] = frame_result.signal
-            result.normalization[row] = frame_result.normalization
-            result.variance[row] = frame_result.variance
-            result.photons_valid[row] = frame_result.photons_valid
-            result.n_bad_pixels[row] = frame_result.n_bad_pixels
-            result.n_frame_specific[row] = frame_result.n_frame_specific
-            result.max_count[row] = frame_result.max_count
-            result.status[row] = FrameStatus.OK
-        timings["integrate"] += time.perf_counter() - started
+            if photon is not None:
+                ring_n, in_ring = state.rings
+                histogram_frame(
+                    photon, row, counts, bad, spec.labels, ring_n, in_ring, spec.k_max
+                )
+                timings["photon_stats"] += time.perf_counter() - started
 
     result.bits_present = bits_present
     result.unseen_cells = unseen_cells
     result.timings = timings
+    if photon is not None:
+        photon.bits_present = bits_present
     if sums is not None:
         result.pixel_partials = sums.packed()
         result.pixel_excluded = sums.excluded

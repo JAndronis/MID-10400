@@ -30,6 +30,7 @@ from analysis.saxs import operator as operator_module  # noqa: E402
 from analysis.saxs import run as run_module  # noqa: E402
 from analysis.saxs import worker  # noqa: E402
 from analysis.saxs.complete import is_complete, operator_differences  # noqa: E402
+from analysis.saxs.photon_stats import FILE_NAME as PHOTON_FILE  # noqa: E402
 from analysis.saxs.pixel_sums import FILE_NAME, PixelSumWriter  # noqa: E402
 from analysis.saxs.writer import AgipdSaxsWriter, per_pulse  # noqa: E402
 
@@ -51,7 +52,7 @@ def complete_run(mock_pipeline, geom, tmp_path_factory):
 
 def copy_of(complete_run, tmp_path):
     source, pooled = complete_run
-    for name in ("out.h5", FILE_NAME):
+    for name in ("out.h5", FILE_NAME, PHOTON_FILE):
         shutil.copy2(source / name, tmp_path / name)
     return pooled
 
@@ -112,6 +113,7 @@ def test_a_complete_run_is_complete(pipeline, complete_run):
         directory / "out.h5",
         pipeline.cfg,
         pixel_sums_path=directory / FILE_NAME,
+        photon_stats_path=directory / PHOTON_FILE,
         geometry=pipeline.geometry,
     )
     assert verdict, verdict.reasons
@@ -214,6 +216,7 @@ def test_is_complete_says_why_not(pipeline, complete_run, tmp_path, change, expe
         tmp_path / "out.h5",
         pipeline.cfg,
         pixel_sums_path=tmp_path / FILE_NAME,
+        photon_stats_path=tmp_path / PHOTON_FILE,
         geometry=pipeline.geometry,
     )
     assert not verdict
@@ -222,7 +225,10 @@ def test_is_complete_says_why_not(pipeline, complete_run, tmp_path, change, expe
 
 def test_another_operator_or_config_is_not_complete(pipeline, complete_run):
     directory, _ = complete_run
-    kwargs = {"pixel_sums_path": directory / FILE_NAME}
+    kwargs = {
+        "pixel_sums_path": directory / FILE_NAME,
+        "photon_stats_path": directory / PHOTON_FILE,
+    }
     moved = replace(pipeline.op, q=pipeline.op.q * 1.001, sha256="b" * 64)
     other_operator = is_complete(
         directory / "out.h5", pipeline.cfg, operator=moved, **kwargs
@@ -278,7 +284,11 @@ def test_a_one_ulp_solid_angle_from_another_node_class_is_complete(
     copy_of(complete_run, tmp_path)
     _nudge_omega(tmp_path, pipeline.op)
     before = stats(tmp_path)
-    kwargs = {"pixel_sums_path": tmp_path / FILE_NAME, "geometry": pipeline.geometry}
+    kwargs = {
+        "pixel_sums_path": tmp_path / FILE_NAME,
+        "photon_stats_path": tmp_path / PHOTON_FILE,
+        "geometry": pipeline.geometry,
+    }
     assert is_complete(tmp_path / "out.h5", pipeline.cfg, **kwargs)
     AgipdSaxsWriter.check_resumable(
         pipeline.cfg,
@@ -297,6 +307,7 @@ def test_a_real_change_to_the_solid_angle_is_not(pipeline, complete_run, tmp_pat
         tmp_path / "out.h5",
         pipeline.cfg,
         pixel_sums_path=tmp_path / FILE_NAME,
+        photon_stats_path=tmp_path / PHOTON_FILE,
         geometry=pipeline.geometry,
     )
     assert verdict.reasons == ("operator omega differs by more than 1e-12 relative",)

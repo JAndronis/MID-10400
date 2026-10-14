@@ -24,8 +24,9 @@ DAMNIT write a fresh one, checking it, and only then deleting the old one:
 ``restore``
     puts a backup back, keeping the new output as ``<stem>_failed_reprocess_…``.
 
-Never moves the AGIPD window sums (``usr/cached_files/agipd_pixel_sums``): the
-pass never truncates them, and once proc is on tape they cannot be rebuilt.
+Never moves the AGIPD window sums (``usr/cached_files/agipd_pixel_sums``) or
+photon statistics (``usr/cached_files/agipd_photon_stats``): the pass never
+truncates them, and once proc is on tape they cannot be rebuilt.
 ``--dry-run`` prints what would happen and changes nothing. Writes its report as
 JSON beside itself.
 
@@ -110,7 +111,10 @@ class Detector:
     def companions(self, run: int) -> list[Path]:
         """Files the pass also writes, test-read but never moved."""
         if self.name == "agipd":
-            return [self.config(run).pixel_sums_file]
+            cfg = self.config(run)
+            return [cfg.pixel_sums_file] + (
+                [cfg.photon_stats_file] if cfg.photon_stats else []
+            )
         return []
 
 

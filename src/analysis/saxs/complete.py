@@ -1,7 +1,9 @@
 """Whether a run's AGIPD output is complete — see :mod:`analysis.common.complete`.
 
-Two files: the frame table and, unless ``cfg.pixel_sum_trains`` is ``None``, the
-per-pixel window sums (context file §15). A run is complete only when both are.
+Up to three files: the frame table; unless ``cfg.pixel_sum_trains`` is ``None``,
+the per-pixel window sums (context file §15); unless ``cfg.photon_stats`` is
+False, the per-frame photon statistics (``analysis.saxs.photon_stats``). A run is
+complete only when all of them are.
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ __all__ = [
     "expected_operator",
     "is_complete",
     "operator_differences",
+    "photon_stats_reasons_for",
     "window_sums_reasons",
 ]
 
@@ -147,16 +150,22 @@ def is_complete(
     pixel_sums_path: str | Path | None = None,
     operator: SparseOperator | None = None,
     geometry: Any = None,
+    photon_stats_path: str | Path | None = None,
+    ring_labels: np.ndarray | None = None,
 ) -> Completeness:
-    """Whether a run's frame table — and its window sums — are complete.
+    """Whether a run's frame table — and its window sums and statistics — are complete.
 
-    Read-only: it opens both files for reading and writes nothing anywhere.
+    Read-only: it opens the files for reading and writes nothing anywhere.
 
     :param path: the frame table; ``None`` is ``cfg.output_file``.
     :param pixel_sums_path: the window sums; ``None`` is ``cfg.pixel_sums_file``.
     :param operator: the operator to compare against, when the caller has
         already built it; ``None`` builds it (:func:`expected_operator`).
     :param geometry: passed to :func:`expected_operator`.
+    :param photon_stats_path: the statistics; ``None`` is ``cfg.photon_stats_file``.
+    :param ring_labels: the pixel → ring map built now
+        (``photon_stats.ring_labels_from``), when the caller has it; ``None``
+        builds it.
     """
     path = Path(path) if path is not None else cfg.output_file
     op = operator if operator is not None else expected_operator(cfg, geometry)
@@ -171,7 +180,42 @@ def is_complete(
                 sums, cfg, frame_train_ids=_train_ids(path)
             )
         ]
+    if cfg.photon_stats:
+        reasons += [
+            f"photon statistics: {reason}"
+            for reason in photon_stats_reasons_for(
+                cfg, photon_stats_path, ring_labels, geometry
+            )
+        ]
     return Completeness(path, tuple(reasons))
+
+
+def photon_stats_reasons_for(
+    cfg: AgipdSaxsConfig,
+    path: str | Path | None = None,
+    ring_labels: np.ndarray | None = None,
+    geometry: Any = None,
+) -> list[str]:
+    """Why the statistics the ``agipd_saxs`` pass writes for ``cfg`` are incomplete.
+
+    The pixel → ring map is compared when the caller has it (``ring_labels``)
+    or passes a ``geometry`` to build it from; otherwise the hash stands for it,
+    since it covers everything the map is made of (geometry file, beam centre,
+    distance, energy, rings).
+    """
+    from analysis.saxs.photon_stats import (
+        PhotonStatsConfig,
+        photon_stats_reasons,
+        ring_labels_from,
+    )
+
+    pcfg = PhotonStatsConfig.for_saxs(cfg)
+    if ring_labels is None and geometry is not None:
+        ring_labels = ring_labels_from(
+            operator_module.build_operator(geometry, cfg)[1], pcfg
+        )
+    path = Path(path) if path else cfg.photon_stats_file
+    return photon_stats_reasons(path, pcfg, ring_labels)
 
 
 def _train_ids(path: Path) -> np.ndarray | None:

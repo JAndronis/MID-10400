@@ -1,8 +1,11 @@
 """Photon-count histograms per frame and ring: the XPCS quality product (Q1).
 
-Specification: ``context/xpcs-quality.md``. A separate pass over proc (user,
-2026-10-13), one run per job, workers over blocks of trains. For every frame and
-each of 17 narrow rings tiling the plain XPCS ROIs, over the frame's valid pixels:
+Specification: ``context/xpcs-quality.md``. Written by the ``agipd_saxs`` pass from
+the same read of proc as the frame table and the window sums
+(``AgipdSaxsConfig.photon_stats``, on by default; user, 2026-10-14), or by
+:func:`run_photon_stats` alone for a run whose other products are complete. For
+every frame and each of 17 narrow rings tiling the plain XPCS ROIs, over the
+frame's valid pixels:
 
     n_valid        valid pixels
     hist[k]        pixels with k photons, k = 0 … K; hist[K+1] = more than K
@@ -41,17 +44,28 @@ from analysis.common.plan import Block
 from analysis.common.run import base_provenance, fan_out
 from analysis.common.status import FrameStatus
 from analysis.common.writer import FrameTableWriter, IncompleteRun
-from analysis.saxs.config import NPIX, SHAPE, AgipdSaxsConfig
+from analysis.saxs.config import (
+    DEFAULT_PHOTON_STATS_ROOT,
+    NPIX,
+    SHAPE,
+    AgipdSaxsConfig,
+)
 
 __all__ = [
     "DEFAULT_OUTPUT_ROOT",
     "FILE_NAME",
     "K_MAX",
+    "PhotonBlockResult",
+    "PhotonSpec",
     "PhotonStatsConfig",
     "PhotonStatsWriter",
     "default_rings",
+    "empty_result",
     "frame_stats",
+    "histogram_frame",
+    "photon_stats_reasons",
     "ring_labels",
+    "ring_labels_from",
     "run_photon_stats",
 ]
 
@@ -59,9 +73,7 @@ log = logging.getLogger(__name__)
 
 FILE_NAME = "agipd_photon_stats.h5"
 #: Beside the per-pixel window sums: survives the move to tape (xpcs-quality §5).
-DEFAULT_OUTPUT_ROOT = (
-    "/gpfs/exfel/exp/MID/202601/p010400/usr/cached_files/agipd_photon_stats"
-)
+DEFAULT_OUTPUT_ROOT = DEFAULT_PHOTON_STATS_ROOT
 #: Counts above this go to the overflow bin; s1 and s2 stay exact. The probe saw
 #: no count above 12 in any ring (r0423, r0450, 2026-10-13).
 K_MAX = 15
@@ -112,6 +124,11 @@ class PhotonStatsConfig:
         lows = [lo for lo, _ in self.rings_nm]
         if lows != sorted(lows) or any(hi <= lo for lo, hi in self.rings_nm):
             raise ValueError("rings must be sorted and of positive width")
+
+    @classmethod
+    def for_saxs(cls, saxs: AgipdSaxsConfig) -> PhotonStatsConfig:
+        """The statistics the ``agipd_saxs`` pass writes for ``saxs``."""
+        return cls(saxs=saxs, output_root=saxs.photon_stats_root)
 
     def __getstate__(self) -> dict[str, Any]:
         """Pickle by field name (CLAUDE.md pitfall 20)."""
@@ -177,11 +194,16 @@ def ring_labels(cfg: PhotonStatsConfig, geometry: Any = None) -> tuple[np.ndarra
 
     geom = geometry if geometry is not None else geometry_from_config(cfg.saxs)
     op, ai = build_operator(geom, cfg.saxs)
+    return ring_labels_from(ai, cfg), op.sha256
+
+
+def ring_labels_from(ai: Any, cfg: PhotonStatsConfig) -> np.ndarray:
+    """Each pixel's ring (−1: none) from the integrator ``build_operator`` returned."""
     q = np.asarray(ai.array_from_unit(SHAPE, "center", cfg.saxs.unit)).ravel()
     labels = np.full(NPIX, -1, dtype=np.int16)
     for r, (lo, hi) in enumerate(cfg.rings_nm):
         labels[(q >= lo) & (q < hi)] = r
-    return labels, op.sha256
+    return labels
 
 
 def labels_sha256(labels: np.ndarray) -> str:
@@ -303,6 +325,17 @@ class PhotonStatsWriter(FrameTableWriter):
             frames[name][start:stop] = getattr(result, name)
         self._f.flush()
 
+    def finalise(self, provenance: dict[str, Any]) -> None:
+        """As the frame table, but the operator's sha256 lives in ``/rings``.
+
+        This file stores no ``/operator``, and the completeness check compares
+        a provenance ``operator_sha256`` with one. The ring map is what matters
+        here, and :func:`photon_stats_reasons` compares it label by label.
+        """
+        provenance = {k: v for k, v in provenance.items() if k != "operator_sha256"}
+        self._f["provenance"].attrs.pop("operator_sha256", None)
+        super().finalise(provenance)
+
 
 # ── workers ───────────────────────────────────────────────────────────────────
 
@@ -324,6 +357,70 @@ class PhotonBlockResult:
     @property
     def n_frames(self) -> int:
         return int(self.status.size)
+
+
+@dataclass(frozen=True)
+class PhotonSpec:
+    """What a worker needs to histogram frames: the ring map and the static mask.
+
+    Handed to the ``agipd_saxs`` workers as an initarg (pickled by attribute,
+    not position: no slots). ``blocks`` are the block indices still to do.
+    """
+
+    labels: np.ndarray
+    static_bad: np.ndarray
+    k_max: int
+    blocks: frozenset[int]
+
+    @property
+    def n_rings(self) -> int:
+        return int(self.labels.max()) + 1 if self.labels.size else 0
+
+    def ring_counts(self) -> tuple[np.ndarray, np.ndarray]:
+        """``(ring_n, in_ring)`` for :func:`frame_stats`, built once per worker."""
+        in_ring = self.labels >= 0
+        ring_n = np.bincount(
+            self.labels[in_ring].astype(np.intp), minlength=self.n_rings
+        )
+        return ring_n, in_ring
+
+
+def empty_result(block: Block, n_rings: int, k: int) -> PhotonBlockResult:
+    """A block's records, every frame ``NOT_PROCESSED`` until histogrammed."""
+    n = block.n_frames
+    return PhotonBlockResult(
+        train_id=np.zeros(n, np.uint64),
+        pulse_id=np.zeros(n, np.uint64),
+        cell_id=np.zeros(n, np.uint16),
+        status=np.full(n, FrameStatus.NOT_PROCESSED, np.uint8),
+        n_valid=np.zeros((n, n_rings), np.uint32),
+        hist=np.zeros((n, n_rings, k), np.uint32),
+        s1=np.zeros((n, n_rings), np.uint32),
+        s2=np.zeros((n, n_rings), np.uint32),
+        max_k=np.zeros((n, n_rings), np.uint16),
+    )
+
+
+def histogram_frame(
+    result: PhotonBlockResult,
+    row: int,
+    counts: np.ndarray,
+    bad: np.ndarray,
+    labels: np.ndarray,
+    ring_n: np.ndarray,
+    in_ring: np.ndarray,
+    k_max: int,
+) -> None:
+    """Fill ``row`` of ``result`` from one frame that passed the data check."""
+    n_valid, hist, s1, s2, max_k = frame_stats(
+        counts, bad, labels, ring_n, in_ring, k_max
+    )
+    result.n_valid[row] = n_valid
+    result.hist[row] = hist
+    result.s1[row] = s1
+    result.s2[row] = s2
+    result.max_k[row] = np.minimum(max_k, np.iinfo(np.uint16).max)
+    result.status[row] = FrameStatus.OK
 
 
 @dataclass(slots=True)
@@ -365,27 +462,13 @@ def init(cfg: PhotonStatsConfig, labels, static_bad, run_dir: str | None = None)
     )
 
 
-def _empty(block: Block, n_rings: int, k: int) -> PhotonBlockResult:
-    n = block.n_frames
-    return PhotonBlockResult(
-        train_id=np.zeros(n, np.uint64),
-        pulse_id=np.zeros(n, np.uint64),
-        cell_id=np.zeros(n, np.uint16),
-        status=np.full(n, FrameStatus.NOT_PROCESSED, np.uint8),
-        n_valid=np.zeros((n, n_rings), np.uint32),
-        hist=np.zeros((n, n_rings, k), np.uint32),
-        s1=np.zeros((n, n_rings), np.uint32),
-        s2=np.zeros((n, n_rings), np.uint32),
-        max_k=np.zeros((n, n_rings), np.uint16),
-    )
-
-
 def process_block(block: Block) -> PhotonBlockResult:
-    """Read one block's trains and histogram every frame.
+    """Read one block's trains and histogram every frame (the standalone pass).
 
     Identity comes from the reader's coordinates; a train whose labels or frame
     count disagree with the plan is ``LABEL_MISMATCH``, a frame that is not integer
-    photon counts ``DATA_CHECK_FAILED``, exactly as in the integrator.
+    photon counts ``DATA_CHECK_FAILED``, exactly as in the integrator, whose
+    worker does the same from its own read (``analysis.saxs.worker``).
     """
     if _STATE is None:
         raise RuntimeError("photon_stats.init has not run in this process")
@@ -395,7 +478,7 @@ def process_block(block: Block) -> PhotonBlockResult:
 
     st = _STATE
     k_max = st.cfg.k_max
-    result = _empty(block, st.cfg.npt, k_max + 2)
+    result = empty_result(block, st.cfg.npt, k_max + 2)
     timings = {"read_data": 0.0, "read_mask": 0.0, "histogram": 0.0}
     offset = 0
     for train_id, expected in zip(block.train_ids, block.expected_frames, strict=True):
@@ -430,21 +513,65 @@ def process_block(block: Block) -> PhotonBlockResult:
                 result.status[row] = FrameStatus.DATA_CHECK_FAILED
                 continue
             bad = frame_bad(mask[:, frame], st.cfg.saxs.mask_bits, st.static_bad)
-            n_valid, hist, s1, s2, max_k = frame_stats(
-                counts, bad, st.labels, st.ring_n, st.in_ring, k_max
+            histogram_frame(
+                result, row, counts, bad, st.labels, st.ring_n, st.in_ring, k_max
             )
-            result.n_valid[row] = n_valid
-            result.hist[row] = hist
-            result.s1[row] = s1
-            result.s2[row] = s2
-            result.max_k[row] = np.minimum(max_k, np.iinfo(np.uint16).max)
-            result.status[row] = FrameStatus.OK
         timings["histogram"] += time.perf_counter() - started
     result.timings = timings
     return result
 
 
+# ── completeness ──────────────────────────────────────────────────────────────
+
+
+def photon_stats_reasons(
+    path: str | Path, cfg: PhotonStatsConfig, labels: np.ndarray | None
+) -> list[str]:
+    """Why the photon-statistics file at ``path`` is not complete; empty if it is.
+
+    The frame table's checks (``analysis.common.complete``: hash, columns,
+    finalised, no unfinished row, package versions), then the ring map: its
+    edges, K and every pixel's label must be what this pass would use now.
+
+    :param labels: the ring map built now (:func:`ring_labels_from`); ``None``
+        skips that comparison.
+    """
+    from analysis.common.complete import frame_table_reasons
+
+    def rings_differ(handle) -> list[str]:
+        group = handle.get("rings")
+        if group is None or "labels" not in group or "edges_nm" not in group:
+            return ["the file stores no ring map"]
+        reasons = []
+        if not np.array_equal(group["edges_nm"][()], np.asarray(cfg.rings_nm)):
+            reasons.append("its ring edges are not the config's")
+        if int(group.attrs.get("k_max", -1)) != cfg.k_max:
+            reasons.append(
+                f"k_max {group.attrs.get('k_max')}, the config's {cfg.k_max}"
+            )
+        if labels is not None and not np.array_equal(group["labels"][()], labels):
+            reasons.append("its pixel → ring map differs from the one built now")
+        return reasons
+
+    return frame_table_reasons(path, cfg, PhotonStatsWriter, rings_differ)
+
+
 # ── orchestration ─────────────────────────────────────────────────────────────
+
+
+def photon_provenance(
+    cfg: PhotonStatsConfig, plan: Any, out: Any, op_sha: str, **kwargs: Any
+) -> dict[str, Any]:
+    """What a photon-statistics file records about the run that wrote it."""
+    provenance = base_provenance(
+        cfg.saxs, plan, out, operator_sha256=op_sha,
+        input_file_sha256={k: file_sha256(v) if v else None
+                           for k, v in cfg.saxs.input_files.items()},
+        run_checks=plan.checks, **kwargs,
+    )  # fmt: skip
+    provenance["rings_nm"] = [list(r) for r in cfg.rings_nm]
+    provenance["photon_stats_config"] = json.dumps(asdict(cfg), default=str)
+    return provenance
 
 
 def run_photon_stats(
@@ -457,7 +584,12 @@ def run_photon_stats(
     output_path: Path | None = None,
     pool_factory: Any = None,
 ) -> Path:
-    """Write one run's photon statistics; resume a file written under the same hash.
+    """Write only a run's photon statistics; resume a file of the same hash.
+
+    For a run whose frame table and window sums are complete. Otherwise the
+    ``agipd_saxs`` pass writes the statistics from its own read
+    (``AgipdSaxsConfig.photon_stats``). A complete file is left untouched, and
+    the file is locked while written (CLAUDE.md pitfall 26).
 
     :param geometry: an AGIPD geometry object instead of ``cfg.saxs.geometry_file``
         (the tests' synthetic one).
@@ -465,6 +597,7 @@ def run_photon_stats(
     :raises IncompleteRun: some frame did not reach ``OK`` and
         ``cfg.saxs.allow_incomplete`` is False.
     """
+    from analysis.common.lock import output_lock
     from analysis.saxs.masks import build_static_bad
     from analysis.saxs.plan import build_plan
 
@@ -472,44 +605,58 @@ def run_photon_stats(
     started_at, started = time.time(), time.perf_counter()
     setup: dict[str, float] = {}
     t = time.perf_counter()
-    plan = build_plan(cfg.saxs, dc=dc)
-    setup["plan"] = time.perf_counter() - t
-    t = time.perf_counter()
     labels, op_sha = ring_labels(cfg, geometry)
-    if static_bad is None:
-        static_bad = build_static_bad(cfg.saxs).bad
     setup["rings"] = time.perf_counter() - t
     path = Path(output_path) if output_path else cfg.output_file
 
-    with PhotonStatsWriter.open_or_create(cfg, plan, path) as out:
-        out.store_rings(cfg, labels, op_sha)
-        todo = [b for b in plan.blocks if not out.block_complete(b)]
-        log.info(
-            "r%d: %d of %d blocks to do", cfg.saxs.run, len(todo), len(plan.blocks)
-        )
-        totals = fan_out(
-            out,
-            todo,
-            process=process_block,
-            n_workers=cfg.saxs.workers,
-            initializer=init,
-            initargs=(cfg, labels, static_bad, str(run_dir) if run_dir else None),
-            pool_factory=pool_factory,
-        )
-        provenance = base_provenance(
-            cfg.saxs, plan, out, started_at=started_at, started=started,
-            totals=totals, setup_timings=setup, operator_sha256=op_sha,
-            input_file_sha256={k: file_sha256(v) if v else None
-                               for k, v in cfg.saxs.input_files.items()},
-            run_checks=plan.checks,
-        )  # fmt: skip
-        provenance["rings_nm"] = [list(r) for r in cfg.rings_nm]
-        provenance["photon_stats_config"] = json.dumps(asdict(cfg), default=str)
-        out.finalise(provenance)
-        incomplete = out.any_not_ok()
-        summary = out.status_summary()
+    with output_lock(path):
+        if not cfg.overwrite and not photon_stats_reasons(path, cfg, labels):
+            log.info("r%d: %s is complete; nothing written", cfg.saxs.run, path)
+            return _check_ok(cfg, path)
+        t = time.perf_counter()
+        plan = build_plan(cfg.saxs, dc=dc)
+        setup["plan"] = time.perf_counter() - t
+        if static_bad is None:
+            static_bad = build_static_bad(cfg.saxs).bad
+        with PhotonStatsWriter.open_or_create(cfg, plan, path) as out:
+            out.store_rings(cfg, labels, op_sha)
+            todo = [b for b in plan.blocks if not out.block_complete(b)]
+            log.info(
+                "r%d: %d of %d blocks to do", cfg.saxs.run, len(todo), len(plan.blocks)
+            )
+            totals = fan_out(
+                out,
+                todo,
+                process=process_block,
+                n_workers=cfg.saxs.workers,
+                initializer=init,
+                initargs=(cfg, labels, static_bad, str(run_dir) if run_dir else None),
+                pool_factory=pool_factory,
+            )
+            out.finalise(
+                photon_provenance(
+                    cfg,
+                    plan,
+                    out,
+                    op_sha,
+                    started_at=started_at,
+                    started=started,
+                    totals=totals,
+                    setup_timings=setup,
+                )  # fmt: skip
+            )
+    return _check_ok(cfg, path)
 
-    if incomplete and not cfg.saxs.allow_incomplete:
+
+def _check_ok(cfg: PhotonStatsConfig, path: Path) -> Path:
+    """Raise ``IncompleteRun`` for a file holding frames that are not ``OK``."""
+    import h5py
+
+    from analysis.common.writer import status_counts
+
+    with h5py.File(path, "r") as handle:
+        summary = status_counts(handle["frames/status"][:], nonzero_only=True)
+    if set(summary) - {FrameStatus.OK.name} and not cfg.saxs.allow_incomplete:
         raise IncompleteRun(
             f"r{cfg.saxs.run}: not every frame was histogrammed: {summary}"
         )

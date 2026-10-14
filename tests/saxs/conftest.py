@@ -55,6 +55,9 @@ def cfg() -> AgipdSaxsConfig:
         pixel_mask_file=None,
         beam_center_px=None,
         beam_center_py=None,
+        # r0423's real statistics exist under the default root: a test that
+        # forgets to pass its own path must neither read them nor write there.
+        photon_stats_root="/nonexistent/agipd_photon_stats",
     )
 
 
