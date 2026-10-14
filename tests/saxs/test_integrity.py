@@ -85,6 +85,7 @@ def job_state(monkeypatch):
     states: dict[str, str | None] = {}
     monkeypatch.setattr(lock_module, "slurm_job_state", lambda job: states.get(job))
     monkeypatch.delenv("SLURM_JOB_ID", raising=False)
+    monkeypatch.delenv("SLURM_RESTART_COUNT", raising=False)
     return states
 
 

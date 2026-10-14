@@ -91,6 +91,8 @@ removes its own lock. The lock is held for as long as the pass writes.
 | Holder | Test | Verdict |
 |---|---|---|
 | Ran in a Slurm job (not ours) | `slurm_job_state` | listed and not in `FINISHED_STATES` → alive. `COMPLETING` counts as alive |
+| This job, an earlier `SLURM_RESTART_COUNT` | — | **dead**: the first attempt of a job that was preempted and requeued under the same id |
+| This job, the same attempt, this host | `kill(pid, 0)` | as for "No job, this host" below |
 | No job, this host | `kill(pid, 0)` | the pid is ours → alive (re-entry); the pid exists → alive |
 | No job, another host | — | **cannot be checked → `OutputBusy`**, with instructions to delete it by hand |
 | Unparsable, < 60 s old | — | being written → `OutputBusy` |
@@ -108,6 +110,16 @@ It is also written into the output's provenance: `lock_takeover = {previous, rea
 
 **Why stale locks happen.** A job that hits its time limit or is killed leaves its lock behind:
 neither SIGKILL nor Slurm's SIGTERM runs `finally`.
+
+**Requeued jobs.**
+- `allcpu` preempts with `PreemptMode=REQUEUE` (`JobRequeue=1`), and a requeued job keeps its job
+  id. S4's job 25297694 was "CANCELLED DUE TO PREEMPTION" and went back to PENDING on 2026-10-14.
+- So the requeued attempt meets the lock its killed first attempt left. Asking Slurm about its own
+  id would only say "running", and on another node the pid cannot be checked.
+- The lock therefore records `SLURM_RESTART_COUNT` ("the number of times the job has been
+  restarted", `man sbatch`; absent before any restart). A lock from the same job id at a lower
+  count is stale.
+- A lock written before this field existed reads as count 0.
 
 **A second job is refused, not made to wait** (user decision 2026-10-13). In DAMNIT that shows as an error
 in that job's cell. The holder's own result arrives normally.

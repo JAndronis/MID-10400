@@ -144,6 +144,7 @@ def test_a_live_lock_refuses_and_nothing_is_written(
     )
     monkeypatch.setattr(lock_module, "slurm_job_state", lambda job: "RUNNING")
     monkeypatch.delenv("SLURM_JOB_ID", raising=False)
+    monkeypatch.delenv("SLURM_RESTART_COUNT", raising=False)
     with pytest.raises(OutputBusy, match="4242 is RUNNING"):
         run(cfg, mock, dc, output_path=path)
     assert sorted(p.name for p in tmp_path.iterdir()) == ["run.h5.lock"]

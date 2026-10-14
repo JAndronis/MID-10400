@@ -12,6 +12,10 @@ time. A second process that finds it asks whether the holder is still alive:
 * the holder ran in a Slurm job → ``squeue --clusters=all``. Listed and not
   finished means alive. DAMNIT submits non-cluster variables to another cluster
   (``solaris``), hence ``--clusters=all``;
+* the holder ran in *this* job, at an earlier ``SLURM_RESTART_COUNT`` → dead.
+  ``allcpu`` preempts and requeues jobs under the same job id (S4, 2026-10-14),
+  so a requeued job meets the lock its killed first attempt left; asking Slurm
+  about its own id would only say it is running;
 * the holder ran outside Slurm on this host → whether its pid exists;
 * anything else cannot be checked from here, and is treated as alive.
 
@@ -102,9 +106,18 @@ _DEFAULTS: dict[str, Any] = {
     "user": "?",
     "slurm_job_id": None,
     "slurm_cluster": None,
+    "slurm_restart_count": 0,
     "started_at": 0.0,
     "started": "?",
 }
+
+
+def _restart_count() -> int:
+    """This job's ``SLURM_RESTART_COUNT``; 0 outside Slurm or before a requeue."""
+    try:
+        return int(os.environ.get("SLURM_RESTART_COUNT") or 0)
+    except ValueError:
+        return 0
 
 
 def _user() -> str:
@@ -124,6 +137,9 @@ class LockHolder:
     user: str
     slurm_job_id: str | None
     slurm_cluster: str | None
+    #: ``SLURM_RESTART_COUNT``: how often the job had been requeued when it
+    #: took the lock. Slurm sets it only after a restart, so absent is 0.
+    slurm_restart_count: int
     started_at: float
     started: str
     #: Random per acquisition, so a process only ever removes its own lock.
@@ -140,6 +156,7 @@ class LockHolder:
             user=_user(),
             slurm_job_id=os.environ.get("SLURM_JOB_ID"),
             slurm_cluster=os.environ.get("SLURM_CLUSTER_NAME"),
+            slurm_restart_count=_restart_count(),
             started_at=now,
             started=datetime.fromtimestamp(now, UTC).isoformat(timespec="seconds"),
             token=uuid.uuid4().hex,
@@ -172,6 +189,8 @@ class LockHolder:
 
     def describe(self) -> str:
         job = f", Slurm job {self.slurm_job_id}" if self.slurm_job_id else ""
+        if self.slurm_job_id and self.slurm_restart_count:
+            job += f" (restart {self.slurm_restart_count})"
         return f"pid {self.pid} on {self.host}{job} ({self.user}, since {self.started})"
 
     def record(self) -> dict[str, Any]:
@@ -254,7 +273,16 @@ def _holder_alive(holder: LockHolder) -> tuple[bool, str]:
     :raises OutputBusy: the holder cannot be checked from here.
     """
     own_job = os.environ.get("SLURM_JOB_ID")
-    if holder.slurm_job_id and holder.slurm_job_id != own_job:
+    if holder.slurm_job_id and holder.slurm_job_id == own_job:
+        restart = _restart_count()
+        if holder.slurm_restart_count < restart:
+            return False, (
+                f"left by Slurm job {own_job} at restart "
+                f"{holder.slurm_restart_count}, before it was requeued (now "
+                f"restart {restart})"
+            )
+        # The same attempt of this job: only the host and pid can tell.
+    elif holder.slurm_job_id:
         try:
             state = slurm_job_state(holder.slurm_job_id)
         except JobStateUnknown as error:
@@ -273,10 +301,15 @@ def _holder_alive(holder: LockHolder) -> tuple[bool, str]:
         if _pid_alive(holder.pid):
             return True, f"pid {holder.pid} is running on {holder.host}"
         return False, f"pid {holder.pid} no longer exists on {holder.host}"
+    where = (
+        "by this same Slurm job attempt on another host"
+        if holder.slurm_job_id
+        else "outside Slurm on another host"
+    )
     raise OutputBusy(
-        f"{holder.output} is locked by {holder.describe()}, outside Slurm on "
-        "another host, so whether it is still running cannot be checked from "
-        f"here. If that process is gone, delete {lock_path(holder.output)} by hand"
+        f"{holder.output} is locked by {holder.describe()}, {where}, so whether "
+        "it is still running cannot be checked from here. If that process is "
+        f"gone, delete {lock_path(holder.output)} by hand"
     )
 
 

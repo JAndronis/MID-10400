@@ -35,6 +35,7 @@ def write_holder(output, **changes):
         "user": "someone",
         "slurm_job_id": None,
         "slurm_cluster": None,
+        "slurm_restart_count": 0,
         "started_at": time.time(),
         "started": "2026-10-13T12:00:00+00:00",
         "token": "theirs",
@@ -56,6 +57,7 @@ def job_state(monkeypatch):
 
     monkeypatch.setattr(lock_module, "slurm_job_state", fake)
     monkeypatch.delenv("SLURM_JOB_ID", raising=False)
+    monkeypatch.delenv("SLURM_RESTART_COUNT", raising=False)
     return states
 
 
@@ -252,3 +254,48 @@ def test_a_lock_from_another_version_is_judged_on_its_holder(tmp_path, job_state
     os.utime(path, (old, old))
     with pytest.raises(OutputBusy, match="is running"), output_lock(output):
         pytest.fail("took over a live holder's lock")
+
+
+# ── requeued jobs ─────────────────────────────────────────────────────────────
+def test_a_requeued_job_takes_over_the_lock_its_first_attempt_left(
+    tmp_path, job_state, monkeypatch
+):
+    """allcpu preempts and requeues under the same job id (S4, 2026-10-14).
+
+    Asking Slurm about its own id would say RUNNING, and the first attempt ran
+    on another node, so only the restart count can say the lock is stale.
+    """
+    output = tmp_path / "out.h5"
+    write_holder(output, slurm_job_id="4242", slurm_restart_count=0, host="max-exfl001")
+    job_state["4242"] = "RUNNING"  # it is: this is the requeued attempt
+    monkeypatch.setenv("SLURM_JOB_ID", "4242")
+    monkeypatch.setenv("SLURM_RESTART_COUNT", "1")
+    with output_lock(output) as held:
+        assert held.takeover["reason"].endswith(
+            "before it was requeued (now restart 1)"
+        )
+        assert json.loads(lock_path(output).read_text())["slurm_restart_count"] == 1
+
+
+def test_a_lock_from_before_restart_counts_were_recorded_counts_as_restart_0(
+    tmp_path, job_state, monkeypatch
+):
+    output = tmp_path / "out.h5"
+    record = write_holder(output, slurm_job_id="4242", host="max-exfl001")
+    del record["slurm_restart_count"]
+    lock_path(output).write_text(json.dumps(record))
+    monkeypatch.setenv("SLURM_JOB_ID", "4242")
+    monkeypatch.setenv("SLURM_RESTART_COUNT", "2")
+    with output_lock(output) as held:
+        assert "at restart 0" in held.takeover["reason"]
+
+
+def test_the_same_attempt_of_this_job_on_another_host_is_not_taken_over(
+    tmp_path, job_state, monkeypatch
+):
+    output = tmp_path / "out.h5"
+    write_holder(output, slurm_job_id="4242", slurm_restart_count=1, host="max-exfl001")
+    monkeypatch.setenv("SLURM_JOB_ID", "4242")
+    monkeypatch.setenv("SLURM_RESTART_COUNT", "1")
+    with pytest.raises(OutputBusy, match="same Slurm job attempt"), output_lock(output):
+        pytest.fail("took over a lock this job's live attempt may hold")
