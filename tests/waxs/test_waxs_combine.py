@@ -227,6 +227,31 @@ def test_combine_files_reads_two_finished_runs(
     assert scaling.factor > 0
     assert scaling.n_bins >= 4
     assert np.isfinite(combined["intensity"].values).all()
+    assert combined.attrs["units"] == "photons"
+
+    # A file written before photon counting carries no units attribute and
+    # counts keV; combining it with a photon file must be refused, not fitted.
+    import h5py
+
+    from analysis.waxs.combine import UnitsMismatch
+
+    with h5py.File(paths["jf2"], "r+") as handle:
+        del handle["provenance"].attrs["units"]
+    with pytest.raises(UnitsMismatch, match="keV"):
+        combine_files(paths["jf1"], paths["jf2"], min_bins=4)
+
+
+def test_units_are_read_off_the_object_and_default_to_kev():
+    from types import SimpleNamespace
+
+    from analysis.waxs.combine import UnitsMismatch, require_same_units, units_of
+
+    assert units_of(SimpleNamespace(attrs={"units": "photons"})) == "photons"
+    assert units_of(SimpleNamespace(attrs={})) == "keV"
+    assert units_of(SimpleNamespace(attrs={"units": ""})) == "keV"
+    assert require_same_units("photons", "photons") == "photons"
+    with pytest.raises(UnitsMismatch):
+        require_same_units("photons", "keV")
 
 
 # ── telling a normalisation offset from a q-dependent one ────────────────────

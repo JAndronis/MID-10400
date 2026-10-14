@@ -175,15 +175,37 @@ class JungfrauWaxsConfig(PassConfigMembers):
     #: rather than on the absolute level.
     lit_gap_ratio: float = 30.0
     cell_sample_trains: int = 8
-    # ── error model ───────────────────────────────────────────────────────
+    # ── readout noise (a recorded diagnostic since photon counting) ────────
     #: ``None`` measures the readout noise from the dark cells of the sampled
-    #: trains; a float overrides it even when a measurement is available.
+    #: trains; a float overrides it even when a measurement is available. It no
+    #: longer enters the variance, which is Poisson on the counts, but it is
+    #: stored, so it stays in :meth:`config_hash`.
     read_noise_kev: float | None = None
     #: Used only when the run reads every storage cell, leaving no dark cell to
     #: measure from. ``None`` is resolved from :data:`DEFAULT_READ_NOISE_KEV` in
     #: ``__post_init__``, so a constructed config never holds ``None`` here and
     #: the number actually used is the one that enters :meth:`config_hash`.
     read_noise_fallback_kev: float | None = None
+    # ── photon counting (analysis.waxs.photons) ───────────────────────────
+    #: The energy the counts are taken at. ``None`` is resolved to
+    #: :attr:`photon_energy_kev` in ``__post_init__``. Separate from it so that
+    #: the counting can follow CLAUDE.md open task 15 (9.04 against the XGM's
+    #: 9.000 keV, 0.3 % in counts) without moving the q axis, which the PONI
+    #: wavelength ties to :attr:`photon_energy_kev`.
+    count_energy_kev: float | None = None
+    #: Which pixels feed each ASIC's zero level: ``"all_good"`` is every
+    #: ``data.mask``-good pixel, the static ``.edf`` ignored; ``"kept"`` only
+    #: those the ``.edf`` keeps.
+    level_pixels: str = "all_good"
+    #: The first estimate is the median of the values below this.
+    level_cut_kev: float = 2.0
+    #: Then the mean of the values within ``±`` this, ~3 σ of the 0.30 keV noise.
+    level_window_kev: float = 1.0
+    level_iterations: int = 3
+    #: Border pixels of each ASIC left out of its level (larger, noisier).
+    level_edge_px: int = 3
+    #: An ASIC with fewer usable pixels has no level and is not counted.
+    level_min_pixels: int = 1000
     # ── data check ────────────────────────────────────────────────────────
     #: Values beyond ``±`` this are excluded pixel by pixel. Set far above the
     #: kept-region maximum, in the empty band below the artifact population.
@@ -228,6 +250,14 @@ class JungfrauWaxsConfig(PassConfigMembers):
             raise ValueError(
                 f"photon_energy_kev must be positive, got {self.photon_energy_kev}"
             )
+        # Resolved here for the same reason as the noise fallback: the energy
+        # actually counted at must be the one in config_hash.
+        if self.count_energy_kev is None:
+            object.__setattr__(self, "count_energy_kev", self.photon_energy_kev)
+        # Imported here: photons imports this module for MODULE_SHAPE.
+        from analysis.waxs.photons import PhotonCounting
+
+        PhotonCounting.from_config(self)
         if tuple(self.method) != METHOD:
             raise ValueError(
                 f"method must be {METHOD}, got {tuple(self.method)}; "

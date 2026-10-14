@@ -114,6 +114,12 @@ def _reasons(
     missing = writer._missing_columns(handle)
     if missing:
         reasons.append(f"the frame table lacks {missing}")
+    stored_units = attrs.get("units")
+    if writer.UNITS is not None and stored_units != writer.UNITS:
+        reasons.append(
+            f"it stores {stored_units or 'no units attribute'}, the pass writes "
+            f"{writer.UNITS}"
+        )
     if "status_summary" not in attrs:
         reasons.append("never finalised")
 

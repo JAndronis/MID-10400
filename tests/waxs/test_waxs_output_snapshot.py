@@ -21,16 +21,20 @@ from test_waxs_run import InlinePool, run  # noqa: E402  (tests/waxs is on sys.p
 #: environment on Maxwell, where it is stable across SIMD level, OpenMP threads
 #: and BLAS kernel; the pre-cleanup tree produces the same value.
 #:
-#: Moved with pyFAI 2026.5.0 -> 2026.9.0 (was ``7b81f29b…``, 2026-10-13). The
-#: fixture's jf1 PONI has detector orientation 4, and 2026.9 makes orientation
-#: a re-indexing of pixels, which rounds the full-split coefficients
-#: differently: per-frame sums move by at most 4.1e-6 relative, pooled I(q) by
-#: 2.6e-7, with the same empty bins and no other dataset changed. The real
-#: detectors have orientation 3 and are bit-identical between the two versions
-#: (``context/performance.md`` §2).
+#: Moved 2026-10-14 by merging two deliberate changes, each of which moved it on
+#: its own branch (was ``7b81f29b…`` before both):
+#: - photon counting (CLAUDE.md open task 18): the file stores photons instead of
+#:   keV, gains the counting columns, and the mock carries a zero level per ASIC
+#:   and train (``1df60a15…`` alone);
+#: - pyFAI 2026.5.0 -> 2026.9.0: the fixture's jf1 PONI has detector orientation
+#:   4, and 2026.9 makes orientation a re-indexing of pixels, which rounds the
+#:   full-split coefficients differently (per-frame sums by at most 4.1e-6
+#:   relative, pooled I(q) by 2.6e-7). The real detectors have orientation 3 and
+#:   are bit-identical between the two versions (``context/performance.md`` §2)
+#:   (``b696948b…`` alone).
 EXPECTED_DIGEST = {
     ("Linux", "x86_64"): (
-        "b696948b3cd4bd5ce2eed5f7035cb9e468bef361a53470c45425ccfc3295ab5f"
+        "648d593f156f52b2c2c4ad74f9d97bb481f2a14417167a24fb7bc08554bdd9a3"
     ),
 }
 

@@ -37,18 +37,24 @@ SAXS_FIELDS = (
     "pixel_sum_trains", "pixel_sums_root", "photon_stats", "photon_stats_root",
 )  # fmt: skip
 
+# Photon counting (CLAUDE.md open task 18, 2026-10-13) added the seven fields
+# from count_energy_kev to level_min_pixels. They change every stored number,
+# so the hash below moved with them, deliberately: keV files are reprocessed,
+# never resumed.
 WAXS_FIELDS = (
     "proposal", "run", "detector", "detector_name", "first_modno", "poni_file",
     "static_mask_file", "photon_energy_kev", "npt", "method", "unit",
     "mask_bits", "expected_bits", "expected_lit_cells", "lit_threshold_kev",
     "lit_fraction_min", "lit_gap_ratio", "cell_sample_trains", "read_noise_kev",
-    "read_noise_fallback_kev", "max_abs_kev", "min_modules",
+    "read_noise_fallback_kev", "count_energy_kev", "level_pixels",
+    "level_cut_kev", "level_window_kev", "level_iterations", "level_edge_px",
+    "level_min_pixels", "max_abs_kev", "min_modules",
     "allow_data_check_failures", "trains_per_block", "n_workers",
     "selftest_frames", "output_root", "allow_incomplete", "overwrite",
 )  # fmt: skip
 
 SAXS_CONFIG_HASH = "9104a057416d3791846400d1431923ee8f5d27cf46cbb13e9c32252f59dc58be"
-WAXS_CONFIG_HASH = "4ac8402ec48022013633da47b1c440363e3c0ad687e9f24e7e8ad387d36702dd"
+WAXS_CONFIG_HASH = "316265309d201fe945d3fc0bbc911f39752e9fa1a9ff44ebb9181107a472417d"
 
 
 def test_saxs_config_fields_are_unchanged():
@@ -218,12 +224,19 @@ EXPECTED_ALL: dict[str, tuple[str, ...]] = {
     "analysis.saxs.writer": (
         "AgipdSaxsWriter", "per_pulse",
     ),
+    # Photon counting split the per-frame path into prepare and integrate, so
+    # the self-test can integrate one counted frame both ways.
     "analysis.waxs.integrate": (
-        "ErrorModel", "FrameResult", "extreme_pixels", "frame_maxima",
-        "integrate_frame",
+        "ErrorModel", "FrameResult", "PreparedFrame", "extreme_pixels",
+        "frame_maxima", "integrate_frame", "integrate_prepared",
+        "prepare_frame",
     ),
     "analysis.waxs.masks": (
         "build_static_bad", "load_static_mask",
+    ),
+    "analysis.waxs.photons": (
+        "ASIC_ID", "ASIC_SIZE", "LEVEL_PIXEL_SETS", "N_ASICS",
+        "PhotonCounting", "asic_view", "count_photons", "zero_levels",
     ),
     "analysis.waxs.operator": (
         "WaxsOperator", "WavelengthMismatch", "build_operator",
@@ -231,8 +244,9 @@ EXPECTED_ALL: dict[str, tuple[str, ...]] = {
     ),
     # Same rule as the AGIPD writer.
 
+    # The units every reader checks before combining two files.
     "analysis.waxs.writer": (
-        "JungfrauWaxsWriter", "per_cell",
+        "KEV", "PHOTONS", "JungfrauWaxsWriter", "file_units", "per_cell",
     ),
 }  # fmt: skip
 

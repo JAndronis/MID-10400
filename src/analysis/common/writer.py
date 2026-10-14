@@ -154,8 +154,15 @@ class FrameTableWriter:
     FRAME_VECTOR_SOURCES: dict[str, str] = {}
     #: The ``(n, npt)`` sufficient statistics, read off the result by name.
     FRAME_MATRICES: tuple[str, ...] = ("signal", "normalization", "variance")
+    #: Per-frame ``(n, k)`` columns, dataset name to ``(k, dtype)``, read off the
+    #: result by name. Zero-filled for frames never written, like every column.
+    FRAME_ARRAYS: dict[str, tuple[int, Any]] = {}
     #: Groups created empty at layout time for the pass to fill later.
     EXTRA_GROUPS: tuple[str, ...] = ()
+    #: What ``signal`` counts, recorded as ``provenance.attrs["units"]`` when set.
+    #: A file whose stored value differs — or that has none — is refused rather
+    #: than resumed, so rows of two units never share a file.
+    UNITS: str | None = None
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
@@ -225,7 +232,8 @@ class FrameTableWriter:
         :param operator_check: compares the stored operator with the one this
             run built. ``None`` skips it, for a caller with no operator.
         :raises ConfigHashMismatch: the config hash differs.
-        :raises SchemaMismatch: the frame table lacks a column.
+        :raises SchemaMismatch: the frame table lacks a column, or stores
+            other units than this writer (``UNITS``).
         :raises OperatorMismatch: the operator, or the version of a
             :data:`GATING_PACKAGES` package, differs.
         """
@@ -235,6 +243,7 @@ class FrameTableWriter:
         config_hash = cfg.config_hash()
         with h5py.File(path, "r") as existing:
             stored = existing["provenance"].attrs.get("config_hash")
+            stored_units = existing["provenance"].attrs.get("units")
             missing = cls._missing_columns(existing)
             versions = existing["provenance"].attrs.get("package_versions")
             # An empty /operator is a file that died before storing one, with
@@ -247,6 +256,12 @@ class FrameTableWriter:
             raise ConfigHashMismatch(
                 f"{path} was written with config hash {stored}, "
                 f"this run has {config_hash}; {_REPROCESS_HINT}"
+            )
+        if cls.UNITS is not None and stored_units != cls.UNITS:
+            raise SchemaMismatch(
+                f"{path} stores {stored_units or 'no units attribute'}, this "
+                f"pass writes {cls.UNITS}; rows of two units must never share "
+                f"a file; {_REPROCESS_HINT}"
             )
         if missing:
             raise SchemaMismatch(
@@ -265,7 +280,7 @@ class FrameTableWriter:
     def _missing_columns(cls, handle: h5py.File) -> list[str]:
         """Frame-table datasets this writer stores that ``handle`` does not have."""
         frames = handle.get("frames")
-        wanted = (*cls.FRAME_VECTORS, *cls.FRAME_MATRICES)
+        wanted = (*cls.FRAME_VECTORS, *cls.FRAME_MATRICES, *cls.FRAME_ARRAYS)
         if frames is None:
             return sorted(wanted)
         return sorted(name for name in wanted if name not in frames)
@@ -302,6 +317,16 @@ class FrameTableWriter:
                 compression="gzip",
                 compression_opts=1,
             )
+        for name, (width, dtype) in cls.FRAME_ARRAYS.items():
+            frames.create_dataset(
+                name,
+                shape=(n, width),
+                dtype=dtype,
+                fillvalue=0,
+                chunks=(min(chunk_rows, n), width) if n else None,
+                compression="gzip",
+                compression_opts=1,
+            )
 
         trains = handle.create_group("trains")
         trains["trainId"] = np.array([t.train_id for t in plan.trains], dtype=np.uint64)
@@ -329,6 +354,10 @@ class FrameTableWriter:
         # Recorded now as well as at finalise, so that a file whose run died
         # before finishing still says which pyFAI wrote its rows.
         provenance.attrs["package_versions"] = json.dumps(package_versions())
+        # At layout time, not at finalise: a file the pass never finished still
+        # says what its rows count.
+        if cls.UNITS is not None:
+            provenance.attrs["units"] = cls.UNITS
         for name in cls.EXTRA_GROUPS:
             handle.create_group(name)
         handle.flush()
@@ -400,6 +429,8 @@ class FrameTableWriter:
         for name, attribute in self.FRAME_VECTOR_SOURCES.items():
             frames[name][start:stop] = getattr(result, attribute)
         for name in self.FRAME_MATRICES:
+            frames[name][start:stop] = getattr(result, name)
+        for name in self.FRAME_ARRAYS:
             frames[name][start:stop] = getattr(result, name)
         self._resolve_block_error(block)
         self._f.flush()
@@ -560,6 +591,8 @@ def pooled_per_train(source: Any) -> Any:
         train_ids = handle["trains/trainId"][:]
         first = handle["trains/first"][:]
         count = handle["trains/count"][:]
+        # Inside the ``with``: an AttributeManager outlives its file silently.
+        units = handle["provenance"].attrs.get("units")
 
         intensity = np.zeros((train_ids.size, npt), dtype=np.float64)
         sigma = np.zeros((train_ids.size, npt), dtype=np.float64)
@@ -599,6 +632,8 @@ def pooled_per_train(source: Any) -> Any:
         coords={"trainId": train_ids, "q": q},
     )
     result.attrs["negative_variance_bins"] = negative_variance
+    if units is not None:
+        result.attrs["units"] = str(units)
     return result
 
 

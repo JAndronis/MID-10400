@@ -13,8 +13,15 @@ Two columns differ from AGIPD in a way worth stating:
   onto the cell axis, and until that alignment exists the pass stores the cell
   id and leaves pulse identity absent rather than synthesising one from
   position.
-* **``max_count`` becomes ``max_kev``**, a float. The data are energies, not
-  counts.
+* **``max_count`` becomes ``max_kev``**, a float. ``max_kev``, ``max_kev_static``
+  and ``energy_valid`` describe the raw keV values the frame arrived with;
+  ``signal`` and ``variance`` are photon counts (``provenance.attrs["units"]``),
+  counted per ASIC by :mod:`analysis.waxs.photons`, whose levels are stored per
+  frame in ``asic_level`` so any frame can be recounted from proc.
+
+A file written before photon counting has no ``units`` attribute and counts
+keV. :func:`file_units` says which, and every reader that combines two files
+refuses to mix them.
 """
 
 from __future__ import annotations
@@ -28,13 +35,24 @@ import numpy as np
 from analysis.common.status import FrameStatus
 from analysis.common.writer import (
     FrameTableWriter,
+    as_handle,
     per_label,
 )
+from analysis.waxs.photons import N_ASICS
 
 __all__ = [
+    "KEV",
+    "PHOTONS",
     "JungfrauWaxsWriter",
+    "file_units",
     "per_cell",
 ]
+
+#: What ``signal`` counts in a file this writer produces.
+PHOTONS = "photons"
+#: What it counts in a file written before photon counting, which carries no
+#: ``units`` attribute at all.
+KEV = "keV"
 
 log = logging.getLogger(__name__)
 
@@ -47,23 +65,34 @@ class JungfrauWaxsWriter(FrameTableWriter):
         "cellId": np.uint16,
         "status": np.uint8,
         "energy_valid": np.float32,
+        "n_photons": np.uint32,
         "n_bad_pixels": np.uint32,
         "n_negative_variance_bins": np.uint32,
         "max_kev": np.float32,
         "max_kev_static": np.float32,
         "n_extreme_pixels": np.uint32,
+        "n_level_missing": np.uint8,
+        "count_energy_kev": np.float32,
     }
     FRAME_VECTOR_SOURCES = {
         "cellId": "cell_id",
         "status": "status",
         "energy_valid": "energy_valid",
+        "n_photons": "n_photons",
         "n_bad_pixels": "n_bad_pixels",
         "n_negative_variance_bins": "n_negative_variance_bins",
         "max_kev": "max_kev",
         "max_kev_static": "max_kev_static",
         "n_extreme_pixels": "n_extreme_pixels",
+        "n_level_missing": "n_level_missing",
+        "count_energy_kev": "count_energy_kev",
     }
+    #: The zero level of each ASIC, keV, as counted with. NaN for an ASIC that
+    #: had none in an integrated frame — a measured level of 0.0 is a real
+    #: value, so 0 cannot stand for "none" — and 0 in rows never integrated.
+    FRAME_ARRAYS = {"asic_level": (N_ASICS, np.float32)}
     EXTRA_GROUPS = ("operator", "cells")
+    UNITS = PHOTONS
 
     def store_operator(self, op: Any) -> None:
         """The q axis, the solid angle, the static mask and the PONI verbatim.
@@ -119,6 +148,43 @@ class JungfrauWaxsWriter(FrameTableWriter):
         group.attrs["error_model_source"] = model.source
         group.attrs["error_model_samples"] = model.n_samples
         group.attrs["error_model_sha256"] = model.sha256
+        group.attrs["read_noise_role"] = (
+            "diagnostic: the stored variance is Poisson on the photon counts"
+        )
+
+    def level_summary(self) -> dict[str, Any]:
+        """How the per-ASIC zero levels behaved over the integrated frames.
+
+        :returns: per ASIC the median and the frame-to-frame rms of the level in
+            keV, and how many frames lost an ASIC for having none. Empty when
+            nothing was integrated.
+        """
+        frames = self._f["frames"]
+        ok = frames["status"][:] == FrameStatus.OK
+        if not ok.any():
+            return {}
+        levels = frames["asic_level"][:][ok].astype(np.float64)
+        missing = frames["n_level_missing"][:][ok]
+        with np.errstate(invalid="ignore"):
+            present = np.isfinite(levels)
+            median = [
+                float(np.median(levels[present[:, a], a]))
+                if present[:, a].any()
+                else None
+                for a in range(levels.shape[1])
+            ]
+            rms = [
+                float(np.std(levels[present[:, a], a]))
+                if present[:, a].sum() > 1
+                else None
+                for a in range(levels.shape[1])
+            ]
+        return {
+            "median_kev": median,
+            "frame_to_frame_rms_kev": rms,
+            "n_frames_with_a_missing_level": int((missing > 0).sum()),
+            "n_asic_levels_missing": int(missing.astype(np.int64).sum()),
+        }
 
     def data_check_summary(self) -> dict[str, Any]:
         """Pixels the value check excluded, and frames it refused.
@@ -170,12 +236,26 @@ def per_cell(source: Any, *, dtype: Any = np.float32) -> Any:
     :param source: an open handle or a path to a finished output file.
     :param dtype: storage for the intensity grid.
     :returns: the grid, carrying ``data_check`` so a DAMNIT user can see why a
-        slot is empty — see :func:`analysis.common.writer.per_label`.
+        slot is empty — see :func:`analysis.common.writer.per_label` — and
+        ``units``, so nothing downstream has to guess what it counts.
     """
-    return per_label(
+    grid = per_label(
         source,
         label_column="cellId",
         label_dim="cellId",
         dtype=dtype,
-        carry_attrs=("data_check",),
+        carry_attrs=("data_check", "units"),
     )
+    # A keV file carries no attribute, which per_label renders as "".
+    grid.attrs["units"] = grid.attrs.get("units") or KEV
+    return grid
+
+
+def file_units(source: Any) -> str:
+    """What ``signal`` counts in a finished file: :data:`PHOTONS` or :data:`KEV`.
+
+    :param source: an open handle or a path.
+    """
+    with as_handle(source) as handle:
+        stored = handle["provenance"].attrs.get("units")
+    return str(stored) if stored else KEV

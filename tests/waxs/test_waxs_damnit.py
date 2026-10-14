@@ -143,10 +143,29 @@ def test_the_overview_survives_a_run_with_nothing_integrated(grid):
     assert any("no integrated frames" in t for t in messages)
 
 
-def test_the_overview_labels_the_axes_in_kev(grid):
+def test_the_overview_labels_the_axes_in_the_files_units(grid):
+    assert grid.attrs["units"] == "photons"
     figure = damnit.overview_figure(grid, grid)
-    assert "keV" in figure.axes[0].get_ylabel()
+    assert "photons" in figure.axes[0].get_ylabel()
     assert "q [nm" in figure.axes[0].get_xlabel()
+
+    old = grid.copy()
+    old.attrs["units"] = "keV"
+    figure = damnit.overview_figure(old, old)
+    assert "keV" in figure.axes[0].get_ylabel()
+
+
+def test_keV_and_photon_grids_are_never_combined(grid):
+    """A fitted factor would absorb the unit change as a detector mismatch."""
+    from analysis.waxs.combine import UnitsMismatch
+
+    old = grid.copy()
+    old.attrs["units"] = "keV"
+    with pytest.raises(UnitsMismatch, match="keV"):
+        damnit.combined_curve(grid, old)
+    with pytest.raises(UnitsMismatch):
+        damnit.overview_figure(old, grid)
+    assert damnit.combined_curve(grid, grid).attrs["units"] == "photons"
 
 
 # ── the file readers ─────────────────────────────────────────────────────────

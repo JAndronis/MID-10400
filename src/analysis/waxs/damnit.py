@@ -21,7 +21,9 @@ from analysis.waxs.combine import (
     NoOverlap,
     combine_curves,
     mean_curve,
+    require_same_units,
     scale_to_overlap,
+    units_of,
 )
 from analysis.waxs.config import DETECTORS, JungfrauWaxsConfig, config_for
 from analysis.waxs.writer import per_cell
@@ -212,6 +214,8 @@ def combined_curve(jf1: Any, jf2: Any, *, method: str = "wls") -> Any:
 
     :raises NoOverlap: the two populate no shared q range. That is a geometry
         problem, not a plotting one, so it is not swallowed.
+    :raises analysis.waxs.combine.UnitsMismatch: one grid counts keV and the
+        other photons.
     """
     import xarray as xr
 
@@ -225,6 +229,7 @@ def combined_curve(jf1: Any, jf2: Any, *, method: str = "wls") -> Any:
         )
         return None
 
+    units = require_same_units(units_of(jf1), units_of(jf2))
     q_ref, i_ref, s_ref = mean_curve(jf1)
     q_other, i_other, s_other = mean_curve(jf2)
     combined, scaling = combine_curves(
@@ -235,6 +240,7 @@ def combined_curve(jf1: Any, jf2: Any, *, method: str = "wls") -> Any:
         sigma_ref=s_ref,
         sigma_other=s_other,
         method=method,
+        units=units,
     )
     result = xr.DataArray(
         combined["intensity"].values,
@@ -274,6 +280,10 @@ def overview_figure(
     grids = [
         (label, g) for label, g in zip(labels, (jf1, jf2), strict=True) if g is not None
     ]
+    # Two traces on one axis, one scaled onto the other: only in one unit.
+    units = [units_of(grid) for _, grid in grids]
+    if len(units) == 2:
+        require_same_units(*units)
 
     fig = plt.figure(figsize=(9, 7))
     gs = GridSpec(2, 2, figure=fig)
@@ -339,7 +349,7 @@ def overview_figure(
 
     ax1.set_yscale("log")
     ax1.set_xlabel("q [nm$^{-1}$]")
-    ax1.set_ylabel("I(q) [keV / solid angle]")
+    ax1.set_ylabel(f"I(q) [{units[0] if units else 'photons'} / solid angle]")
     ax1.set_title(title or "Mean I(q), both JUNGFRAUs (jf2 scaled onto jf1)")
     ax1.grid(alpha=0.3)
     if grids:

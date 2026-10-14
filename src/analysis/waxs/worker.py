@@ -25,12 +25,12 @@ from typing import Any
 import numpy as np
 
 from analysis.common.cpu import set_thread_env
-from analysis.common.masks import frame_bad
 from analysis.common.plan import Block
 from analysis.common.status import DataCheckFailed, FrameStatus
 from analysis.waxs.config import CELLS_PER_TRAIN, MODULE_SHAPE, JungfrauWaxsConfig
-from analysis.waxs.integrate import ErrorModel, frame_maxima, integrate_frame
+from analysis.waxs.integrate import frame_maxima, integrate_frame
 from analysis.waxs.operator import WaxsOperator, build_operator
+from analysis.waxs.photons import N_ASICS, PhotonCounting
 
 __all__ = [
     "BlockResult",
@@ -45,7 +45,7 @@ class _WorkerState:
     cfg: JungfrauWaxsConfig
     op: WaxsOperator
     ai: Any
-    model: ErrorModel
+    counting: PhotonCounting
     lit_cells: tuple[int, ...]
     detector: Any
 
@@ -56,11 +56,13 @@ _STATE: _WorkerState | None = None
 def init(
     cfg: JungfrauWaxsConfig,
     operator_sha256: str,
-    model: ErrorModel,
     lit_cells: tuple[int, ...],
     run_dir: str | None = None,
 ) -> None:
     """Process initializer: rebuild the operator, open the run.
+
+    The photon-counting settings are rebuilt from ``cfg`` too: they are config
+    fields, so a worker cannot count with anything the hash does not cover.
 
     :param operator_sha256: what the parent built. A worker whose geometry or
         static mask differs — a mask file replaced mid-run, say — must not
@@ -90,7 +92,7 @@ def init(
         cfg=cfg,
         op=op,
         ai=ai,
-        model=model,
+        counting=PhotonCounting.from_config(cfg),
         lit_cells=tuple(lit_cells),
         detector=open_detector(cfg, dc),
     )
@@ -100,7 +102,6 @@ def init_from_detector(
     cfg: JungfrauWaxsConfig,
     op: WaxsOperator,
     ai: Any,
-    model: ErrorModel,
     lit_cells: tuple[int, ...],
     detector: Any,
 ) -> None:
@@ -110,7 +111,7 @@ def init_from_detector(
         cfg=cfg,
         op=op,
         ai=ai,
-        model=model,
+        counting=PhotonCounting.from_config(cfg),
         lit_cells=tuple(lit_cells),
         detector=detector,
     )
@@ -124,15 +125,19 @@ class BlockResult:
     train_id: np.ndarray  # (n,) uint64
     cell_id: np.ndarray  # (n,) uint16
     status: np.ndarray  # (n,) uint8
-    signal: np.ndarray  # (n, npt) float32
+    signal: np.ndarray  # (n, npt) float32, photons
     normalization: np.ndarray  # (n, npt) float32
-    variance: np.ndarray  # (n, npt) float32
-    energy_valid: np.ndarray  # (n,) float32
+    variance: np.ndarray  # (n, npt) float32, photons²
+    energy_valid: np.ndarray  # (n,) float32, raw keV
+    n_photons: np.ndarray  # (n,) uint32
     n_bad_pixels: np.ndarray  # (n,) uint32
     n_negative_variance_bins: np.ndarray  # (n,) uint32
     max_kev: np.ndarray  # (n,) float32
     max_kev_static: np.ndarray  # (n,) float32
     n_extreme_pixels: np.ndarray  # (n,) uint32
+    asic_level: np.ndarray  # (n, 8) float32, keV; NaN where an ASIC had none
+    n_level_missing: np.ndarray  # (n,) uint8
+    count_energy_kev: np.ndarray  # (n,) float32
     bits_present: int = 0
     timings: dict[str, float] = field(default_factory=dict)
 
@@ -152,11 +157,15 @@ def _empty_result(block: Block, npt: int) -> BlockResult:
         normalization=np.zeros((n, npt), dtype=np.float32),
         variance=np.zeros((n, npt), dtype=np.float32),
         energy_valid=np.zeros(n, dtype=np.float32),
+        n_photons=np.zeros(n, dtype=np.uint32),
         n_bad_pixels=np.zeros(n, dtype=np.uint32),
         n_negative_variance_bins=np.zeros(n, dtype=np.uint32),
         max_kev=np.zeros(n, dtype=np.float32),
         max_kev_static=np.zeros(n, dtype=np.float32),
         n_extreme_pixels=np.zeros(n, dtype=np.uint32),
+        asic_level=np.zeros((n, N_ASICS), dtype=np.float32),
+        n_level_missing=np.zeros(n, dtype=np.uint8),
+        count_energy_kev=np.zeros(n, dtype=np.float32),
     )
 
 
@@ -184,18 +193,18 @@ def process_block(block: Block) -> BlockResult:
     if _STATE is None:
         raise RuntimeError("worker.init has not run in this process")
     state = _STATE
-    cfg, op, ai, model, lit = (
+    cfg, op, ai, counting, lit = (
         state.cfg,
         state.op,
         state.ai,
-        state.model,
+        state.counting,
         state.lit_cells,
     )
 
     from extra_data import by_id
 
     result = _empty_result(block, op.npt)
-    timings = {"read_data": 0.0, "read_mask": 0.0, "integrate": 0.0}
+    timings = {"read_data": 0.0, "read_mask": 0.0, "photonise": 0.0, "integrate": 0.0}
     bits_present = 0
     offset = 0
 
@@ -246,23 +255,32 @@ def process_block(block: Block) -> BlockResult:
 
         bits_present |= int(np.bitwise_or.reduce(frame_mask, axis=None))
 
-        started = time.perf_counter()
+        bits = np.uint32(cfg.mask_bits)
         for index, cell in enumerate(lit):
             row = rows.start + index
             position = positions[cell]
             result.train_id[row] = train_id
             result.cell_id[row] = cell
             values = frame_data[position]
-            bad = frame_bad(frame_mask[position], cfg.mask_bits, op.static_bad)
+            # The frame's own exclusion, kept apart from the static mask: the
+            # zero level is estimated over .edf-masked pixels as well.
+            dynamic = (frame_mask[position].reshape(-1) & bits) != 0
             try:
                 frame_result = integrate_frame(
-                    ai, op, model, values, bad, max_abs_kev=cfg.max_abs_kev
+                    ai,
+                    op,
+                    counting,
+                    values,
+                    dynamic,
+                    max_abs_kev=cfg.max_abs_kev,
+                    timings=timings,
                 )
             except DataCheckFailed:
                 # This means every pixel was excluded, not that the frame
                 # carried a wild value: those are masked and counted. The row is
                 # still filled with what evidence there is, because a status on
                 # its own explains nothing.
+                bad = dynamic | op.static_bad
                 result.status[row] = FrameStatus.DATA_CHECK_FAILED
                 reaching, checked = frame_maxima(values, bad, op.static_bad)
                 result.max_kev[row] = reaching
@@ -273,13 +291,16 @@ def process_block(block: Block) -> BlockResult:
             result.normalization[row] = frame_result.normalization
             result.variance[row] = frame_result.variance
             result.energy_valid[row] = frame_result.energy_valid
+            result.n_photons[row] = frame_result.n_photons
             result.n_bad_pixels[row] = frame_result.n_bad_pixels
             result.n_negative_variance_bins[row] = frame_result.n_negative_variance_bins
             result.max_kev[row] = frame_result.max_kev
             result.max_kev_static[row] = frame_result.max_kev_static
             result.n_extreme_pixels[row] = frame_result.n_extreme_pixels
+            result.asic_level[row] = frame_result.asic_level
+            result.n_level_missing[row] = frame_result.n_level_missing
+            result.count_energy_kev[row] = frame_result.count_energy_kev
             result.status[row] = FrameStatus.OK
-        timings["integrate"] += time.perf_counter() - started
 
     result.bits_present = bits_present
     result.timings = timings

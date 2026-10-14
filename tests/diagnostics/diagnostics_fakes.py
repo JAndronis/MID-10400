@@ -41,6 +41,10 @@ class StubConfig:
         return "stub"
 
 
+#: JUNGFRAU frame-table columns a keV-era file (before photon counting) lacks.
+KEV_ERA_ABSENT = ("n_photons", "n_level_missing", "count_energy_kev", "asic_level")
+
+
 def writer_class(kind: str):
     if kind == "agipd":
         from analysis.saxs.writer import AgipdSaxsWriter
@@ -95,6 +99,14 @@ def write_frame_table(
     with h5py.File(path, "w") as handle:
         cls._create_layout(handle, StubConfig(npt), plan, "stub")
         frames = handle["frames"]
+        if kind == "jungfrau" and units is None:
+            # ``units=None`` means a file from before photon counting (open task
+            # 18): the current writer stamps ``units = "photons"`` and lays out
+            # the counting columns, which such a file never had.
+            handle["provenance"].attrs.pop("units", None)
+            for name in KEV_ERA_ABSENT:
+                if name in frames:
+                    del frames[name]
         flat_status = status.reshape(-1)
         marked = np.isin(flat_status, [int(c) for c in MARKED])
         train_col = np.repeat(tids[:n_trains], n_labels)

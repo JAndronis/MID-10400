@@ -4,9 +4,11 @@ See ``context/jungfrau-waxs-integrator.md`` for the design, which is written as
 a delta against ``context/agipd-saxs-integrator.md``. Two of its decisions were
 amended by measurement during implementation and the modules that carry them
 say so: the per-frame mask is a NaN rather than an ``integrate1d(mask=)``
-argument (:mod:`analysis.waxs.operator`), and the variance is stored unclamped
-(:mod:`analysis.waxs.integrate`). :mod:`analysis.waxs.combine` puts the two
-detectors on one scale by fitting a factor over their overlap.
+argument (:mod:`analysis.waxs.operator`), and frames are counted as photons per
+ASIC before they are integrated (:mod:`analysis.waxs.photons`, CLAUDE.md open
+task 18), with a Poisson variance. :mod:`analysis.waxs.combine` puts the two
+detectors on one scale by fitting a factor over their overlap, and refuses to
+mix a keV file with a photon one.
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ from analysis.waxs.cells import (
 from analysis.waxs.combine import (
     NoOverlap,
     OverlapScaling,
+    UnitsMismatch,
     combine_curves,
     combine_files,
     mean_curve,
@@ -48,6 +51,7 @@ from analysis.waxs.operator import (
     build_operator,
     operator_sha256,
 )
+from analysis.waxs.photons import PhotonCounting
 from analysis.waxs.selftest import SelfTestFailed, SelfTestReport, run_selftest
 
 __all__ = [
@@ -64,9 +68,11 @@ __all__ = [
     "JungfrauWaxsConfig",
     "NoOverlap",
     "OverlapScaling",
+    "PhotonCounting",
     "SelfTestFailed",
     "SelfTestReport",
     "UnexpectedLitCells",
+    "UnitsMismatch",
     "WavelengthMismatch",
     "WaxsOperator",
     "build_operator",

@@ -2,7 +2,9 @@
 
 The parent builds the geometry, measures the cell pattern and the readout
 noise, gates on the self-test, then fans blocks out to spawned single-threaded
-workers and writes their results itself. Nothing in the hot loop depends on the
+workers and writes their results itself. The workers count photons per ASIC
+before integrating (:mod:`analysis.waxs.photons`), so the file stores photons;
+the readout noise is kept as a diagnostic. Nothing in the hot loop depends on the
 XGM, transmission or background.
 
 The two detectors never meet here: each gets its own config, its own pass and
@@ -32,7 +34,6 @@ from analysis.common.cpu import (
     set_thread_env,
 )
 from analysis.common.lock import OutputLock, lock_path, output_lock
-from analysis.common.masks import frame_bad
 from analysis.common.plan import evenly_spaced
 from analysis.common.run import base_provenance, fan_out
 from analysis.common.status import FrameStatus
@@ -47,6 +48,7 @@ from analysis.waxs.complete import is_complete, operator_differences
 from analysis.waxs.config import CELLS_PER_TRAIN, JungfrauWaxsConfig
 from analysis.waxs.integrate import ErrorModel
 from analysis.waxs.operator import WaxsOperator, build_operator
+from analysis.waxs.photons import PhotonCounting
 from analysis.waxs.plan import build_plan, open_detector
 from analysis.waxs.selftest import run_selftest
 from analysis.waxs.writer import JungfrauWaxsWriter, per_cell
@@ -256,6 +258,7 @@ def _integrate(
         if not classification.lit:
             return _no_lit_cells(cfg, classification)
         model = _error_model(cfg, classification)
+        counting = PhotonCounting.from_config(cfg)
     with phase(setup, "plan"):
         plan = build_plan(
             cfg,
@@ -265,7 +268,7 @@ def _integrate(
             det=det,
         )
     with phase(setup, "selftest"):
-        report = _run_selftest(cfg, op, ai, model, classification, det, plan)
+        report = _run_selftest(cfg, op, ai, counting, classification, det, plan)
 
     with JungfrauWaxsWriter.open_or_create(
         cfg,
@@ -287,7 +290,6 @@ def _integrate(
             initargs=(
                 cfg,
                 op.sha256,
-                model,
                 classification.lit,
                 str(run_dir) if run_dir else None,
             ),
@@ -315,16 +317,20 @@ def _integrate(
                 "poni_sha256": op.poni_sha256 or "",
                 "static_mask_sha256": op.static_sha256,
                 "q_range": list(op.q_populated),
+                "units": out.UNITS,
+                "photon_counting": counting.summary(),
+                "photon_levels": out.level_summary(),
                 "error_model": {
+                    "variance": "poisson",
                     "read_noise_kev": model.read_noise_kev,
                     "photon_energy_kev": model.photon_energy_kev,
                     "source": model.source,
                     "n_samples": model.n_samples,
                     "sha256": model.sha256,
                     "note": (
-                        "Var = sigma_read^2 + E*x in keV^2, stored unclamped; "
-                        "per-frame negative bins are counted in "
-                        "frames/n_negative_variance_bins"
+                        "variance = photon count per pixel, Sum c^2 n per bin, "
+                        "in photons^2. sigma_read is recorded as a diagnostic "
+                        "and does not enter it"
                     ),
                 },
                 "cells": classification.summary(),
@@ -460,7 +466,7 @@ def _run_selftest(
     cfg: JungfrauWaxsConfig,
     op: WaxsOperator,
     ai: Any,
-    model: ErrorModel,
+    counting: PhotonCounting,
     classification: CellClassification,
     det: Any,
     plan: Any,
@@ -473,6 +479,7 @@ def _run_selftest(
         raise ValueError("no OK trains to self-test on")
     chosen = evenly_spaced(ok_trains, 2)
 
+    bits = np.uint32(cfg.mask_bits)
     frames: list[tuple[np.ndarray, np.ndarray]] = []
     for train_id in chosen.tolist():
         selected = det.select_trains(by_id[[int(train_id)]])
@@ -484,18 +491,13 @@ def _run_selftest(
             if cell not in positions:
                 continue
             position = positions[cell]
-            frames.append(
-                (
-                    data[position],
-                    frame_bad(mask[position], cfg.mask_bits, op.static_bad),
-                )
-            )
+            frames.append((data[position], (mask[position].reshape(-1) & bits) != 0))
             if len(frames) >= cfg.selftest_frames:
                 break
         if len(frames) >= cfg.selftest_frames:
             break
 
-    report = run_selftest(ai, op, model, frames, max_abs_kev=cfg.max_abs_kev)
+    report = run_selftest(ai, op, counting, frames, max_abs_kev=cfg.max_abs_kev)
     log.info(
         "self-test passed on %d frames: max rel S %.2e, N %.2e, V %.2e",
         report.n_frames,
