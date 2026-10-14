@@ -112,6 +112,14 @@ neither SIGKILL nor Slurm's SIGTERM runs `finally`.
 **A second job is refused, not made to wait** (user decision 2026-10-13). In DAMNIT that shows as an error
 in that job's cell. The holder's own result arrives normally.
 
+**HDF5's own file lock does not protect anything inside DAMNIT.**
+- `extra_speckle/xcca/tools.py:2` sets `os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"` at import
+  time. The context file imports `extra_speckle.pipeline` at the top, so every ctxrunner process
+  and every cluster job runs with it off, and the pass's spawned workers inherit it.
+- A second writer is therefore not refused by HDF5. The `O_EXCL` lock file above does not depend
+  on HDF5 and is the only guard.
+- Found by S4, 2026-10-14; checked against the deploy venv: unset before the import, `FALSE` after.
+
 **Which files are locked:**
 - `run_agipd_saxs` locks the frame table, then the window sums (when `pixel_sum_trains` is set).
   `operator.npz` and `masks.npz` sit in the frame table's directory and are covered by its lock.
