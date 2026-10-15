@@ -180,15 +180,22 @@ def test_photon_statistics_skip_without_a_file(tmp_path):
 
 
 @pytest.mark.parametrize(
-    ("extractable", "best", "expected"),
-    [(True, 10.04, "good"), (False, 1.7, "error"), (None, float("nan"), "warning")],
+    ("ok", "plain", "extractable", "best", "expected"),
+    [
+        (7, 4, True, 10.04, "good"),
+        (7, 4, False, 1.7, "error"),
+        (7, 4, None, float("nan"), "warning"),
+        (6, 4, True, 10.04, "warning"),
+        (7, 3, False, 1.7, "warning"),
+        (None, None, True, 10.04, "warning"),
+    ],
 )
-def test_the_xpcs_score_cell(monkeypatch, extractable, best, expected):
+def test_the_xpcs_score_cell(monkeypatch, ok, plain, extractable, best, expected):
     from analysis.diagnostics.damnit import xpcs_score_cell
 
     score = {
         "run": 318, "kind": "mesh", "block": "x", "n_hits": 259,
-        "hits": {}, "kbar": None, "n_rois_kbar_ok": 4, "n_plain_rois_kbar_ok": 3,
+        "hits": {}, "kbar": None, "n_rois_kbar_ok": ok, "n_plain_rois_kbar_ok": plain,
         "snr": {"best_snr": best, "extractable": extractable, "slices": []},
     }  # fmt: skip
     monkeypatch.setattr(
@@ -196,7 +203,8 @@ def test_the_xpcs_score_cell(monkeypatch, extractable, best, expected):
     )
     cell = xpcs_score_cell(10400, 318)
     snr = "SNR —" if extractable is None else f"SNR {best:.1f}"
-    assert cell.summary_value == f"259 hits · k̄ ok 4/7 (3/4 plain) · {snr}"
+    kbar = f" · k̄ ok {ok}/7 ({plain}/4 plain)" if ok is not None else ""
+    assert cell.summary_value == f"259 hits{kbar} · {snr}"
     assert colour(cell) == COLORS[expected]
 
 

@@ -326,8 +326,9 @@ def xpcs_score_cell(proposal: int, run_no: int) -> Any:
 
     Reads what DAMNIT and extra-speckle have stored (``diagnostics.xpcs.
     xpcs_score``), so it shows the run as of its last processing; refresh with
-    ``damnit reprocess --match "XPCS score"``. Green when some 30 s slice reaches
-    SNR 3 with the fixed contrast, red when none does, amber when unknown.
+    ``damnit reprocess --match "XPCS score"``. The run is scored only when all
+    seven ROIs, including all four plain ROIs, meet the k̄ threshold. Otherwise
+    it is amber; when they do, SNR determines green, red or amber.
 
     :raises Skip: the run is not in DAMNIT or has no ``agipd_saxs`` there yet.
     """
@@ -350,9 +351,10 @@ def xpcs_score_cell(proposal: int, run_no: int) -> Any:
         "SNR —" if best is None or not np.isfinite(best) else f"SNR {best:.1f}"
     )
     extractable = snr.get("extractable")
+    all_rois_ok = ok == 7 and plain == 4
     colour = (
         COLORS["warning"]
-        if extractable is None
+        if not all_rois_ok or extractable is None
         else COLORS["good"]
         if extractable
         else COLORS["error"]
