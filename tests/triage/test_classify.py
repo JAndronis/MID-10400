@@ -2,8 +2,10 @@
 
 The synthetic mesh block mimics the measured one (2026-10-14): a narrow off peak per
 run whose level drifts from run to run, hits ~1.3 dex above it, a thin continuum of
-edge trains between, hit fractions from 10 to 60 %, one run where the beam stayed on
-the droplet and one whose single level matches nothing.
+edge trains between, partial overlaps carrying 15–60 % of a full hit's droplet
+signal, hit fractions from 10 to 60 %, one run where the beam stayed on the droplet
+and one whose single level matches nothing. The hits' spread is r240's measured
+plateau width (robust σ 0.055 dex, 2026-10-18).
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ import xarray as xr
 from triage_fakes import FIRST_TRAIN, run_row, write_sqlite
 
 from analysis.triage.classify import (
+    ON_FRACTION,
     block_cut,
     classify_block,
     hits,
@@ -30,20 +33,29 @@ from analysis.triage.classify import (
 )
 from analysis.triage.inventory import read_run_table
 
-ON_DEX, OFF_SD, ON_SD = 1.3, 0.02, 0.1
+ON_DEX, OFF_SD, ON_SD = 1.3, 0.02, 0.05
 
 
-def mesh_run(rng, off, hit_fraction, n=800, edge_fraction=0.02):
+def partial(f):
+    """rel of a train carrying a fraction ``f`` of a full hit's droplet signal."""
+    return np.log10(1 + np.asarray(f) * (10**ON_DEX - 1))
+
+
+def mesh_run(rng, off, hit_fraction, n=800, edge_fraction=0.02, partial_fraction=0.03):
     """log10(s/F) of one mesh run, and its true classes."""
     n_on = int(hit_fraction * n)
     n_edge = int(edge_fraction * n)
-    n_off = n - n_on - n_edge
+    n_part = int(partial_fraction * n)
+    n_off = n - n_on - n_edge - n_part
     x = np.concatenate([
         off + OFF_SD * rng.standard_normal(n_off),
         off + ON_DEX + ON_SD * rng.standard_normal(n_on),
         off + rng.uniform(0.2, 0.5, n_edge),
+        off + partial(rng.uniform(0.15, 0.6, n_part)),
     ])  # fmt: skip
-    truth = np.array(["off"] * n_off + ["on"] * n_on + ["edge"] * n_edge)
+    truth = np.array(
+        ["off"] * n_off + ["on"] * n_on + ["edge"] * n_edge + ["partial"] * n_part
+    )
     order = rng.permutation(n)
     return x[order], truth[order]
 
@@ -86,9 +98,10 @@ def test_block_classes_match_the_truth(block):
     assert 5 * OFF_SD < out["block"]["t_on"] < ON_DEX
     for r in range(100, 106):
         cls, true = out["classes"][r], truth[r]
-        assert (cls[true == "on"] == "on").mean() > 0.99
+        assert (cls[true == "on"] == "on").mean() > 0.98
         assert (cls[true == "off"] == "off").mean() > 0.99
         assert not (cls[true == "off"] == "on").any()
+        assert (cls[true == "partial"] == "edge").all()
         assert out["runs"][r]["two_classes"]
 
 
@@ -97,7 +110,7 @@ def test_a_run_without_off_trains_is_all_hits(block):
     v = out["runs"][106]
     assert not v["two_classes"] and not v["ambiguous"]
     assert v["reference"] == 105
-    assert v["n_on"] == 700
+    assert v["n_off"] == 0 and v["n_on"] > 0.98 * 700
 
 
 def test_a_level_that_matches_nothing_is_ambiguous(block):
@@ -113,6 +126,39 @@ def test_a_block_without_a_second_mode_is_ambiguous():
     out = classify_block(xs)
     assert out["block"]["ambiguous"]
     assert all(v["n_on"] == 0 and v["ambiguous"] for v in out["runs"].values())
+
+
+def test_the_overlap_fraction_is_measured_against_the_runs_full_hit(block):
+    _, truth, out = block
+    for r in range(100, 106):
+        v, f, true = out["runs"][r], out["overlap"][r], truth[r]
+        assert v["plateau_source"] == "run"
+        assert v["plateau"] == pytest.approx(ON_DEX, abs=0.04)
+        assert np.median(f[true == "on"]) == pytest.approx(1.0, abs=0.1)
+        assert np.median(f[true == "off"]) == pytest.approx(0.0, abs=0.01)
+        assert (f[true == "partial"] < ON_FRACTION).all()
+
+
+def test_partial_overlaps_above_t_on_are_edge_not_hits():
+    rng = np.random.default_rng(8)
+    xs = {r: mesh_run(rng, -4.3, 0.3, partial_fraction=0.0)[0] for r in (200, 201)}
+    clipped = partial(np.array([0.3, 0.5, 0.6, 0.9, 1.0]))
+    xs[202] = np.r_[mesh_run(rng, -4.3, 0.3, partial_fraction=0.0)[0], -4.3 + clipped]
+    out = classify_block(xs)
+    assert (clipped > out["block"]["t_on"]).all()
+    assert list(out["classes"][202][-5:]) == ["edge", "edge", "edge", "on", "on"]
+
+
+def test_a_run_with_few_hits_takes_its_blocks_full_hit_level():
+    rng = np.random.default_rng(9)
+    xs = {r: mesh_run(rng, -4.3, 0.3)[0] for r in (300, 301, 302)}
+    xs[303] = np.r_[-4.3 + OFF_SD * rng.standard_normal(790),
+                    -4.3 + ON_DEX + ON_SD * rng.standard_normal(10)]  # fmt: skip
+    out = classify_block(xs)
+    v = out["runs"][303]
+    assert v["plateau_source"] == "block"
+    assert v["plateau"] == out["block"]["on_mode"]
+    assert v["n_on"] >= 9
 
 
 def test_block_cut_needs_a_mode_beyond_the_off_band():
@@ -250,8 +296,9 @@ def test_hits_end_to_end_on_a_small_block(tmp_path):
     assert h["kind"] == "mesh" and h["block"] == "0.012|ferritin50_peg6k"
     assert 0.17 < h["train_ids"].size / 400 < 0.23
     assert set(np.unique(h["classes"].values)) <= {"on", "edge", "off"}
+    assert (h["overlap"].sel(trainId=h["train_ids"]) >= ON_FRACTION).all()
     s = hits(423, damnit_root=root, cache_dir=tmp_path / "cache")
-    assert s["kind"] == "static"
+    assert s["kind"] == "static" and s["overlap"] is None
     assert s["summary"]["n_off"] == 20
     assert s["train_ids"].size == 600
     with pytest.raises(LookupError):

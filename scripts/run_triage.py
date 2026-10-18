@@ -439,7 +439,8 @@ def classify_phase(args) -> dict[str, Any]:
             rows.append({"run": r, "kind": "mesh", "block": block,
                          **{k: v[k] for k in ("n_on", "n_edge", "n_off", "n_none",
                                               "ambiguous", "two_classes", "reference",
-                                              "off", "sigma", "high")},
+                                              "off", "sigma", "high",
+                                              "plateau", "plateau_source")},
                          **waxs_check(signals[r][2], out["classes"][r])})  # fmt: skip
             if r == 318:
                 r318 = _r318_against_lowq(out["classes"][r], signals[r][0])
@@ -462,8 +463,11 @@ def classify_phase(args) -> dict[str, Any]:
             if r in by_run.index
         },
         "all_on_as_expected": {
-            r: bool(by_run.loc[r, "n_on"] > 0 and by_run.loc[r, "n_edge"] == 0
-                    and by_run.loc[r, "n_off"] == 0)
+            # the beam never left the droplet: no off train, and at most 1 % of the
+            # trains below a full hit's overlap (§4.4, 2026-10-18)
+            r: bool(by_run.loc[r, "n_on"] > 0 and by_run.loc[r, "n_off"] == 0
+                    and by_run.loc[r, "n_edge"]
+                    <= 0.01 * (by_run.loc[r, "n_on"] + by_run.loc[r, "n_edge"]))
             for r in (309, 310, 311) if r in by_run.index
         },
     }  # fmt: skip

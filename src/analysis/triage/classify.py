@@ -21,7 +21,11 @@ Mesh runs (x = log10 s_t/F_t), measured 2026-10-14 over all 255 mesh runs:
                 The hit cut t_on is the centre of the widest empty band of the pooled
                 rel between the off band and the hits' mode (§4.4's empty band, on the
                 relative axis, where the off peaks of different runs coincide).
-    classes:    off ⇔ rel ≤ 5σ;  on ⇔ rel ≥ t_on;  edge otherwise (partial overlaps)
+    overlap:    f = (10^rel − 1)/(10^P − 1), the train's droplet signal as a fraction
+                of a full hit's; P the shorth midpoint of the run's trains above t_on
+                (the block's on_mode below 20 such trains). §4.4, 2026-10-18.
+    classes:    off ⇔ rel ≤ 5σ;  on ⇔ rel ≥ t_on and f ≥ 0.75;  edge otherwise
+                (partial overlaps)
     one class:  a run with no second class of its own (high − off < 2·5σ) is placed
                 against its nearest two-class neighbour's off level: at the hit level
                 every train is a hit (r309–311: the beam stayed on the droplet), in
@@ -56,6 +60,7 @@ __all__ = [
     "CACHE_DIR",
     "MID_BAND_NM",
     "OFF_SIGMA",
+    "ON_FRACTION",
     "WAXS_RING_NM",
     "block_cut",
     "classify_block",
@@ -86,6 +91,11 @@ RUNNING_TRAINS = 51
 STATIC_WINDOW, STATIC_QUANTILE = 301, 0.75
 #: Hits need a mode beyond this many off-band widths above the off level.
 SEPARATION_BANDS = 2.0
+#: A mesh hit carries at least this fraction of a full hit's droplet signal (user,
+#: 2026-10-18): where the median WAXS of the old hits levels off against f (§4.4).
+ON_FRACTION = 0.75
+#: Fewer trains above t_on than this, and a run's full-hit level is its block's on_mode.
+PLATEAU_MIN_TRAINS = 20
 
 
 def _band_mean(path: Path, group: str, band) -> tuple | None:
@@ -336,9 +346,13 @@ def classify_block(xs: dict[int, np.ndarray]) -> dict:
     neighbour in run number: at their hit level all its trains are hits, inside
     their off band all are off, anywhere else it is ambiguous.
 
+    A train above ``t_on`` is a hit only when it carries `ON_FRACTION` of a full hit's
+    droplet signal; the rest are partial overlaps and join the edge class.
+
     :param xs: run -> per-train log10(s_t/F_t), NaN where a train has no value.
-    :returns: ``classes`` (run -> array of "on"/"edge"/"off"/"none"), ``runs`` (run
-        -> its levels, reference, counts and flags) and ``block`` (the cut).
+    :returns: ``classes`` (run -> array of "on"/"edge"/"off"/"none"), ``overlap``
+        (run -> per-train f, NaN where undecided), ``runs`` (run -> its levels,
+        reference, plateau, counts and flags) and ``block`` (the cut).
     """
     nan = float("nan")
     levels = {}
@@ -372,7 +386,7 @@ def classify_block(xs: dict[int, np.ndarray]) -> dict:
         "runs": sorted(int(r) for r in xs),
         "two_class_runs": len(two),
     }
-    classes, runs = {}, {}
+    classes, overlap, runs = {}, {}, {}
     for r, x in xs.items():
         x = np.asarray(x, dtype=np.float64)
         v = levels[r]
@@ -386,18 +400,28 @@ def classify_block(xs: dict[int, np.ndarray]) -> dict:
             )
         )
         cls = np.full(x.size, "none", dtype="<U4")
+        f = np.full(x.size, nan)
+        plateau, source = nan, None
         finite = np.isfinite(x)
         if not ambiguous:
             d = x - v["off_ref"]
+            cand = finite & (d >= block["t_on"])
+            if cand.sum() >= PLATEAU_MIN_TRAINS:
+                plateau, source = _shorth_midpoint(d[cand]), "run"
+            else:
+                plateau, source = block["on_mode"], "block"
+            f[finite] = (10.0 ** d[finite] - 1) / (10.0**plateau - 1)
             cls[finite & (d <= off_cut)] = "off"
-            cls[finite & (d >= block["t_on"])] = "on"
-            cls[finite & (d > off_cut) & (d < block["t_on"])] = "edge"
-        classes[r] = cls
+            cls[finite & (d > off_cut)] = "edge"
+            cls[cand & (f >= ON_FRACTION)] = "on"
+        classes[r], overlap[r] = cls, f
         runs[r] = v | {
             "ambiguous": bool(ambiguous),
+            "plateau": float(plateau),
+            "plateau_source": source,
             **{f"n_{k}": int((cls == k).sum()) for k in ("on", "edge", "off", "none")},
         }
-    return {"classes": classes, "runs": runs, "block": block}
+    return {"classes": classes, "overlap": overlap, "runs": runs, "block": block}
 
 
 def static_hits(
@@ -524,8 +548,9 @@ def hits(
         is left out of the block and named in ``summary["block_missing"]``.
     :returns: ``train_ids`` (the hits), ``classes`` (a DataArray over every train:
         "on"/"edge"/"off"/"none" for mesh runs, "on"/"off"/"none" for the others),
+        ``overlap`` (a DataArray of f per train for mesh runs, None for the others),
         ``kind`` ("mesh" or "static"), ``block`` and ``summary`` (counts, flags, the
-        block's cut, the WAXS check).
+        plateau, the block's cut, the WAXS check).
     """
     import xarray as xr
 
@@ -560,7 +585,7 @@ def hits(
             xs[int(r)] = _log_ratio(member, "saxs_mid")
         xs = dict(sorted(xs.items()))
         out = classify_block(xs)
-        cls = out["classes"][run]
+        cls, f = out["classes"][run], out["overlap"][run]
         summary = {k: v for k, v in out["runs"][run].items()}
         summary["block_cut"] = {
             k: v for k, v in out["block"].items() if k not in ("runs",)
@@ -571,6 +596,7 @@ def hits(
         x = _log_ratio(signals, "saxs_mid")
         on = static_hits(x)
         cls = np.where(on, "on", np.where(np.isfinite(x), "off", "none")).astype("<U4")
+        f = None
         summary = {f"n_{k}": int((cls == k).sum()) for k in ("on", "off", "none")}
         summary["ambiguous"] = False
         kind = "static"
@@ -583,5 +609,8 @@ def hits(
         "block": block,
         "train_ids": tids[cls == "on"],
         "classes": classes,
+        "overlap": None
+        if f is None
+        else xr.DataArray(f, dims="trainId", coords={"trainId": tids}, name="overlap"),
         "summary": summary,
     }

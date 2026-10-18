@@ -385,7 +385,7 @@ per block: rel = x − m of every two-class run, pooled
 one-class run: placed on its nearest two-class neighbour's off level;
            all on at the hit level (r309–311: beam on the droplet throughout), all off in
            the off band, else ambiguous (r140: 0.6 dex below its neighbours' off level)
-classes  : off ⇔ rel ≤ 5σ;  on ⇔ rel ≥ t_on;  edge otherwise
+classes  : off ⇔ rel ≤ 5σ;  on ⇔ rel ≥ t_on and f ≥ 0.75 (below);  edge otherwise
 ```
 
 Results (`scripts/run_triage_classify_20261013T222916Z.json`):
@@ -411,6 +411,87 @@ Results (`scripts/run_triage_classify_20261013T222916Z.json`):
   248 runs. The edge trains sit at the off level in WAXS (+0.01–0.03 dex), so they are near-misses
   with surface scattering, not partial hits. At attenuators 0.001 and 0.0047 the ring is
   noise-dominated and confirms nothing.
+
+The counts and the r318 check above are from before the overlap cut that follows.
+
+#### Overlap fraction: the on cut (2026-10-18)
+
+`t_on` alone admitted partial overlaps (user, 2026-10-18). The beam that only clips the droplet
+counted as a hit even though its SAXS and WAXS sat far below a real hit's. Measured on r240 and
+then over every mesh run:
+
+- **On r240 the low hits are partial overlaps at the droplet's edge.** Trains 2637199794,
+  …973, 2637200356 and …561 sit at Z ≈ 177.07–177.14, the edge of the droplet in the hexapod
+  frame, 0.45–0.75 dex above off against t_on 0.36. Each one's 1D I(q) is
+  0.06–0.14 × a full hit (2637199770) plus 0.88–1.32 × the off trains' median, rms residual
+  5–15 %. Below q ≈ 0.2 nm⁻¹ the off-droplet background dominates, which gives them their
+  steep low-q shape. In 2D these trains carry a strong anisotropic low-q lobe. The static
+  pixel mask removes nearly all of it: mean over χ / median over χ is 1.02–1.04 below
+  0.15 nm⁻¹. So the lobe is not what makes them hits.
+- **The intensity level cannot locate the centre of the droplet.** A fresh droplet (r240, r289,
+  ~1.2 mm tall by `droplet_fit`) gives a flat mid-q SAXS plateau from ~0.05 mm inside the edge
+  on, while WAXS peaks 0.1–0.2 mm inside and falls towards the interior. In an evaporated one
+  (r78, r120, r200, r295, r320, ~0.4 mm tall) both rise from the edge to the middle, and
+  40–85 % of the old hits lay within 0.1 mm of an off train.
+- **What separates the partial overlaps is the fraction of a full hit.** The cut is put on that
+  fraction.
+
+```
+cand     = trains with rel ≥ t_on (the old on class)
+P        = shorth midpoint of rel over cand, per run          (cand ≥ 20 trains)
+         = the block's on_mode otherwise
+f        = (10^rel − 1) / (10^P − 1)                          # droplet part / full hit's
+on       ⇔ cand and f ≥ 0.75                                  (user, 2026-10-18)
+edge     ⇔ rel > 5σ and not on
+```
+
+f is linear in the droplet's share of the signal, because 10^rel − 1 = (s/F − off)/off. It
+reads 1 for a train at the run's own full-overlap level.
+
+Sweep over 250 mesh runs (2026-10-18; r318 has no `agipd_saxs` in DAMNIT, the silica block is
+ambiguous). The scripts and their CSVs are in `figures/hitfinding/` (gitignored):
+
+| Plateau P | Old hits kept at f ≥ 0.75 | Trains > 0.3 mm inside the droplet dropped | WAXS kept / dropped [dex] |
+|---|---|---|---|
+| 90th percentile of cand | 59 % | 17.7 % | +0.370 / +0.207 |
+| **shorth midpoint of cand** | **72 %** | **9.0 %** | +0.361 / +0.158 |
+| median of cand | 77 % | 8.1 % | +0.356 / +0.132 |
+
+- **The threshold.** The median WAXS rises with f along the line a linear overlap predicts
+  (+0.37 dex at f = 1) and levels off at f ≈ 0.75. Below that, a train holds a visibly partial
+  droplet. Under the old cut, the block's t_on sat at f ≈ 0.04 (0.1 PEG 6K) to 0.12 (0.051)
+  against a 90th-percentile plateau.
+- **The plateau is the shorth, the same robust mode `block_cut` uses.** A high percentile moves
+  P into the plateau's upper tail. The cut then drops full-overlap trains for their scatter: the
+  r240 plateau's robust σ is 0.055 dex, and f = 0.75 sits 0.125 dex below P. The median is
+  pulled down by the partial overlaps it is meant to judge.
+- **Old hits kept, per block (shorth P):** 0.001 71 %, 0.012 68 %, 0.041 89 %, 0.051 70 %,
+  0.1 pure ferritin 85 %, 0.1 PEG 6K 68 %. No run loses all its hits.
+- **r307** is its own block, with a plateau 0.70 dex above off against t_on 0.58. Its f carries
+  little information, and it keeps nearly all of its 46 trains.
+- **Depth is a cross-check, not a cut.** Depth is the hexapod (X, Z) distance of an on train to
+  the nearest off train of its run. Its median rises with f from 0.04 mm (f < 0.25) to
+  0.2 mm (f ≈ 0.85). Columns 0.1 mm apart, the droplet drifting between passes and scans that
+  never leave the droplet on one side make it too coarse to cut on.
+- **Static runs are unchanged.** The beam stays on the droplet, so there is no partial overlap
+  to cut.
+
+**As built** (`scripts/run_triage_classify_20261018T195753Z.json`, 87.6 s on 16 workers):
+
+- **254 mesh runs:** 29 249 hits, 15 224 edge, 161 415 off, with 3 ambiguous runs (r68, r69,
+  r140). Before the overlap cut there were 40 913 hits. The median hit fraction is 6.6 %.
+- **WAXS** puts the hits above off with z ≥ 5 in 246 of 246 runs; before the cut, 229 of 248
+  did. The median shift is 0.357 dex.
+- **Two runs have no hits.** r92 is all off, as before. r139 has 17 edge trains and too few
+  trains above t_on for its own plateau. None of them reaches 0.75 of the block's on_mode.
+- **The fixed cases hold.** r68, r69 and r140 stay ambiguous. r309–311 have no off train, and
+  r309 has one train below 0.75. The script's check was relaxed to allow ≤ 1 % edge trains.
+- **On r240** there are 487 hits and 50 edge trains; before the cut there were 532 and 5. The
+  four low trains above are edge (f 0.05–0.12). The full hit 2637199770 is the run's first
+  train and keeps f 0.77.
+- **The run cannot pass yet.** Six runs (r318, r349, r356, r382, r423, r450) have no
+  `agipd_saxs` in DAMNIT's per-run file today. r318's was rewritten on 2026-10-15. The r318
+  check against lowq_report is null as a result, so the run reports `passed: False`.
 
 **Static runs (and reference runs)** are hits except a droplet out of the beam:
 `static_hits`, x more than 5 robust σ below a running 75th percentile over 301 trains (the keep
