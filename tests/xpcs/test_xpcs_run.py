@@ -321,3 +321,24 @@ def test_the_results_name_the_inputs_that_made_them(pipeline):
         assert f["provenance"].attrs["hit_set_sha256"] == HitSet.of(GOOD).sha256
         assert f.attrs["envelope_sha256"]
     assert len(TRAIN_IDS) == 10
+
+
+def test_the_public_entry_point_returns_a_reader_over_the_run(pipeline, mock_run, geom):
+    from analysis.xpcs import XpcsHits, xpcs_hits
+
+    run, dc = mock_run
+    result = xpcs_hits(
+        pipeline.cfg(),
+        HitSet.of(GOOD),
+        dc=dc,
+        geometry=geom,
+        run_dir=run.path,
+        pool_factory=InlinePool,
+    )
+    assert isinstance(result, XpcsHits)
+    coverage = result.coverage()
+    assert coverage.n_hits == len(GOOD) and coverage.accounted
+    assert coverage.n_usable == len(GOOD)
+    g2 = result.g2(binned=False)
+    assert g2.tau.size == FRAMES - 1
+    assert g2.tau.values[0] == pytest.approx(1 / (1.3e9 / 288))

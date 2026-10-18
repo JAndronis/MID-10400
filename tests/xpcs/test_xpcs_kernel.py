@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 from xpcs_fakes import (
-    load_extra_speckle_module,
+    es_chain,
     make_dense,
     make_flags,
     make_rings,
@@ -136,57 +136,10 @@ def test_a_sum_int32_cannot_hold_is_an_error_not_a_wraparound():
         )
 
 
-def es_chain(trains_dense, trains_flags, rings, sparse=False):
-    """extra-speckle's own loop (calc_xpcs.py, dense path) over a chain of trains."""
-    kernel = load_extra_speckle_module("xpcs/kernel.py")
-    label = np.asarray(rings.label)
-    qmsk = [(label == r).astype("float32") for r in range(R)]
-    qmsk_all = np.any(np.stack(qmsk), axis=0)
-    cls = kernel.TTCFSparseCalculator if sparse else kernel.TTCFCalculator
-    calc = cls((P, N_ENV), "float32", qmsk)
-    img_prev = np.zeros((P, N_ENV), "float32")
-    msk_prev = np.zeros(N_ENV, "float32")
-    outputs = []
-    for dense, flags in zip(trains_dense, trains_flags, strict=True):
-        img = dense.astype("float32")
-        msk = (~any_flagged(flags)).astype("float32")
-        cmsk = msk.copy()
-        img *= qmsk_all
-        if sparse:
-            from scipy.sparse import csr_matrix
-
-            img = csr_matrix(img)
-            if calc.prevflag:
-                cmsk *= msk_prev
-                calc.get_ttcf_off(csr_matrix(img_prev), img, cmsk)
-            else:
-                calc.get_ttcf_off(csr_matrix(cmsk), img, cmsk)
-                calc.prevflag = True
-            calc.get_ttcf_raw(img, cmsk)
-            img_prev = img.toarray()
-        else:
-            if calc.prevflag:
-                cmsk *= msk_prev
-                calc.get_ttcf_off(img_prev, img, cmsk)
-            else:
-                calc.get_ttcf_off(cmsk, img, cmsk)
-                calc.prevflag = True
-            calc.get_ttcf_raw(img, cmsk)
-            img_prev = img.copy()
-        msk_prev = msk
-        outputs.append(
-            {
-                name: getattr(calc, name).copy()
-                for name in ("ttc_on", "ttc_off", "s_on", "s_off", "s_cnt")
-            }
-        )
-    return outputs
-
-
 @pytest.mark.parametrize("sparse", [False, True])
 def test_the_es_kernel_reproduces_extra_speckles_sums_exactly(world, sparse):
     rings, dense, flags, trains = world
-    chain = es_chain(dense, flags, rings, sparse)
+    chain = es_chain(dense, flags, rings, sparse=sparse)
     previous = None
     for train, expected in zip(trains, chain, strict=True):
         sums = train_sums(train, previous, rings, Kernel.ES)

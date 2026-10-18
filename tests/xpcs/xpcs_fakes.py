@@ -119,3 +119,118 @@ class BrokenPool(InlinePool):
         future: Future = Future()
         future.set_exception(BrokenExecutor("worker died"))
         return future
+
+
+def build_results(
+    path,
+    photons: list[TrainPhotons],
+    rings: Rings,
+    *,
+    kernel=None,
+    policy=None,
+    gap: int = 10,
+    failed: dict[int, FrameStatus] | None = None,
+    pattern_step: int = 2,
+):
+    """A results file made from synthetic trains, as the run's merge stage would.
+
+    :param failed: hit trains that gave no photons, by id; they join the hit set.
+    :returns: the open :class:`XpcsHits`.
+    """
+    from types import SimpleNamespace
+
+    from analysis.common.plan import Block
+    from analysis.xpcs.config import Kernel, MaskPolicy
+    from analysis.xpcs.hits import HitSet
+    from analysis.xpcs.kernel import partners, train_sums
+    from analysis.xpcs.result import Prelude, ResultWriter, XpcsHits
+
+    kernel = kernel or Kernel.CLEAN
+    policy = policy or MaskPolicy.ANY_FRAME
+    failed = failed or {}
+    by_id = {t.train_id: t for t in photons}
+    ids = sorted({*by_id, *failed})
+    hits = HitSet.of(ids)
+    status = np.array([failed.get(t, FrameStatus.OK) for t in ids], dtype=np.uint8)
+    sequence = np.array([by_id[t].sequence if t in by_id else -1 for t in ids])
+    pairing = partners(hits.train_ids, status == FrameStatus.OK, sequence, kernel, gap)
+    n_frames = photons[0].n_frames if photons else 0
+    pattern = (200 + pattern_step * np.arange(n_frames)).astype(np.uint32)
+    prelude = Prelude(status, pairing, sequence.astype(np.int32), pattern)
+    with ResultWriter.open_or_create(
+        path,
+        hits=hits,
+        prelude=prelude,
+        rings=rings,
+        merge_hash="m" * 64,
+        extract_hash="e" * 64,
+        attrs={"kernel": kernel.value},
+    ) as out:
+        for row, tid in enumerate(ids):
+            if status[row] != FrameStatus.OK:
+                continue
+            partner = int(pairing.partner[row])
+            sums = train_sums(
+                by_id[tid], by_id[partner] if partner else None, rings, kernel, policy
+            )
+            block = Block(row, (tid,), (1,), (row,))
+            out.write_block(block, SimpleNamespace(sums=[sums]))
+        out.finalise({})
+    return XpcsHits(path)
+
+
+def any_flagged(flags: list[np.ndarray], n_env: int) -> np.ndarray:
+    """Pixels flagged in at least one frame."""
+    out = np.zeros(n_env, bool)
+    for pixels in flags:
+        out[pixels] = True
+    return out
+
+
+def es_chain(trains_dense, trains_flags, rings, sparse=False):
+    """extra-speckle's own loop (calc_xpcs.py, dense path) over a chain of trains."""
+    kernel = load_extra_speckle_module("xpcs/kernel.py")
+    n_frames, n_env = trains_dense[0].shape
+    n_rings = rings.n_rings
+    label = np.asarray(rings.label)
+    qmsk = [(label == r).astype("float32") for r in range(n_rings)]
+    qmsk_all = np.any(np.stack(qmsk), axis=0)
+    cls = kernel.TTCFSparseCalculator if sparse else kernel.TTCFCalculator
+    calc = cls((n_frames, n_env), "float32", qmsk)
+    img_prev = np.zeros((n_frames, n_env), "float32")
+    msk_prev = np.zeros(n_env, "float32")
+    outputs = []
+    for dense, flags in zip(trains_dense, trains_flags, strict=True):
+        img = dense.astype("float32")
+        msk = (~any_flagged(flags, n_env)).astype("float32")
+        cmsk = msk.copy()
+        img *= qmsk_all
+        if sparse:
+            from scipy.sparse import csr_matrix
+
+            img = csr_matrix(img)
+            if calc.prevflag:
+                cmsk *= msk_prev
+                calc.get_ttcf_off(csr_matrix(img_prev), img, cmsk)
+            else:
+                calc.get_ttcf_off(csr_matrix(cmsk), img, cmsk)
+                calc.prevflag = True
+            calc.get_ttcf_raw(img, cmsk)
+            img_prev = img.toarray()
+        else:
+            if calc.prevflag:
+                cmsk *= msk_prev
+                calc.get_ttcf_off(img_prev, img, cmsk)
+            else:
+                calc.get_ttcf_off(cmsk, img, cmsk)
+                calc.prevflag = True
+            calc.get_ttcf_raw(img, cmsk)
+            img_prev = img.copy()
+        msk_prev = msk
+        outputs.append(
+            {
+                name: getattr(calc, name).copy()
+                for name in ("ttc_on", "ttc_off", "s_on", "s_off", "s_cnt")
+            }
+        )
+    return outputs
