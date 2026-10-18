@@ -84,6 +84,10 @@ ES_EDGES_A = (0.0225, 0.035, 0.045, 0.056, 0.065, 0.069, 0.075, 0.086)
 ES_CENTRE = (607.4598, 672.0767)
 ES_SDD_MM = 7531.5962
 ES_TOLERANCE = 1e-6
+#: g2 is a difference of two float32 means near 1, so extra-speckle's own value
+#: carries about one float32 spacing of absolute error: the gate is absolute, 2 eps
+#: (``scripts/xpcs_g1_float32.py``, ``context/xpcs-hits.md`` section 10).
+G2_ABS_TOLERANCE = 2 * float(np.finfo(np.float32).eps)
 GAPS = (1, 2, 5, 10, 50)
 LAGS = (1, 10, 100)
 #: Hit trains used per run (None: every hit). r0493 is the full-size run.
@@ -516,12 +520,13 @@ def stage_g1(ctx: Ctx) -> dict[str, Any]:
     ttcf = ours.ttcf(Averaging.ES, trains, kbar_min=kbar_min)
     gate["TTCF"] = compare(ttcf["raw"].values, es_mean.values)
     ours_g2 = ours.g2(Averaging.ES, trains, kbar_min=kbar_min)["g2"]
-    # rings from a masks file are numbered, so ES's centres are matched by edges
+    # Averaging.ES applies extra-speckle's noisy-ring rule, so both keep the same rings
     es_centres = 0.5 * (np.array(ES_EDGES_A[:-1]) + np.array(ES_EDGES_A[1:]))
     rings = [int(np.argmin(np.abs(es_centres - q))) for q in es_g2.roi_q.values]
-    gate["g2"] = compare(ours_g2.values[rings], es_g2.values)
+    gate["g2"] = compare(ours_g2.values, es_g2.values)
     gate["g2_rings_extra_speckle_kept"] = rings
-    gate["g2_rings_extra_speckle_dropped_as_noisy"] = [
+    gate["g2_rings_kept_agree"] = ours_g2.roi_q.values.astype(int).tolist() == rings
+    gate["g2_rings_dropped_as_noisy"] = [
         r for r in range(ours.n_rings) if r not in rings
     ]
     # the filter the pipeline applied is the kbar one, so ours must not differ in NaNs
@@ -531,12 +536,14 @@ def stage_g1(ctx: Ctx) -> dict[str, Any]:
     )
     worst = max(
         gate[k].get("max_rel_elementwise", np.inf)
-        for k in ("TTCF_raw", "TTCF_off", "kbar", "TTCF", "g2")
+        for k in ("TTCF_raw", "TTCF_off", "kbar", "TTCF")
     )
     gate["worst_max_rel_elementwise"] = worst
     gate["pass"] = bool(
         gate["same_train_ids"]
         and worst <= ES_TOLERANCE
+        and gate["g2"].get("max_abs", np.inf) <= G2_ABS_TOLERANCE
+        and gate["g2_rings_kept_agree"]
         and all(
             gate[k].get("nan_pattern_mismatch", 1) == 0
             for k in ("TTCF_raw", "TTCF_off", "kbar", "TTCF", "g2")

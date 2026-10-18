@@ -40,6 +40,7 @@ from analysis.xpcs.rings import Rings
 __all__ = [
     "BASE_CLOCK_HZ",
     "ES_KBAR_MIN",
+    "ES_NAN_THRESH",
     "SCHEMA",
     "Averaging",
     "Coverage",
@@ -298,6 +299,10 @@ BASE_CLOCK_HZ = 1.3e9 / 288
 #: extra-speckle's k-bar threshold. No source for it has been found in this
 #: repository, so it is offered only in the ``Averaging.ES`` view.
 ES_KBAR_MIN = 3e-3
+#: extra-speckle's ``reduce_ttcf(mask_noisy=True, nan_thresh=0.025)``: a ring is
+#: left out of g2 when more than this share of its (frame, frame) map is NaN. The
+#: pipeline's ``mask_noisy`` defaults to True; offered only in the ES view.
+ES_NAN_THRESH = 0.025
 #: extra-speckle drops the last lags of g2 unless that would leave fewer than 20.
 SKIP_LAST_LAGS = 10
 #: Jackknife blocks (``analysis.triage.xpcs.N_BLOCKS``).
@@ -710,6 +715,7 @@ class XpcsHits:
         skip_last: int = SKIP_LAST_LAGS,
         n_blocks: int = N_BLOCKS,
         kbar_min: float | None = ES_KBAR_MIN,
+        nan_thresh: float | None = ES_NAN_THRESH,
     ) -> xr.Dataset:
         """g2 against lag time, with a jackknife error.
 
@@ -723,7 +729,9 @@ class XpcsHits:
 
         ``Averaging.ES`` is extra-speckle's: the diagonals of the mean
         baseline-subtracted map (``ttcf(Averaging.ES)``), then medians over log
-        bins. It has no error.
+        bins. It has no error. As in ``reduce_ttcf(mask_noisy=True)`` it leaves
+        out a ring whose map has more than ``nan_thresh`` NaN (``None`` keeps
+        every ring); ``roi_q`` then lists the rings kept.
 
         :param skip_last: lags dropped from the end, as extra-speckle does.
         :raises NonUniformPattern: the pulses are not evenly spaced.
@@ -734,7 +742,7 @@ class XpcsHits:
             return self._empty_g2(averaging)
         period = self.period_s
         if averaging is Averaging.ES:
-            return self._g2_es(trains, lags, period, binned, kbar_min)
+            return self._g2_es(trains, lags, period, binned, kbar_min, nan_thresh)
 
         rows, on, den_on, off, den_off, has_off = self._lag_terms(trains, lags)
         groups = (
@@ -813,8 +821,13 @@ class XpcsHits:
         sigma[~np.isfinite(value)] = np.nan
         return value, sigma
 
-    def _g2_es(self, trains, lags, period, binned, kbar_min) -> xr.Dataset:
+    def _g2_es(self, trains, lags, period, binned, kbar_min, nan_thresh) -> xr.Dataset:
         mean = self.ttcf(Averaging.ES, trains, kbar_min)["c2"].values
+        roi_q = self.roi_q
+        if nan_thresh is not None:
+            # reduce_ttcf: np.isnan(ring map).sum() > nan_thresh * map size
+            noisy = np.isnan(mean).sum(axis=(1, 2)) > nan_thresh * mean[0].size
+            mean, roi_q = mean[~noisy], roi_q[~noisy]
         diag = np.stack(
             [np.nanmean(np.diagonal(mean, k, -2, -1), axis=-1) for k in lags],
             axis=-1,
@@ -832,7 +845,7 @@ class XpcsHits:
             tau = np.concatenate([tau[:BIN_SKIP], 0.5 * (edges[:-1] + edges[1:])])
         return xr.Dataset(
             {"g2": (("roi_q", "tau"), diag)},
-            coords={"roi_q": self.roi_q, "tau": tau},
+            coords={"roi_q": roi_q, "tau": tau},
             attrs={"averaging": "es", "period_s": period},
         )
 

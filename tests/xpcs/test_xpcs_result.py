@@ -261,6 +261,46 @@ def test_the_es_g2_is_the_diagonal_mean_of_the_baseline_subtracted_map(world, tm
         )
 
 
+def test_the_es_g2_drops_a_ring_whose_map_is_more_than_2p5_percent_nan(world, tmp_path):
+    """extra-speckle's ``reduce_ttcf(mask_noisy=True)``, in the ES view only."""
+    rings, dense, flags, _ = world
+    label = np.asarray(rings.label)
+    dense = [d.copy() for d in dense]
+    for d in dense:
+        d[:3, label == 0] = 0  # ring 0 is dark in three frames of every train
+    dense[2][4, label == 1] = 0  # ring 1 is dark in one frame of one train only
+    photons = [make_train(t, d, f) for t, d, f in zip(IDS, dense, flags, strict=True)]
+    hits = build_results(tmp_path / "noisy.h5", photons, rings, kernel=Kernel.ES)
+    c2 = hits.ttcf(Averaging.ES)["c2"].values
+    nan_share = np.isnan(c2).mean(axis=(1, 2))
+    assert nan_share[0] > 0.025 and nan_share[1] < 0.025  # the rule has both sides
+
+    g2 = hits.g2(Averaging.ES, binned=False)
+    kept = [r for r in range(R) if r != 0]
+    np.testing.assert_array_equal(g2.roi_q.values, hits.roi_q[kept])
+    unfiltered = hits.g2(Averaging.ES, binned=False, nan_thresh=None)
+    assert unfiltered.sizes["roi_q"] == R
+    np.testing.assert_array_equal(g2.g2.values, unfiltered.g2.values[kept])
+    assert hits.g2(Averaging.POOLED, binned=False).sizes["roi_q"] == R
+
+
+def test_the_nan_threshold_is_a_share_of_the_whole_map_not_a_count(world, tmp_path):
+    rings, dense, flags, _ = world
+    label = np.asarray(rings.label)
+    dense = [d.copy() for d in dense]
+    for d in dense:
+        d[0, label == 0] = 0  # one dark frame: its row and column, 2P-1 of P*P entries
+    photons = [make_train(t, d, f) for t, d, f in zip(IDS, dense, flags, strict=True)]
+    hits = build_results(tmp_path / "edge.h5", photons, rings, kernel=Kernel.ES)
+    share = np.isnan(hits.ttcf(Averaging.ES)["c2"].values[0]).mean()
+    assert share == (2 * P - 1) / P**2
+    assert (
+        hits.g2(Averaging.ES, binned=False, nan_thresh=share * 1.01).sizes["roi_q"] == R
+    )
+    below = hits.g2(Averaging.ES, binned=False, nan_thresh=share * 0.99)
+    assert below.sizes["roi_q"] == R - 1
+
+
 def test_without_the_kbar_filter_no_entry_is_dropped(world, tmp_path):
     rings, _, _, photons = world
     hits = build_results(tmp_path / "es.h5", photons, rings, kernel=Kernel.ES)
