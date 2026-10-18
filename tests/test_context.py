@@ -113,19 +113,39 @@ DIAGNOSTIC_VARIABLES = (
     "xpcs_score",
 )
 
+XPCS_HITS_VARIABLES = (
+    "xpcs_hits_preprocessing",
+    "xpcs_hits_g2",
+    "xpcs_hits_ttcf",
+    "xpcs_hits_overview",
+)
+
 #: The only variables that read detector proc; every other column reads a file
 #: one of them wrote (user, 2026-10-14: one read, the table says who computes).
+#: Each entry is the call its body makes and the ``var#`` dependencies it must
+#: have. The detector passes need none: they read proc alone. The hit-train XPCS
+#: pass needs the whole run's ``agipd_saxs`` (the hit rule is a running
+#: percentile over the run, and a mesh block spans runs) plus the flux, so its
+#: read of proc is a second one, unavoidably, and comes after the first.
 PREPROCESSING = {
-    "agipd_preprocessing": "preprocess",
-    "jungfrau_preprocessing": "preprocess",
+    "agipd_preprocessing": ("preprocess", {}),
+    "jungfrau_preprocessing": ("preprocess", {}),
+    "xpcs_hits_preprocessing": (
+        "preprocess",
+        {
+            "saxs": "agipd_saxs",
+            "xgm": "xgm_intensity",
+            "transmission": "total_transmission",
+        },
+    ),
 }
 
 
 def test_one_variable_per_detector_kind_reads_proc(variables):
     """The preprocessing variables are cluster jobs; the readers wait on them."""
-    for name in PREPROCESSING:
+    for name, (_, dependencies) in PREPROCESSING.items():
         assert variables[name].cluster is True
-        assert variables[name].arg_dependencies() == {}
+        assert variables[name].arg_dependencies() == dependencies, name
     assert variables["agipd_saxs"].arg_dependencies() == {"prep": "agipd_preprocessing"}
     for detector in ("jf1", "jf2"):
         deps = variables[f"jungfrau_waxs_{detector}"].arg_dependencies()
@@ -148,14 +168,19 @@ def test_only_the_preprocessing_variables_call_a_pass():
             node.body[-1].value.func, ast.Attribute
         ) else None  # fmt: skip
         if node.name in PREPROCESSING:
-            assert called == PREPROCESSING[node.name], node.name
+            assert called == PREPROCESSING[node.name][0], node.name
         else:
             assert called not in ("preprocess", "agipd_saxs", "jungfrau_waxs"), (
                 f"{node.name} calls {called}"
             )
 
 
-FRAMES_USED_VARIABLES = ("agipd_frames_used", "jf1_frames_used", "jf2_frames_used")
+FRAMES_USED_VARIABLES = (
+    "agipd_frames_used",
+    "jf1_frames_used",
+    "jf2_frames_used",
+    "xpcs_hits_frames_used",
+)
 
 
 @pytest.mark.parametrize("name", FRAMES_USED_VARIABLES)
@@ -186,7 +211,8 @@ CAMERA_VARIABLES = ("droplet_video", "droplet_first_image")
     INTEGRATION_VARIABLES
     + FRAMES_USED_VARIABLES
     + CAMERA_VARIABLES
-    + DIAGNOSTIC_VARIABLES,
+    + DIAGNOSTIC_VARIABLES
+    + XPCS_HITS_VARIABLES,
 )
 def test_the_context_file_holds_no_heavy_integration_logic(name):
     """DAMNIT execs this file, so nothing defined here can reach a worker.
@@ -262,6 +288,9 @@ def test_no_call_in_the_context_file_passes_overwrite():
         "agipd_saxs",
         "jungfrau_waxs_jf1",
         "jungfrau_waxs_jf2",
+        "xpcs_hits_preprocessing",
+        "xpcs_hits_g2",
+        "xpcs_hits_ttcf",
     ],
 )
 def test_the_integration_wrappers_pass_no_config(name):
@@ -280,3 +309,32 @@ def test_the_integration_wrappers_pass_no_config(name):
     call = function.body[-1].value
     assert isinstance(call, ast.Call)
     assert not call.keywords, f"{name} passes {[k.arg for k in call.keywords]}"
+
+
+def test_the_xpcs_hits_readers_read_the_file_not_proc(variables):
+    """Only the preprocessing variable reads proc; the others wait on it."""
+    prep = {"prep": "xpcs_hits_preprocessing"}
+    assert variables["xpcs_hits_g2"].arg_dependencies() == prep | {"rep": "rep_rate"}
+    assert variables["xpcs_hits_ttcf"].arg_dependencies() == prep
+    assert variables["xpcs_hits_overview"].arg_dependencies() == {
+        "g2": "xpcs_hits_g2",
+        "ttcf": "xpcs_hits_ttcf",
+    }
+
+
+def test_the_old_xpcs_variables_are_untouched(variables):
+    """The hit-train pass is added beside ``xpcs_pipeline``, not in its place."""
+    assert variables["xpcs_ttcf"].arg_dependencies() == {"ds": "xpcs_pipeline"}
+    assert variables["xpcs_pipeline"].cluster is True
+
+
+def test_the_xpcs_hits_titles_do_not_collide_with_the_old_xpcs_ones(variables):
+    """``damnit reprocess --match`` compares title substrings."""
+    new = {variables[n].title for n in (*XPCS_HITS_VARIABLES, "xpcs_hits_frames_used")}
+    old = {
+        v.title
+        for n, v in variables.items()
+        if n.startswith("xpcs_") and not n.startswith("xpcs_hits")
+    }
+    assert not new & old
+    assert all(title.startswith("XPCS hits") for title in new)
