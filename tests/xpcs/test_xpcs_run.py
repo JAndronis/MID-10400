@@ -209,6 +209,25 @@ def test_allow_incomplete_merges_what_there_is_and_marks_the_rest(
     assert (status[[row_of[t] for t in (10000, 10001)]] == FrameStatus.OK).all()
 
 
+def test_a_train_whose_modules_sit_in_different_sequence_files_is_not_chained(
+    pipeline, monkeypatch
+):
+    """Kernel.ES chains by sequence file, so a split train has no single chain."""
+    real = extract.train_sequences
+
+    def split(key):
+        sequences = real(key)
+        if key.train_id_coordinates()[0] == 10005:
+            sequences[3] = sequences[3] + 1
+        return sequences
+
+    monkeypatch.setattr(extract, "train_sequences", split)
+    path = pipeline.run(GOOD)
+    row_of, status = rows(path)
+    assert status[row_of[10005]] == FrameStatus.LABEL_MISMATCH
+    assert (status[[row_of[t] for t in GOOD if t != 10005]] == FrameStatus.OK).all()
+
+
 def test_a_larger_hit_set_extracts_only_the_new_trains(pipeline, monkeypatch):
     first = pipeline.run(GOOD[:4])
     store = pipeline.cfg().store_file

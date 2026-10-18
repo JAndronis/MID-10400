@@ -194,7 +194,8 @@ def init_from_detector(
 def process_block(block: Block) -> ExtractResult:
     """Read and encode one block's trains.
 
-    A train whose labels or frame count disagree with the plan is
+    A train whose labels or frame count disagree with the plan, or whose modules
+    sit in different proc sequence files (``Kernel.ES`` chains by file), is
     ``LABEL_MISMATCH`` and one whose counts are not photons ``DATA_CHECK_FAILED``;
     both are final and carry no photons. Anything else raises, so the block is
     recorded as ``WORKER_ERROR`` and retried.
@@ -221,7 +222,8 @@ def process_block(block: Block) -> ExtractResult:
         sequence = min(sequences.values()) if sequences else -1
         train_ids = key.train_id_coordinates()
         if (
-            train_ids.size != expected
+            len(set(sequences.values())) > 1
+            or train_ids.size != expected
             or data.shape[1] != expected
             or mask.shape[1] != expected
             or not np.all(train_ids == train_id)
