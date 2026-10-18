@@ -373,9 +373,11 @@ def test_split_returns_two_datasets_on_their_own_q_axes(waxs):
     )
 
     assert jf1.attrs["detector"] == "jf1" and jf2.attrs["detector"] == "jf2"
-    np.testing.assert_allclose(jf1.q1, waxs["grids"]["jf1"].q)
-    np.testing.assert_allclose(jf2.q2, waxs["grids"]["jf2"].q)
-    assert "q2" not in jf1.dims and "q1" not in jf2.dims
+    np.testing.assert_allclose(jf1.q, waxs["grids"]["jf1"].q)
+    np.testing.assert_allclose(jf2.q, waxs["grids"]["jf2"].q)
+    assert jf1.q.size == 66 and jf2.q.size == 50
+    assert jf1.detector == "jf1" and jf2.detector == "jf2"
+    assert "q1" not in jf1.dims and "q2" not in jf2.dims
     np.testing.assert_allclose(
         jf1.intensity.values, cell_mean(waxs["grids"]["jf1"]), rtol=1e-6
     )

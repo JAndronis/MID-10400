@@ -317,7 +317,7 @@ def _combine_per_train(
 
 
 def _split(ds: xr.Dataset) -> tuple[xr.Dataset, xr.Dataset]:
-    """The per-detector Datasets of a ``combine=False`` file (jf1 on q1, jf2 on q2)."""
+    """The per-detector Datasets of a ``combine=False`` file (both on ``q``)."""
     parts = []
     for det in WAXS_DETECTORS:
         own = [v for v in ds.data_vars if str(v).endswith(f"_{det}")]
@@ -325,6 +325,8 @@ def _split(ds: xr.Dataset) -> tuple[xr.Dataset, xr.Dataset]:
         part = ds.drop_vars([v for v in other if v not in own])
         part = part.rename({v: str(v).removesuffix(f"_{det}") for v in own})
         part = part.drop_dims("q2" if det == "jf1" else "q1")
+        part = part.rename({"q1" if det == "jf1" else "q2": "q"})
+        part = part.assign_coords(detector=det)
         part.attrs["detector"] = det
         part.attrs["units"] = ds.attrs[f"units_{det}"]
         parts.append(part)
@@ -353,7 +355,8 @@ def waxs_run(
     Reads DAMNIT's ``jungfrau_waxs_jf1`` and ``jungfrau_waxs_jf2`` grids and averages
     each over the lit memory cells a train has. With ``combine=True`` (default) returns
     one Dataset over (trainId, q); with ``combine=False`` a tuple ``(jf1, jf2)`` of
-    Datasets, over (trainId, q1) and (trainId, q2) respectively.
+    Datasets over (trainId, q), each on its own q axis, with the detector as the scalar
+    coordinate and attribute ``detector``.
 
     ``intensity``
         I(q) averaged over the lit cells that hold a frame, in the grid's ``units``
