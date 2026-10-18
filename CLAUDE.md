@@ -20,6 +20,7 @@ CPU and pool helpers, the frame-table writer), `analysis.saxs` (AGIPD) and `anal
 | `context/performance.md` | Running on the cluster (`allcpu`, `<pkg>.common.slurm`, script flags), pyFAI 2026.5 → 2026.9, virtual CXI files (open task 19) |
 | `context/diagnostics.md` | `<pkg>.diagnostics` (frame accounting, flux, SVD, χ², XGM scatter, cell–XGM correlation), per-run XPCS SNR, droplet hits, `*_frames_used` cells, droplet videos, the DAMNIT layout (open task 20) |
 | `context/xpcs-quality.md` | XPCS quality from photon statistics: per-frame photon histograms per ring (`<pkg>.saxs.photon_stats`), single-frame contrast, shape checks (open task 20) |
+| `context/xpcs-hits.md` | The hit-train XPCS pass (`<pkg>.xpcs`): `HitSet`, the extract-once photon store, partner policy, the `XpcsHits` reader, the P0 facts (sequence boundaries, mask, pulse clock, bytes per train), what P4–P6 still need |
 | `../transfer_context/` (outside the repo, read-only) | Lessons from p010646 (MID, 2026-10): JUNGFRAU photonising, DAMNIT context hazards and testing, SLURM, caching, camera videos, fxs/XCCA. Compared with this repository on 2026-10-13; what applies is merged below (pitfalls 23–31, open tasks 17–21). Its numbers are p010646 measurements, not ours |
 
 Adjust the paths above if the context files live elsewhere.
