@@ -481,6 +481,91 @@ def jungfrau_waxs_combined(
     return damnit.combined_curve(jf1, jf2)
 
 
+# ── Hit-train XPCS (analysis.xpcs; context/xpcs-hits.md) ───────────────────────
+# Beside xpcs_pipeline, not in its place: the old columns are untouched. One
+# variable reads proc, once more: the hit rule needs this run's whole agipd_saxs
+# (and the flux), so the XPCS pass cannot share the first read. It extracts the
+# hit trains into usr/cached_files/agipd_ring_photons (which outlives proc) and
+# writes their exact sums to usr/cached_files/xpcs_hits. Every other column reads
+# that file. The hits come from DAMNIT's values in memory, because inside the
+# cluster job this run's agipd_saxs is not in the per-run file until the job ends
+# (as photon_statistics, below). A complete run is answered from its files
+# without writing (CLAUDE.md pitfall 26).
+#
+# Thin on purpose, like the AGIPD ones above.
+
+
+@Variable("XPCS hits preprocessing", data="proc", cluster=True, tags=["offline"])
+def xpcs_hits_preprocessing(
+    run,
+    saxs: "var#agipd_saxs",
+    xgm: "var#xgm_intensity",
+    transmission: "var#total_transmission",
+    proposal: "meta#proposal",
+    run_no: "meta#run_number",
+):
+    """Extract the droplet-hit trains and write their sums; a status, not a result.
+
+    Green when every hit is usable, amber when some are final non-OK, red when
+    the pass failed, grey when the run has no hit. `run` is unused.
+    """
+    from analysis.xpcs import damnit
+
+    return damnit.preprocess(proposal, run_no, saxs, xgm, transmission)
+
+
+@Variable("XPCS hits g2", data="proc", cluster=True, tags=["offline"])
+def xpcs_hits_g2(
+    run,
+    prep: "var#xpcs_hits_preprocessing",
+    proposal: "meta#proposal",
+    run_no: "meta#run_number",
+    rep: "var#rep_rate" = None,
+):
+    """Pooled g2, baseline and c2 per ring with jackknife errors, from the file.
+
+    `rep` is DAMNIT's rep rate [MHz]: a pulse pattern that implies another rate
+    refuses to make a lag axis.
+    """
+    from analysis.xpcs import damnit
+
+    return damnit.g2_from_file(proposal, run_no, rep)
+
+
+@Variable("XPCS hits TTCF", data="proc", cluster=True, tags=["offline"])
+def xpcs_hits_ttcf(
+    run,
+    prep: "var#xpcs_hits_preprocessing",
+    proposal: "meta#proposal",
+    run_no: "meta#run_number",
+):
+    """The pooled two-time maps raw, off and c2 per ring, from the file."""
+    from analysis.xpcs import damnit
+
+    return damnit.ttcf_from_file(proposal, run_no)
+
+
+@Variable("XPCS hits overview", data="proc", cluster=True, tags=["offline"])
+def xpcs_hits_overview(run, g2: "var#xpcs_hits_g2", ttcf: "var#xpcs_hits_ttcf"):
+    from analysis.xpcs import damnit
+
+    return damnit.overview_figure(g2, ttcf)
+
+
+@Variable("XPCS hits frames used", data="proc", tags=["diagnostics"])
+def xpcs_hits_frames_used(run, proposal: "meta#proposal", run_no: "meta#run_number"):
+    """Hits used over all hits of the XPCS results file, coloured by status.
+
+    Like the other frames-used cells there is no var# on the pass, so asking for
+    it cannot relaunch the cluster job; refresh it after a reprocess with
+    `damnit reprocess --match "frames used"`. Grey: the run has no hit. Skipped
+    when the pass has not written the run.
+    """
+    from analysis.xpcs import damnit
+
+    return damnit.frames_used(proposal, run_no)
+
+
 # ── Diagnostics (analysis.diagnostics; context/diagnostics.md) ──────────────────
 # Frames used per detector, read straight from each pass's frame table. There is
 # deliberately no var# dependency on the pass: asking for one of these never

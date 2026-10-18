@@ -1,0 +1,167 @@
+{
+  "generated_at": "2026-10-18T22:30:36.705663+00:00",
+  "host": "max-wn097.desy.de",
+  "platform": "Linux-5.14.0-687.58.1.el9_8.x86_64-x86_64-with-glibc2.34",
+  "python": "3.12.11",
+  "git_commit": "00f6c09da762aa70f59d8f47faff277b14af7008",
+  "thread_env": {
+    "EXTRA_NUM_THREADS": "1",
+    "OMP_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1"
+  },
+  "proposal": 10400,
+  "run": 493,
+  "out_root": "/gpfs/exfel/exp/MID/202601/p010400/scratch/xpcs_hits_p5/out",
+  "workdir": "/gpfs/exfel/exp/MID/202601/p010400/scratch/xpcs_hits_p5/ctx/r0493",
+  "analysis_package": "/gpfs/exfel/u/usr/MID/202601/p010400/Shared/IA/MID-10400/.claude/worktrees/xpcs-hit-trains/src/analysis/__init__.py",
+  "ctx": {
+    "returncode": 0,
+    "error_info": null,
+    "n_variables": 53,
+    "xpcs_hits_variables": {
+      "xpcs_hits_frames_used": {
+        "title": "XPCS hits frames used",
+        "cluster": false,
+        "data": "RunData.PROC"
+      },
+      "xpcs_hits_g2": {
+        "title": "XPCS hits g2",
+        "cluster": true,
+        "data": "RunData.PROC"
+      },
+      "xpcs_hits_overview": {
+        "title": "XPCS hits overview",
+        "cluster": true,
+        "data": "RunData.PROC"
+      },
+      "xpcs_hits_preprocessing": {
+        "title": "XPCS hits preprocessing",
+        "cluster": true,
+        "data": "RunData.PROC"
+      },
+      "xpcs_hits_ttcf": {
+        "title": "XPCS hits TTCF",
+        "cluster": true,
+        "data": "RunData.PROC"
+      }
+    },
+    "old_xpcs_pipeline_present": true,
+    "seconds": 7.557708178006578
+  },
+  "exec_overview": {
+    "argv": [
+      "exec",
+      "10400",
+      "493",
+      "all",
+      "--cluster-job",
+      "--var",
+      "xpcs_hits_overview"
+    ],
+    "returncode": 0,
+    "seconds": 724.6422128689592,
+    "log": "/gpfs/exfel/exp/MID/202601/p010400/scratch/xpcs_hits_p5/ctx/r0493/exec_xpcs_hits_overview.log",
+    "errors": [],
+    "computed": [
+      "agipd_preprocessing in 2.027 s",
+      "xtd1_transmission in 1.390 s",
+      "opt_transmission in 1.100 s",
+      "rep_rate in 1.750 s",
+      "xgm_intensity in 0.207 s",
+      "xtd6_transmission in 0.405 s",
+      "agipd_saxs in 11.128 s",
+      "total_transmission in 0.001 s",
+      "xpcs_hits_preprocessing in 638.627 s",
+      "xpcs_hits_g2 in 19.618 s",
+      "xpcs_hits_ttcf in 18.017 s",
+      "xpcs_hits_overview in 0.420 s"
+    ],
+    "skipped": []
+  },
+  "exec_frames_used": {
+    "argv": [
+      "exec",
+      "10400",
+      "493",
+      "all",
+      "--var",
+      "xpcs_hits_frames_used"
+    ],
+    "returncode": 0,
+    "seconds": 5.343416867021006,
+    "log": "/gpfs/exfel/exp/MID/202601/p010400/scratch/xpcs_hits_p5/ctx/r0493/exec_xpcs_hits_frames_used.log",
+    "errors": [],
+    "computed": [
+      "xpcs_hits_frames_used in 0.005 s"
+    ],
+    "skipped": []
+  },
+  "cells": {
+    "p10400_r493.hzq3bobb.ready.h5:xpcs_hits_frames_used": {
+      "file": "p10400_r493.hzq3bobb.ready.h5",
+      "dtype": "object",
+      "shape": [],
+      "text": "{\"n_hits\": 2994, \"n_usable\": 2994, \"n_with_baseline\": 2989, \"by_status\": {\"OK\": 2994}, \"by_pairing\": {\"PAIRED\": 2989, \"FIRST_HIT\": 1, \"GAP_TOO_LARGE\": 4}, \"accounted\": true, \"path\": \"/gpfs/exfel/exp/MID/202601/p010400/scratch/xpcs_hits_p5/out/xpcs_hits/r0493/xpcs_hits.h5\"}"
+    },
+    "p10400_r493.ma810h23.ready.h5:agipd_saxs": {
+      "file": "p10400_r493.ma810h23.ready.h5",
+      "_damnit_objtype": "dataarray"
+    },
+    "p10400_r493.ma810h23.ready.h5:rep_rate": {
+      "file": "p10400_r493.ma810h23.ready.h5",
+      "dtype": "float64",
+      "shape": []
+    },
+    "p10400_r493.ma810h23.ready.h5:xpcs_hits_g2": {
+      "file": "p10400_r493.ma810h23.ready.h5",
+      "_damnit_objtype": "dataset",
+      "averaging": "pooled",
+      "binned": [
+        1
+      ],
+      "coverage": "2994 hits: 2994 usable, 2989 with a baseline; status {'OK': 2994}; pairing {'PAIRED': 2989, 'FIRST_HIT': 1, 'GAP_TOO_LARGE': 4}",
+      "n_trains": [
+        2994
+      ],
+      "n_with_baseline": [
+        2989
+      ],
+      "period_s": [
+        4.4307692307692306e-07
+      ]
+    },
+    "p10400_r493.ma810h23.ready.h5:xpcs_hits_overview": {
+      "file": "p10400_r493.ma810h23.ready.h5",
+      "dtype": "uint8",
+      "shape": [
+        420,
+        1100,
+        4
+      ],
+      "_damnit_objtype": "image"
+    },
+    "p10400_r493.ma810h23.ready.h5:xpcs_hits_preprocessing": {
+      "file": "p10400_r493.ma810h23.ready.h5",
+      "dtype": "object",
+      "shape": [],
+      "text": "{\"n_hits\": 2994, \"n_usable\": 2994, \"n_with_baseline\": 2989, \"by_status\": {\"OK\": 2994}, \"by_pairing\": {\"PAIRED\": 2989, \"FIRST_HIT\": 1, \"GAP_TOO_LARGE\": 4}, \"accounted\": true, \"path\": \"/gpfs/exfel/exp/MID/202601/p010400/scratch/xpcs_hits_p5/out/xpcs_hits/r0493/xpcs_hits.h5\", \"hit_set_sha256\": \"7decabb6cfd70b7069ba176d07b1b07a8896a77356dc5a4fd59c930837197b7f\", \"source\": \"analysis.triage.classify.hits kind=static\"}"
+    },
+    "p10400_r493.ma810h23.ready.h5:xpcs_hits_ttcf": {
+      "file": "p10400_r493.ma810h23.ready.h5",
+      "_damnit_objtype": "dataset",
+      "averaging": "pooled",
+      "coverage": "2994 hits: 2994 usable, 2989 with a baseline; status {'OK': 2994}; pairing {'PAIRED': 2989, 'FIRST_HIT': 1, 'GAP_TOO_LARGE': 4}",
+      "n_trains": [
+        2994
+      ],
+      "n_with_baseline": [
+        2989
+      ]
+    }
+  },
+  "outputs": [
+    "agipd_ring_photons/r0493/agipd_ring_photons.h5",
+    "xpcs_hits/r0493/xpcs_hits.h5"
+  ]
+}
