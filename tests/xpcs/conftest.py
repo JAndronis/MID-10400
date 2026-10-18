@@ -55,6 +55,8 @@ def cfg(saxs_cfg) -> XpcsConfig:
     return XpcsConfig(
         saxs=saxs_cfg,
         ring_edges_nm=TEST_EDGES_NM,
+        # The mock hits sit two ids apart; the production default is 1.
+        max_partner_gap=10,
         envelope_margin_mm=5.0,
         n_workers=2,
         trains_per_block=2,

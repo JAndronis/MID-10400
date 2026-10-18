@@ -106,8 +106,10 @@ class XpcsConfig:
     ring_masks_file: str | None = None
     kernel: Kernel = Kernel.CLEAN
     mask_policy: MaskPolicy = MaskPolicy.ANY_FRAME
-    #: Largest train-id distance to a partner. Provisional until benchmark B4.
-    max_partner_gap: int = 10
+    #: Largest train-id distance to a partner. 1 (the previous train only): B4
+    #: found the pooled baseline drifts with the gap on every PEG 6K reference run
+    #: (``context/xpcs-hits.md`` section 10).
+    max_partner_gap: int = 1
     #: Envelope dilation. Provisional; it only has to exceed the beam-centre
     #: disagreement of open task 4 (4.0 mm) for a later move of the centre to
     #: stay inside the store.

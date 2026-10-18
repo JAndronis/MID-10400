@@ -26,6 +26,11 @@ def test_the_ring_edges_are_the_triage_rois():
     assert list(RING_EDGES_NM[1:]) == list(pairs[:, 1])
 
 
+def test_the_default_partner_is_the_previous_train_only(saxs_cfg):
+    """Benchmark B4: the baseline drifts with the gap, so only gap 1 is unbiased."""
+    assert XpcsConfig(saxs=saxs_cfg).max_partner_gap == 1
+
+
 def test_the_state_is_pickled_by_name_and_a_positional_one_is_refused(cfg):
     state = cfg.__getstate__()
     assert isinstance(state, dict)
