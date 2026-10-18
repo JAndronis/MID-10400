@@ -1,0 +1,71 @@
+"""Fixtures for the hit-train XPCS tests.
+
+The geometry is EXtra-geom's idealised AGIPD-1M, as in ``tests/saxs``, so
+nothing here needs Maxwell, a CrystFEL file or data. The proc-like mock run is
+``tests/saxs/mockrun.py``'s, reached by path because test directories here are
+not packages.
+"""
+
+from __future__ import annotations
+
+import sys
+from dataclasses import replace
+from pathlib import Path
+
+import pytest
+
+pytest.importorskip("extra_geom", reason="the XPCS pass needs EXtra-geom")
+pytest.importorskip("pyFAI", reason="the XPCS pass needs pyFAI")
+
+sys.path.insert(0, str(Path(__file__).parents[1] / "saxs"))
+
+from extra_geom import AGIPD_1MGeometry  # noqa: E402
+
+from analysis.saxs.config import AgipdSaxsConfig  # noqa: E402
+from analysis.xpcs.config import XpcsConfig  # noqa: E402
+
+QUAD_POS = [(-525, 625), (-550, -10), (520, -160), (542.5, 475)]
+
+#: Two rings, 77 767 and 182 594 pixels of the idealised geometry.
+TEST_EDGES_NM = (0.2, 0.3, 0.45)
+
+
+@pytest.fixture(scope="session")
+def geom() -> AGIPD_1MGeometry:
+    return AGIPD_1MGeometry.from_quad_positions(quad_pos=QUAD_POS)
+
+
+@pytest.fixture(scope="session")
+def saxs_cfg() -> AgipdSaxsConfig:
+    """No input files, so ``config_hash`` has nothing to digest on disk."""
+    return AgipdSaxsConfig(
+        proposal=10400,
+        run=423,
+        geometry_file=None,
+        pixel_mask_file=None,
+        beam_center_px=None,
+        beam_center_py=None,
+        photon_stats_root="/nonexistent/agipd_photon_stats",
+    )
+
+
+@pytest.fixture(scope="session")
+def cfg(saxs_cfg) -> XpcsConfig:
+    return XpcsConfig(
+        saxs=saxs_cfg,
+        ring_edges_nm=TEST_EDGES_NM,
+        envelope_margin_mm=5.0,
+        n_workers=2,
+        trains_per_block=2,
+        output_root="/nonexistent/xpcs",
+    )
+
+
+@pytest.fixture
+def with_config(cfg):
+    """``cfg`` with some fields replaced."""
+
+    def make(**changes) -> XpcsConfig:
+        return replace(cfg, **changes)
+
+    return make
