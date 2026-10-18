@@ -52,7 +52,14 @@ MERGE_SCHEMA = 1
 
 #: Fields no hash covers: they change how the pass runs, not what it stores.
 XPCS_OPERATIONAL_FIELDS: frozenset[str] = frozenset(
-    {"n_workers", "trains_per_block", "output_root", "allow_incomplete", "overwrite"}
+    {
+        "n_workers",
+        "trains_per_block",
+        "flag_base_trains",
+        "output_root",
+        "allow_incomplete",
+        "overwrite",
+    }
 )
 
 
@@ -107,6 +114,9 @@ class XpcsConfig:
     # ── scheduling and output (operational) ──────────
     n_workers: int | None = None
     trains_per_block: int = 8
+    #: Trains whose masks give the photon store's flag base. Any base is
+    #: lossless, so this only sets how small the file is.
+    flag_base_trains: int = 5
     output_root: str = DEFAULT_XPCS_ROOT
     allow_incomplete: bool = False
     overwrite: bool = False
@@ -140,6 +150,10 @@ class XpcsConfig:
             raise ValueError(
                 "envelope_margin_mm must not be negative, got "
                 f"{self.envelope_margin_mm}"
+            )
+        if self.flag_base_trains < 1:
+            raise ValueError(
+                f"flag_base_trains must be positive, got {self.flag_base_trains}"
             )
         if self.trains_per_block < 1:
             raise ValueError(
