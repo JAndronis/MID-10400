@@ -212,6 +212,11 @@ class ResultWriter:
         self._f["hits/status"][...] = current
         self._f.flush()
 
+    def unfinished(self) -> int:
+        """Rows left ``NOT_PROCESSED`` or ``WORKER_ERROR``."""
+        status = self._f["hits/status"][()]
+        return int(np.isin(status, [int(code) for code in UNFINISHED]).sum())
+
     def status_summary(self) -> dict[str, int]:
         status = self._f["hits/status"][()]
         return {

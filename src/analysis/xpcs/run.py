@@ -418,3 +418,9 @@ def _merge(
             }
             | locks[output_path].provenance()
         )
+        unfinished, summary = out.unfinished(), out.status_summary()
+    if unfinished and not cfg.allow_incomplete:
+        raise IncompleteRun(
+            f"r{cfg.run}: {unfinished} hit train(s) could not be summed; a rerun "
+            f"retries them (status {summary})"
+        )

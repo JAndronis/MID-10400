@@ -342,3 +342,38 @@ def test_the_public_entry_point_returns_a_reader_over_the_run(pipeline, mock_run
     g2 = result.g2(binned=False)
     assert g2.tau.size == FRAMES - 1
     assert g2.tau.values[0] == pytest.approx(1 / (1.3e9 / 288))
+
+
+def test_a_pool_that_dies_mid_extraction_leaves_a_store_the_next_run_completes(
+    pipeline,
+):
+    from concurrent.futures import BrokenExecutor
+
+    with pytest.raises(BrokenExecutor):
+        pipeline.run(GOOD, pool=BrokenPool)
+    assert not pipeline.cfg().output_file.exists()
+    path = pipeline.run(GOOD)
+    _, status = rows(path)
+    assert (status == FrameStatus.OK).all()
+
+
+def test_a_block_that_fails_to_sum_is_reported_and_retried(pipeline, monkeypatch):
+    from analysis.xpcs import merge
+
+    real = merge.process_block
+    state = {"fail": True}
+
+    def flaky(block):
+        if state["fail"] and 10006 in block.train_ids:
+            raise OSError("the store went away")
+        return real(block)
+
+    monkeypatch.setattr(merge, "process_block", flaky)
+    with pytest.raises(IncompleteRun, match="could not be summed"):
+        pipeline.run(GOOD)
+    path = pipeline.cfg().output_file
+    row_of, status = rows(path)
+    assert status[row_of[10006]] == FrameStatus.WORKER_ERROR
+    state["fail"] = False
+    pipeline.run(GOOD)
+    assert (rows(path)[1] == FrameStatus.OK).all()
