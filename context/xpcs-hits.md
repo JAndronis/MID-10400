@@ -7,8 +7,8 @@ the droplet-hit trains. Read `CLAUDE.md` first (pitfalls 4, 8, 12, 17, 20, 26, 2
 
 **State (2026-10-18, branch `claude/xpcs-hit-trains`).** P0 (facts), P1 (config, rings,
 kernel, partners), P2 (store, extract, run) and P3 (reader) are implemented and tested on a mock
-run: `tests/xpcs`, 139 tests, none needing Maxwell or data. **Not done:** P4 (acceptance on
-real runs against extra-speckle), P5 (the DAMNIT wrappers, `analysis.xpcs.damnit`,
+run: `tests/xpcs`, 140 tests, none needing Maxwell or data. P4 (node acceptance,
+`scripts/xpcs_hits_acceptance.py`) ran on 2026-10-18: §10. **Not done:** P5 (the DAMNIT wrappers, `analysis.xpcs.damnit`,
 `tests/test_context.py`, `install_context.py`), P6 (moving `analysis.triage.xpcs` onto the
 reader and retiring `xpcs_pipeline`). `src/amore/context.py` is untouched.
 
@@ -267,16 +267,64 @@ It checks nothing against extra-speckle: that is P4.
 
 ## 9. Open
 
-- **P4** (needs a node and the user's go): G1 `Kernel.ES` + `Averaging.ES` against
-  `xpcs_offline(selected_trains=…)` on the same rings (their qmsk through `ring_masks_file`);
-  G2 per-pixel attribution of every ring difference (9.04 vs 9.000 keV, 7.531 vs 7.5315962 m,
-  seams, outlier mask, edges); G3 CLEAN against ES c2; G4 8 vs 36 workers; G5 rerun writes
-  nothing; G6 sizes against an agreed budget. Benchmarks B2 (extract, `trains_per_block`),
-  B3 (`train_sums`) and B4 (`max_partner_gap`, now 10) are unmeasured.
+See §10 for what P4 settled and left open.
+
 - **P5**: `analysis.xpcs.damnit` (the only caller of the classifier), `xpcs_hits_*` variables,
   the third `PREPROCESSING` entry in `tests/test_context.py`, ctxrunner on a scratch copy
   (pitfall 25), `install_context.py`.
 - **P6**: `triage.xpcs.measure_run`, `inventory` and `xpcs_score` onto `read()`. Until then
   `analysis.triage.xpcs.ROI_EDGES_A` and `RING_EDGES_NM` are two lists; a test pins them equal.
-- The sequence-agreement assumption (§7), the 5 mm margin and the gap of 10 are provisional.
-- `g2()` over a few thousand trains has been tested for correctness on small inputs only.
+
+## 10. P4, node acceptance (2026-10-18)
+
+`scripts/xpcs_hits_acceptance.py` (not unit-tested; one JSON per run beside it). Jobs 25337632
+(preempted and requeued, rerun as 25337789: hits, main, G1, G2), 25337825 (G1 to A1 on r0423),
+25337869 (G1 rerun after fixing the script's ring mapping), 25337826 to 25337829 (r0493 to r0496).
+Everything is under `scratch/xpcs_hits_acceptance/r####/`; **nothing was written to
+`usr/cached_files`** (the store's identity is its envelope hash and a store is never replaced, so
+a provisional 5 mm margin does not belong in the product directory yet). extra-speckle ran in a
+separate process (`es-child`), pitfall 29.
+
+**Hit sets are provisional.** `analysis.triage.classify.hits` as committed in this worktree.
+r0493 to r0496: DAMNIT's signals (2994, 2934, 2955, 2972 hits; the first 400 are used for
+r0494 to r0496, all 2994 for r0493). **r0423 has no usable signals**: DAMNIT's file has no
+`agipd_saxs` (reprocess under way) and `scratch/run_triage/signals_r0423_c42659e9af48.nc`
+(created 2026-10-18 21:04 UTC) holds 200 train ids 2637862276 to 2637862475, none of them trains
+of r0423 (2637695397 to 2637698397). So r0423 uses 200 consecutive OK trains from the frame table
+(`agipd_saxs_before_reprocess_20261014T233033Z.h5`) as a stand-in: G1, G2, G4 to G6, A1 do not
+depend on what a hit is. **r0450 has no signals cache and no DAMNIT `agipd_saxs`: skipped.**
+The cache for r0423 is wrong and should be rebuilt by whoever owns it.
+
+| Gate | Result |
+|---|---|
+| **G1** Kernel.ES + Averaging.ES on extra-speckle's ring masks (`all_masks.npy`), r0423, 200 trains | **Partly.** Same train ids, pair status as expected (199 PAIRED, 1 FIRST_HIT), NaN patterns identical. Max elementwise relative difference: `TTCF_raw` 2.7e-7, `TTCF_off` 2.5e-7, `kbar` 5.9e-8, `TTCF` (mean raw) **8.9e-7** (passes the 1e-6 gate, narrowly), first lag 443.08 ns on both. `g2` (c2, binned, the six rings extra-speckle kept): max absolute difference 6.7e-8 but max elementwise relative **5.7e-4** (4.8e-6 of the largest value), so the literal 1e-6 gate **fails for g2**: g2 is a difference of two means near 1, and extra-speckle holds both in float32 (eps 6e-8). That the float32 storage is the whole cause is **not proven**: casting our means to float32 first leaves 1e-8 absolute differences |
+| G1, noisy rings | extra-speckle's `reduce_ttcf(mask_noisy=True)` drops a ring whose TTCF has more than 2.5 % NaN (ring 6, 0.075 to 0.086 Å⁻¹ here). `XpcsHits.g2(Averaging.ES)` has no such rule and returns seven rings. Compared on the six common ones. Open (§10 problems) |
+| **G2** ring pixels, extra-speckle against ours | 783 124 against 779 561 ring pixels, **28 151 differ, 0 unexplained**: rebuilt from extra-speckle's parameters, the rings are reproduced exactly (0 pixels, max dq 9e-8 nm⁻¹). Photon energy 9.000 against 9.04 keV: 27 656 pixels. sdd 7.5315962 against 7.531 m: 495. 12.3984 against pyFAI's hc: 11 pixels move at that step and none of the final differences is left to it. Beam centre (rounded), open against half-open edges, the pixel mask file (identical), ASIC seams (already inside the pixel mask in every ring): 0. DAMNIT's real call passes `geom=None` (encoder geometry): its rings differ from the explicit `geom_latest.geom` ones in 689 pixels (max dq 3.2e-4 nm⁻¹) and from ours in 27 472 |
+| **G3** CLEAN against extra-speckle c2 at lags 1, 10, 100 per ring | r0423, identical rings, against the real `xpcs_offline`: rings 0 to 5 within 0.6 sigma of CLEAN; ring 6 (0.75 to 0.86 nm⁻¹) differs by up to 6.7 sigma (extra-speckle c2 0.03 to 0.07 against about 0 for CLEAN; extra-speckle drops this ring itself as noisy). Not the chain's first train: leaving it out changes nothing. r0493 to r0496 (own geometry, against Kernel.ES on the same store): rms z 0.56, 0.42, 0.52, 0.60, **max |z| 1.0 to 1.5**, no row above 2 sigma |
+| **G4** workers and blocks, 96 trains of r0423 | **Pass.** 36 and 8 workers, blocks of 8, 1 and 3: the sha256 of `sums/*`, of `hits/ pattern/ rings/` and of the store's `trains/*` are identical in all four |
+| **G5** rerun | **Pass** on r0423, r0493 to r0496: inode, mtime and sha256 of store and results unchanged; 0.5 to 0.7 s |
+| **G6** | extract 14.4 trains/s at 36 workers on r0493 (0.0695 s a train, 2994 trains); 0.43 to 0.49 s a train on 200 to 400 trains, where 25 to 50 blocks cannot keep 36 workers busy. Worker core-seconds a train: 0.32 read data, 0.57 read mask, 0.65 encode on r0493 (r0423: 0.74, 1.4, 1.85). **The parent's serial block writes took 167 s of r0493's 208 s extraction** (56 ms a train): the bottleneck, not the reads. Kernel 244 core-ms a train on r0493 (537 on r0423 and 410 in the smoke test), 65 s for 2994 trains at 36 workers. Store 2.29 MB a train on r0493 (1.79 on r0423), results 0.23 MB: **25.2 GB per 10 000 hits** (20.0 on r0423). `g2()` over 2994 trains 9.3 s (pooled, binned or not), `ttcf` 8.4 s |
+| **B4** partner gap (pooled baseline against gap 1, jackknife over 50 blocks, rms z over ring and lags 1 to 60) | r0493 (1150 trains): gap 2 **2.2**, 5 3.3, 10 3.3, 50 3.9; the mean baseline shift at gap 2 is 1.1e-3, as large as c2 itself (about 3e-3). r0494 to r0496 (350 trains): gap 2 1.06 to 1.15, 5 1.3 to 1.9, 10 1.6 to 2.1, 50 2.6 to 3.3. r0423 stand-in (150 trains): about 1.0 at every gap to 50. **Recommended `max_partner_gap` = 1** (the previous train only); 10, the current default, is not supported: the baseline moves by more than its error on every PEG 6K reference run |
+| **E3** our g2 against `analysis.triage.xpcs` on DAMNIT's `xpcs_ttcf`, same trains | max |z| over lags 1 to 10 below 1.0 for every ring of r0493 (400 or 2994 shared trains), below 0.8 for r0494 to r0496, 0.3 on r0423 (200); ring 6 of r0423 1.6. rms z over all lags 0.12 to 0.83. The two estimators and the geometries differ (G2), and agree within their errors |
+| **A1** store against `agipd_photon_stats` (r0423 and r0493, 100 trains, 15 500 frames each) | **Exact**: s1 and n_valid equal in every frame and ring (max difference 0), on the file's own 17 ring labels. The store's envelope holds every ring pixel |
+
+JSONs: `scripts/xpcs_hits_acceptance_r0423_20261018T220056Z.json` (G2 to A1; its `g1` is
+superseded), `…T220440Z.json` (G1), `…r0493_20261018T220641Z.json`, `…r0494…`, `…r0495…`,
+`…r0496…`. The first r0423 report (hits, main, G1, G2) was overwritten by a rerun; its main stage
+is `scratch/xpcs_hits_acceptance/r0423/main.json`.
+
+Changes made for acceptance: the extract worker now marks a train whose modules sit in different
+proc sequence files `LABEL_MISMATCH` instead of chaining it under the minimum (test first).
+
+**Open problems after P4.**
+
+- `Averaging.ES` g2 does not apply extra-speckle's noisy-ring rule (NaN share above 2.5 %).
+- The parent's serial writes dominate extraction: batch the gzip writes, or give the store a
+  writer per block.
+- `max_partner_gap` is still 10 in `XpcsConfig`; the evidence says 1. Changing it is the user's
+  call, and a sparse hit set (mesh runs) then loses the baseline of most trains.
+- The G1 g2 float32 explanation is unproven; a 1e-6 relative gate is the wrong gate for a
+  difference of two numbers near 1.
+- The 5 mm envelope margin, the flag-base trains, r0423's hit set and r0450's missing signals.
+- `Kernel.ES` still assumes the 16 modules cut sequences identically; the extract worker now
+  refuses a train where they do not, but a run is not checked up front.
