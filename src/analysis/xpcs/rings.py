@@ -28,6 +28,7 @@ __all__ = [
     "build_rings",
     "pixel_map",
     "sha256_of_array",
+    "static_bad_for",
 ]
 
 RING_MASK_SHAPE = (16, 512, 128)
@@ -106,6 +107,19 @@ def pixel_map(cfg: XpcsConfig, geometry: Any = None) -> PixelMap:
     label = ring_labels_from(ai, PhotonStatsConfig(saxs=cfg.saxs, rings_nm=pairs))
     q = np.asarray(ai.array_from_unit(SHAPE, "center", cfg.saxs.unit)).ravel()
     return PixelMap(label, len(pairs), q.astype(np.float64), op.sha256)
+
+
+def static_bad_for(cfg: XpcsConfig) -> np.ndarray:
+    """The static mask folded into the rings; none when the rings are a file's.
+
+    Rings from ``ring_masks_file`` are authoritative, as extra-speckle's own are
+    when the equivalence gate compares the two on identical pixels.
+    """
+    if cfg.ring_masks_file is not None:
+        return np.zeros(NPIX, dtype=bool)
+    from analysis.saxs.masks import build_static_bad
+
+    return build_static_bad(cfg.saxs).bad
 
 
 def _radius_mm(q_nm: np.ndarray | float, cfg: XpcsConfig) -> np.ndarray:

@@ -7,7 +7,7 @@ the droplet-hit trains. Read `CLAUDE.md` first (pitfalls 4, 8, 12, 17, 20, 26, 2
 
 **State (2026-10-18, branch `claude/xpcs-hit-trains`).** P0 (facts), P1 (config, rings,
 kernel, partners), P2 (store, extract, run) and P3 (reader) are implemented and tested on a mock
-run: `tests/xpcs`, 137 tests, none needing Maxwell or data. **Not done:** P4 (acceptance on
+run: `tests/xpcs`, 139 tests, none needing Maxwell or data. **Not done:** P4 (acceptance on
 real runs against extra-speckle), P5 (the DAMNIT wrappers, `analysis.xpcs.damnit`,
 `tests/test_context.py`, `install_context.py`), P6 (moving `analysis.triage.xpcs` onto the
 reader and retiring `xpcs_pipeline`). `src/amore/context.py` is untouched.
@@ -81,7 +81,7 @@ old file to `xpcs_hits.prev.h5` and rebuild it: it is derived.
 |---|---|
 | `hits.py` | `HitSet`: sorted unique uint64 ids, `sha256`, `source` (provenance, not hashed). `HitSet.of` validates once; empty is allowed |
 | `config.py` | `XpcsConfig` (nests `AgipdSaxsConfig`; pickles by name; `extract_hash`, `merge_hash`), `Kernel`, `MaskPolicy`, `RING_EDGES_NM` |
-| `rings.py` | `pixel_map` (the SAXS pass's `build_operator` and `ring_labels_from`, or a masks file), `Envelope`, `Rings` |
+| `rings.py` | `pixel_map` (the SAXS pass's `build_operator` and `ring_labels_from`, or a masks file; a file's rings are authoritative, so no static mask is applied on top), `Envelope`, `Rings` |
 | `kernel.py` | pure: `partners` → `Pairing`/`PairStatus`; `train_sums` → `TrainSums` |
 | `store.py` | `TrainPhotons`, `FlagBase`, `RingPhotonStore`, delta coding |
 | `extract.py` | the proc worker: `encode_train` (pure), `process_block` |

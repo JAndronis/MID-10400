@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from analysis.saxs.config import NPIX
-from analysis.xpcs.rings import build_envelope, build_rings, pixel_map
+from analysis.xpcs.rings import build_envelope, build_rings, pixel_map, static_bad_for
 
 
 @pytest.fixture(scope="module")
@@ -133,3 +133,12 @@ def test_ring_masks_of_the_wrong_shape_are_refused(with_config, tmp_path):
     np.save(path, np.zeros((2, 8, 512, 128), dtype=bool))
     with pytest.raises(ValueError, match="expected"):
         pixel_map(with_config(ring_masks_file=str(path)))
+
+
+def test_the_static_mask_is_the_saxs_passs_unless_the_rings_are_a_files(
+    cfg, with_config, tmp_path
+):
+    assert static_bad_for(cfg).any()  # the ASIC seams, at least
+    path = tmp_path / "qmsk.npy"
+    np.save(path, np.zeros((1, 16, 512, 128), dtype=bool))
+    assert not static_bad_for(with_config(ring_masks_file=str(path))).any()

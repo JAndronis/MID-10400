@@ -68,6 +68,7 @@ def test_invalid_fields_are_refused(with_config, change, message):
     [
         {"n_workers": 7},
         {"trains_per_block": 3},
+        {"flag_base_trains": 2},
         {"output_root": "/elsewhere"},
         {"allow_incomplete": True},
         {"overwrite": True},

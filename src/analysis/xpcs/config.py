@@ -101,7 +101,8 @@ class XpcsConfig:
     saxs: AgipdSaxsConfig
     ring_edges_nm: tuple[float, ...] = RING_EDGES_NM
     #: ``(R, 16, 512, 128)`` bool ring masks (e.g. extra-speckle's), instead of
-    #: rings from the geometry. No dilation: the envelope is their union.
+    #: rings from the geometry. No dilation: the envelope is their union, and the
+    #: static mask is not applied on top of them.
     ring_masks_file: str | None = None
     kernel: Kernel = Kernel.CLEAN
     mask_policy: MaskPolicy = MaskPolicy.ANY_FRAME

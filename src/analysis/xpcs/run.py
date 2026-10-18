@@ -40,7 +40,14 @@ from analysis.xpcs.config import XpcsConfig
 from analysis.xpcs.hits import HitSet
 from analysis.xpcs.kernel import partners
 from analysis.xpcs.result import Prelude, ResultWriter, result_reasons
-from analysis.xpcs.rings import Envelope, Rings, build_envelope, build_rings, pixel_map
+from analysis.xpcs.rings import (
+    Envelope,
+    Rings,
+    build_envelope,
+    build_rings,
+    pixel_map,
+    static_bad_for,
+)
 from analysis.xpcs.store import ABSENT, FlagBase, RingPhotonStore
 
 __all__ = ["build_prelude", "run_xpcs_hits"]
@@ -86,9 +93,7 @@ def run_xpcs_hits(
         pixels = pixel_map(cfg, geometry)
         envelope = build_envelope(pixels, cfg)
         if static_bad is None:
-            from analysis.saxs.masks import build_static_bad
-
-            static_bad = build_static_bad(cfg.saxs).bad
+            static_bad = static_bad_for(cfg)
         rings = build_rings(pixels, envelope, static_bad, cfg)
     extract_hash = cfg.extract_hash(envelope.sha256)
     merge_hash = cfg.merge_hash(envelope.sha256, rings.sha256)
