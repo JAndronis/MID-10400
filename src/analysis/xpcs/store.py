@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,8 +30,10 @@ __all__ = [
     "RingPhotonStore",
     "StoreMismatch",
     "TrainPhotons",
+    "block_dir_for",
     "delta_decode",
     "delta_encode",
+    "write_block_file",
 ]
 
 log = logging.getLogger(__name__)
@@ -219,6 +222,67 @@ def _put(group: h5py.Group, name: str, array: np.ndarray) -> None:
         group.create_dataset(name, data=array)
 
 
+def _write_train(trains: h5py.Group, photons: TrainPhotons) -> None:
+    """One train's group, ``status`` last; the layout of ``put`` and of a block file."""
+    group = trains.create_group(_group_name(photons.train_id))
+    if photons.status is FrameStatus.OK:
+        _put(group, "pulse_ids", photons.pulse_ids)
+        _put(group, "cell_ids", photons.cell_ids)
+        _put(group, "frame_ptr", photons.frame_ptr.astype(np.uint32))
+        _put(group, "pixel_step", delta_encode(photons.pixel, photons.frame_ptr))
+        _put(group, "count", photons.count)
+        _put(group, "flag_ptr", photons.flag_ptr.astype(np.uint32))
+        _put(group, "flag_pixel", photons.flag_pixel)
+    group.attrs["sequence"] = photons.sequence
+    group.attrs["status"] = int(photons.status)
+
+
+def block_dir_for(store_path: Path) -> Path:
+    """Where a run's block files live: beside the store, named after it."""
+    store_path = Path(store_path)
+    return store_path.with_name(store_path.stem + ".blocks")
+
+
+def write_block_file(
+    path: Path, extract_hash: str, trains: Iterable[TrainPhotons]
+) -> None:
+    """Write a worker's finished trains as a file of the store's own layout.
+
+    The groups sit at the file's root, named as in the store's ``trains/``. The
+    file is written under a ``.tmp`` name and renamed, so a block file that exists
+    is whole: a crash leaves a ``.tmp`` or nothing. It never touches the store.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        with h5py.File(tmp, "w") as handle:
+            handle.attrs["schema"] = SCHEMA
+            handle.attrs["extract_hash"] = extract_hash
+            for photons in trains:
+                _write_train(handle, photons)
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+def _check_copy(source: h5py.Group, copied: h5py.Group) -> None:
+    """A copied group against its source: datasets, shapes, dtypes, stored bytes."""
+    if set(source) != set(copied):
+        raise RuntimeError(
+            f"{copied.name}: datasets {sorted(copied)} != {sorted(source)}"
+        )
+    for name, dataset in source.items():
+        other = copied[name]
+        if (
+            other.shape != dataset.shape
+            or other.dtype != dataset.dtype
+            or other.id.get_storage_size() != dataset.id.get_storage_size()
+        ):
+            raise RuntimeError(f"{copied.name}/{name} differs from its block file")
+
+
 class RingPhotonStore:
     """The union of the trains extracted so far, one group each.
 
@@ -340,7 +404,14 @@ class RingPhotonStore:
             train is a no-op, so a block replayed after a crash costs nothing.
         """
         self._require_writable()
-        name = _group_name(photons.train_id)
+        if not self._clear_unfinished(_group_name(photons.train_id)):
+            return False
+        _write_train(self._f["trains"], photons)
+        self._f.flush()
+        return True
+
+    def _clear_unfinished(self, name: str) -> bool:
+        """Drop ``name`` if it is unfinished; False when it is final and must stay."""
         trains = self._f["trains"]
         if name in trains:
             if trains[name].attrs.get("status", ABSENT) not in (
@@ -349,19 +420,78 @@ class RingPhotonStore:
             ):
                 return False
             del trains[name]
-        group = trains.create_group(name)
-        if photons.status is FrameStatus.OK:
-            _put(group, "pulse_ids", photons.pulse_ids)
-            _put(group, "cell_ids", photons.cell_ids)
-            _put(group, "frame_ptr", photons.frame_ptr.astype(np.uint32))
-            _put(group, "pixel_step", delta_encode(photons.pixel, photons.frame_ptr))
-            _put(group, "count", photons.count)
-            _put(group, "flag_ptr", photons.flag_ptr.astype(np.uint32))
-            _put(group, "flag_pixel", photons.flag_pixel)
-        group.attrs["sequence"] = photons.sequence
-        group.attrs["status"] = int(photons.status)
-        self._f.flush()
         return True
+
+    def merge_block(self, block_file: Path) -> int:
+        """Copy a block file's trains in, then delete the file.
+
+        Each group is copied without attributes, checked against its source, and
+        only then given its ``status``, so a group that carries one is complete
+        and a crash leaves it unfinished. A train already final is skipped and
+        an unfinished one replaced, as :meth:`put` does, so a replayed block
+        writes nothing. The file is deleted only once every train reads back.
+
+        :returns: how many trains were written.
+        :raises StoreMismatch: the block file was extracted under another hash.
+        :raises RuntimeError: a copied group does not read back as its source;
+            the block file is kept.
+        """
+        self._require_writable()
+        block_file = Path(block_file)
+        written = 0
+        with h5py.File(block_file, "r") as handle:
+            if handle.attrs.get("extract_hash") != self.extract_hash:
+                raise StoreMismatch(
+                    f"{block_file} was extracted under hash "
+                    f"{handle.attrs.get('extract_hash')}, the store's is "
+                    f"{self.extract_hash}"
+                )
+            trains = self._f["trains"]
+            for name in handle:
+                source = handle[name]
+                if "status" not in source.attrs:
+                    raise RuntimeError(f"{block_file}: {name} has no status")
+                if not self._clear_unfinished(name):
+                    continue
+                trains.copy(source, name, without_attrs=True)
+                _check_copy(source, trains[name])
+                for key, value in source.attrs.items():
+                    if key != "status":
+                        trains[name].attrs[key] = value
+                trains[name].attrs["status"] = source.attrs["status"]
+                written += 1
+            self._f.flush()
+            for name in handle:
+                if trains[name].attrs.get("status") is None:
+                    raise RuntimeError(f"{name} did not read back from {block_file}")
+        block_file.unlink()
+        return written
+
+    def recover_blocks(self, folder: Path) -> int:
+        """Take up what a crashed run left in ``folder``, and clear the rest.
+
+        Call under the store's output lock. A ``.tmp`` is half a block and is
+        removed. A finished block file is merged as :meth:`merge_block` would;
+        one that cannot be read or belongs to another hash is renamed ``.bad``
+        and logged, kept for a person and out of the next run's way.
+
+        :returns: how many trains the leftovers gave the store.
+        """
+        folder = Path(folder)
+        if not folder.is_dir():
+            return 0
+        for tmp in folder.glob("*.tmp"):
+            tmp.unlink()
+        recovered = 0
+        for block_file in sorted(folder.glob("*.h5")):
+            try:
+                recovered += self.merge_block(block_file)
+            except (OSError, StoreMismatch) as error:
+                log.warning(
+                    "block file %s not usable (%s); kept as .bad", block_file, error
+                )
+                block_file.rename(block_file.with_name(block_file.name + ".bad"))
+        return recovered
 
     def mark(self, train_id: int, status: FrameStatus, message: str = "") -> None:
         """Record a status with no photons: a final one, or an error to retry."""
