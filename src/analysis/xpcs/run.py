@@ -109,10 +109,21 @@ def run_xpcs_hits(
         with phase(setup, "plan"):
             plan = _plan(cfg, hits, dc)
         extracted = _extract(
-            cfg, hits, plan, envelope, extract_hash, store_path, pixels.operator_sha256,
-            dc=dc, run_dir=run_dir, pool_factory=pool_factory, setup=setup,
-            locks=locks, started_at=started_at, started=started,
-        )  # fmt: skip
+            cfg,
+            hits,
+            plan,
+            envelope,
+            extract_hash,
+            store_path,
+            pixels.operator_sha256,
+            dc=dc,
+            run_dir=run_dir,
+            pool_factory=pool_factory,
+            setup=setup,
+            locks=locks,
+            started_at=started_at,
+            started=started,
+        )
         if extracted.unfinished.size and not cfg.allow_incomplete:
             raise IncompleteRun(
                 f"r{cfg.run}: {extracted.unfinished.size} of {len(hits)} hit trains "
@@ -120,10 +131,22 @@ def run_xpcs_hits(
                 f"the store keeps the rest. Status: {extracted.summary}"
             )
         _merge(
-            cfg, hits, rings, envelope, merge_hash, extract_hash, store_path,
-            output_path, pixels.operator_sha256, plan=plan, pool_factory=pool_factory,
-            setup=setup, locks=locks, started_at=started_at, started=started,
-        )  # fmt: skip
+            cfg,
+            hits,
+            rings,
+            envelope,
+            merge_hash,
+            extract_hash,
+            store_path,
+            output_path,
+            pixels.operator_sha256,
+            plan=plan,
+            pool_factory=pool_factory,
+            setup=setup,
+            locks=locks,
+            started_at=started_at,
+            started=started,
+        )
     return output_path
 
 
@@ -213,9 +236,12 @@ def _extract(
                     cfg, detector, sample, envelope.pixels
                 )
         store = RingPhotonStore.create(
-            store_path, extract_hash, envelope.pixels, base,
+            store_path,
+            extract_hash,
+            envelope.pixels,
+            base,
             {"flag_base_trains": [int(t) for t in sample] if usable else []},
-        )  # fmt: skip
+        )
 
     with store:
         for record in wanted:
@@ -226,8 +252,11 @@ def _extract(
         blocks = build_blocks(todo, cfg.trains_per_block)
         log.info(
             "r%d: %d of %d hit trains to extract in %d blocks",
-            cfg.run, len(todo), len(hits), len(blocks),
-        )  # fmt: skip
+            cfg.run,
+            len(todo),
+            len(hits),
+            len(blocks),
+        )
         totals = fan_out(
             _StoreSink(store),
             blocks,
@@ -256,7 +285,7 @@ def _extract(
                 operator_sha256=operator_sha256 or "",
                 input_file_sha256=_inputs(cfg),
                 run_checks=plan.checks,
-            )  # fmt: skip
+            )
             | {"hit_set_sha256": hits.sha256, "n_extracted": len(todo)}
             | locks[store_path].provenance()
         )
@@ -355,9 +384,15 @@ def _merge(
         "config": json.dumps(_result_payload(cfg), sort_keys=True),
     }
     with ResultWriter.open_or_create(
-        output_path, hits=hits, prelude=prelude, rings=rings, merge_hash=merge_hash,
-        extract_hash=extract_hash, attrs=attrs, overwrite=cfg.overwrite,
-    ) as out:  # fmt: skip
+        output_path,
+        hits=hits,
+        prelude=prelude,
+        rings=rings,
+        merge_hash=merge_hash,
+        extract_hash=extract_hash,
+        attrs=attrs,
+        overwrite=cfg.overwrite,
+    ) as out:
         ok_rows = np.flatnonzero(prelude.status == FrameStatus.OK)
         records = [
             TrainRecord(int(hits.train_ids[i]), 1, int(i), FrameStatus.OK)
@@ -404,7 +439,7 @@ def _merge(
                 operator_sha256=operator_sha256 or "",
                 input_file_sha256=_inputs(cfg),
                 run_checks=plan.checks,
-            )  # fmt: skip
+            )
             | {
                 "hit_set_sha256": hits.sha256,
                 "extract_hash": extract_hash,

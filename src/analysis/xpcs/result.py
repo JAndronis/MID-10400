@@ -745,8 +745,9 @@ class XpcsHits:
         g2, sigma_g2 = _jackknife(on, den_on, n_blocks)
         g2_paired, _ = _jackknife(on[has_off], den_on[has_off], n_blocks)
         baseline, _ = _jackknife(off[has_off], den_off[has_off], n_blocks)
-        c2, sigma = self._c2_error(on[has_off], den_on[has_off], off[has_off],
-                                   den_off[has_off], n_blocks)  # fmt: skip
+        c2, sigma = self._c2_error(
+            on[has_off], den_on[has_off], off[has_off], den_off[has_off], n_blocks
+        )
         centre = np.array([lags[g].mean() for g in groups])
         dims = ("roi_q", "tau")
         dataset = xr.Dataset(
@@ -776,9 +777,11 @@ class XpcsHits:
     def _empty_g2(self, averaging: Averaging) -> xr.Dataset:
         """g2 of a run with fewer than two frames: no lag, so nothing to report."""
         none = np.zeros((self.n_rings, 0))
-        names = ["g2"] if averaging is Averaging.ES else [
-            "g2", "sigma_g2", "g2_paired", "baseline", "c2", "sigma"
-        ]  # fmt: skip
+        names = (
+            ["g2"]
+            if averaging is Averaging.ES
+            else ["g2", "sigma_g2", "g2_paired", "baseline", "c2", "sigma"]
+        )
         return xr.Dataset(
             {name: (("roi_q", "tau"), none) for name in names},
             coords={"roi_q": self.roi_q, "tau": np.zeros(0)},

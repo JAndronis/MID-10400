@@ -1,7 +1,7 @@
 """Read hit trains from proc into :class:`TrainPhotons`.
 
-``encode_train`` is the pure array step; the worker around it (added with the
-store) is the read-and-loop wrapper, as in ``analysis.saxs.worker``.
+``encode_train`` is the pure array step; ``process_block`` is the read-and-loop
+wrapper around it, as in ``analysis.saxs.worker``.
 """
 
 from __future__ import annotations
