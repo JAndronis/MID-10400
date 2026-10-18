@@ -1,0 +1,856 @@
+{
+  "generated_at": "2026-10-18T20:32:49.961041+00:00",
+  "host": "max-wn032.desy.de",
+  "platform": "Linux-5.14.0-687.58.1.el9_8.x86_64-x86_64-with-glibc2.34",
+  "python": "3.12.11",
+  "git_commit": "a34519d94144546160e181dcde51ad3ab1150f2d",
+  "thread_env": {
+    "EXTRA_NUM_THREADS": "1",
+    "OMP_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1"
+  },
+  "proposal": 10400,
+  "run": 426,
+  "config": {
+    "allow_incomplete": false,
+    "envelope_margin_mm": 5.0,
+    "kernel": "clean",
+    "mask_policy": "any_frame",
+    "max_partner_gap": 10,
+    "n_workers": null,
+    "output_root": "/gpfs/exfel/exp/MID/202601/p010400/usr/cached_files",
+    "overwrite": false,
+    "ring_edges_nm": [
+      0.22499999999999998,
+      0.35000000000000003,
+      0.44999999999999996,
+      0.56,
+      0.65,
+      0.6900000000000001,
+      0.75,
+      0.8599999999999999
+    ],
+    "ring_masks_file": null,
+    "saxs": {
+      "allow_incomplete": false,
+      "base_mask_trains": 8,
+      "beam_center_px": 607.4598195630211,
+      "beam_center_py": 672.076693118667,
+      "detector_name": null,
+      "expected_bits": [
+        0,
+        1,
+        7,
+        8,
+        9,
+        12,
+        13
+      ],
+      "geometry_file": "/gpfs/exfel/exp/MID/202601/p010400/usr/geometry/geom_latest.geom",
+      "mask_bits": 4294967295,
+      "method": [
+        "full",
+        "csc",
+        "cython"
+      ],
+      "min_modules": 16,
+      "n_workers": null,
+      "npt": 500,
+      "output_root": "/gpfs/exfel/exp/MID/202601/p010400/scratch/agipd_saxs",
+      "overwrite": false,
+      "photon_energy_kev": 9.04,
+      "photon_stats": true,
+      "photon_stats_root": "/gpfs/exfel/exp/MID/202601/p010400/usr/cached_files/agipd_photon_stats",
+      "pixel_mask_file": "/gpfs/exfel/exp/MID/202601/p010400/usr/masks/mask_2026-09-08_AGIPD_SAXS.npy",
+      "pixel_sum_trains": 10,
+      "pixel_sums_root": "/gpfs/exfel/exp/MID/202601/p010400/usr/cached_files/agipd_pixel_sums",
+      "proposal": 10400,
+      "run": 426,
+      "sdd_m": 7.531,
+      "selftest_frames": 8,
+      "trains_per_block": 4,
+      "unit": "q_nm^-1",
+      "use_asic_seams": true
+    },
+    "trains_per_block": 8
+  },
+  "frame_table": {
+    "path": "/gpfs/exfel/exp/MID/202601/p010400/scratch/agipd_saxs/r0426/agipd_saxs.h5",
+    "n_trains": 3001,
+    "n_ok_trains": 3000,
+    "frames_per_ok_train": {
+      "155": 3000
+    },
+    "chosen_trains": [
+      2637704597,
+      2637704658,
+      2637704719,
+      2637704781,
+      2637704842,
+      2637704903,
+      2637704964,
+      2637705025,
+      2637705087,
+      2637705148,
+      2637705209,
+      2637705270,
+      2637705331,
+      2637705393,
+      2637705454,
+      2637705515,
+      2637705576,
+      2637705637,
+      2637705699,
+      2637705760,
+      2637705821,
+      2637705882,
+      2637705943,
+      2637706005,
+      2637706066,
+      2637706127,
+      2637706188,
+      2637706250,
+      2637706311,
+      2637706372,
+      2637706433,
+      2637706494,
+      2637706556,
+      2637706617,
+      2637706678,
+      2637706739,
+      2637706800,
+      2637706862,
+      2637706923,
+      2637706984,
+      2637707045,
+      2637707106,
+      2637707168,
+      2637707229,
+      2637707290,
+      2637707351,
+      2637707412,
+      2637707474,
+      2637707535,
+      2637707596
+    ]
+  },
+  "envelope": {
+    "n_envelope": 951744,
+    "envelope_sha256": "25cbcf0850e5e992967f39ecdebc6731d4b1c767fbb1a720eedefa6978fa4011",
+    "margin_mm": 5.0,
+    "good_pixels_in_rings": 779561,
+    "good_pixels_per_ring": [
+      35281,
+      102220,
+      155280,
+      152781,
+      70091,
+      111021,
+      152887
+    ],
+    "rings_sha256": "7164a3172fc648b8be7931457a3d361c93721826c104ab59f61114c8529757d5",
+    "seconds": 1.2441434840438887
+  },
+  "sequences": {
+    "n_modules": 16,
+    "n_sequences_per_module": {
+      "0": 12,
+      "1": 12,
+      "2": 12,
+      "3": 12,
+      "4": 12,
+      "5": 12,
+      "6": 12,
+      "7": 12,
+      "8": 12,
+      "9": 12,
+      "10": 12,
+      "11": 12,
+      "12": 12,
+      "13": 12,
+      "14": 12,
+      "15": 12
+    },
+    "sequences": {
+      "S00000": {
+        "first": 2637704597,
+        "last": 2637704846,
+        "n_trains": 250
+      },
+      "S00001": {
+        "first": 2637704847,
+        "last": 2637705096,
+        "n_trains": 250
+      },
+      "S00002": {
+        "first": 2637705097,
+        "last": 2637705346,
+        "n_trains": 250
+      },
+      "S00003": {
+        "first": 2637705347,
+        "last": 2637705596,
+        "n_trains": 250
+      },
+      "S00004": {
+        "first": 2637705597,
+        "last": 2637705846,
+        "n_trains": 250
+      },
+      "S00005": {
+        "first": 2637705847,
+        "last": 2637706096,
+        "n_trains": 250
+      },
+      "S00006": {
+        "first": 2637706097,
+        "last": 2637706346,
+        "n_trains": 250
+      },
+      "S00007": {
+        "first": 2637706347,
+        "last": 2637706596,
+        "n_trains": 250
+      },
+      "S00008": {
+        "first": 2637706597,
+        "last": 2637706846,
+        "n_trains": 250
+      },
+      "S00009": {
+        "first": 2637706847,
+        "last": 2637707096,
+        "n_trains": 250
+      },
+      "S00010": {
+        "first": 2637707097,
+        "last": 2637707346,
+        "n_trains": 250
+      },
+      "S00011": {
+        "first": 2637707347,
+        "last": 2637707596,
+        "n_trains": 250
+      }
+    },
+    "boundaries_agree_across_modules": true,
+    "disagreements": {}
+  },
+  "xray_pulses_raw": {
+    "pulse_periods_in_base_clocks": {
+      "2": 3002
+    },
+    "pulses_per_train": {
+      "155": 3002
+    },
+    "constant_pattern": true,
+    "bunch_repetition_rate_hz": 4513888.888888889
+  },
+  "facts": {
+    "n_trains": 50,
+    "frames_per_train": [
+      155
+    ],
+    "pulse_id_step": [
+      2
+    ],
+    "pulse_period_ns_if_4p5_MHz": 444.44444444444446,
+    "pulse_pattern_identical_in_all_trains": true,
+    "pulse_ids_head": [
+      2,
+      4,
+      6,
+      8,
+      10,
+      12
+    ],
+    "pulse_ids_tail": [
+      306,
+      308,
+      310
+    ],
+    "trains_with_a_single_sequence_file": true,
+    "sequence_of_trains": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      1,
+      1,
+      1,
+      1,
+      2,
+      2,
+      2,
+      2,
+      3,
+      3,
+      3,
+      3,
+      4,
+      4,
+      4,
+      4,
+      5,
+      5,
+      5,
+      5,
+      6,
+      6,
+      6,
+      6,
+      7,
+      7,
+      7,
+      7,
+      8,
+      8,
+      8,
+      8,
+      9,
+      9,
+      9,
+      9,
+      10,
+      10,
+      10,
+      10,
+      11,
+      11,
+      11,
+      11,
+      11
+    ],
+    "image_data_dtype": [
+      "int16"
+    ],
+    "max_count_in_data": 71,
+    "max_count_in_envelope": 71,
+    "bits_present_in_mask": "0x3383",
+    "n_envelope": 951744,
+    "mask": {
+      "mean_flagged_per_frame": 37195.40077419354,
+      "mean_flagged_fraction_per_frame": 0.03908130839195576,
+      "per_cell_always_flagged_mean": 37166.735483870965,
+      "per_cell_varying_between_trains_mean": 1262.2387096774194,
+      "per_cell_varying_between_trains_max": 1414,
+      "flagged_in_every_cell": 25767,
+      "flagged_in_some_cell": 119635,
+      "flagged_in_some_but_not_every_cell": 93868,
+      "any_frame_flagged_mean": 76974.66,
+      "any_frame_flagged_fraction": 0.08087748386120638,
+      "any_frame_flagged_in_good_pixels_mean": 43657.56,
+      "per_frame_difference_from_train_majority_mask_mean": 5789.833290322581
+    },
+    "events": {
+      "nnz_per_train_mean": 1850203.9,
+      "nnz_per_frame_mean": 11936.79935483871
+    },
+    "per_train": [
+      {
+        "train_id": 2637704597,
+        "n_frames": 155,
+        "nnz": 1708736,
+        "mean_flagged_per_frame": 37195.1935483871,
+        "any_frame_flagged": 76879,
+        "any_frame_flagged_in_good_pixels": 43579,
+        "max_count": 63
+      },
+      {
+        "train_id": 2637704658,
+        "n_frames": 155,
+        "nnz": 1600976,
+        "mean_flagged_per_frame": 37195.7935483871,
+        "any_frame_flagged": 76978,
+        "any_frame_flagged_in_good_pixels": 43650,
+        "max_count": 52
+      },
+      {
+        "train_id": 2637704719,
+        "n_frames": 155,
+        "nnz": 1786091,
+        "mean_flagged_per_frame": 37198.69677419355,
+        "any_frame_flagged": 76964,
+        "any_frame_flagged_in_good_pixels": 43702,
+        "max_count": 53
+      },
+      {
+        "train_id": 2637704781,
+        "n_frames": 155,
+        "nnz": 1657377,
+        "mean_flagged_per_frame": 37194.49677419355,
+        "any_frame_flagged": 76865,
+        "any_frame_flagged_in_good_pixels": 43573,
+        "max_count": 53
+      },
+      {
+        "train_id": 2637704842,
+        "n_frames": 155,
+        "nnz": 1645143,
+        "mean_flagged_per_frame": 37195.76129032258,
+        "any_frame_flagged": 77002,
+        "any_frame_flagged_in_good_pixels": 43660,
+        "max_count": 32
+      },
+      {
+        "train_id": 2637704903,
+        "n_frames": 155,
+        "nnz": 1762280,
+        "mean_flagged_per_frame": 37195.09032258065,
+        "any_frame_flagged": 76977,
+        "any_frame_flagged_in_good_pixels": 43692,
+        "max_count": 55
+      },
+      {
+        "train_id": 2637704964,
+        "n_frames": 155,
+        "nnz": 1989568,
+        "mean_flagged_per_frame": 37195.66451612903,
+        "any_frame_flagged": 77011,
+        "any_frame_flagged_in_good_pixels": 43681,
+        "max_count": 55
+      },
+      {
+        "train_id": 2637705025,
+        "n_frames": 155,
+        "nnz": 1595696,
+        "mean_flagged_per_frame": 37194.82580645161,
+        "any_frame_flagged": 76836,
+        "any_frame_flagged_in_good_pixels": 43537,
+        "max_count": 53
+      },
+      {
+        "train_id": 2637705087,
+        "n_frames": 155,
+        "nnz": 1973234,
+        "mean_flagged_per_frame": 37196.948387096774,
+        "any_frame_flagged": 77077,
+        "any_frame_flagged_in_good_pixels": 43773,
+        "max_count": 63
+      },
+      {
+        "train_id": 2637705148,
+        "n_frames": 155,
+        "nnz": 1703221,
+        "mean_flagged_per_frame": 37195.63870967742,
+        "any_frame_flagged": 76892,
+        "any_frame_flagged_in_good_pixels": 43588,
+        "max_count": 53
+      },
+      {
+        "train_id": 2637705209,
+        "n_frames": 155,
+        "nnz": 1854473,
+        "mean_flagged_per_frame": 37195.84516129032,
+        "any_frame_flagged": 77015,
+        "any_frame_flagged_in_good_pixels": 43677,
+        "max_count": 53
+      },
+      {
+        "train_id": 2637705270,
+        "n_frames": 155,
+        "nnz": 1656955,
+        "mean_flagged_per_frame": 37195.08387096774,
+        "any_frame_flagged": 76891,
+        "any_frame_flagged_in_good_pixels": 43604,
+        "max_count": 53
+      },
+      {
+        "train_id": 2637705331,
+        "n_frames": 155,
+        "nnz": 1840463,
+        "mean_flagged_per_frame": 37195.02580645162,
+        "any_frame_flagged": 76942,
+        "any_frame_flagged_in_good_pixels": 43625,
+        "max_count": 53
+      },
+      {
+        "train_id": 2637705393,
+        "n_frames": 155,
+        "nnz": 1704813,
+        "mean_flagged_per_frame": 37194.85161290323,
+        "any_frame_flagged": 76907,
+        "any_frame_flagged_in_good_pixels": 43604,
+        "max_count": 50
+      },
+      {
+        "train_id": 2637705454,
+        "n_frames": 155,
+        "nnz": 1809946,
+        "mean_flagged_per_frame": 37195.6,
+        "any_frame_flagged": 77016,
+        "any_frame_flagged_in_good_pixels": 43675,
+        "max_count": 53
+      },
+      {
+        "train_id": 2637705515,
+        "n_frames": 155,
+        "nnz": 2030355,
+        "mean_flagged_per_frame": 37195.625806451615,
+        "any_frame_flagged": 77006,
+        "any_frame_flagged_in_good_pixels": 43661,
+        "max_count": 53
+      },
+      {
+        "train_id": 2637705576,
+        "n_frames": 155,
+        "nnz": 1717583,
+        "mean_flagged_per_frame": 37194.89032258064,
+        "any_frame_flagged": 76953,
+        "any_frame_flagged_in_good_pixels": 43614,
+        "max_count": 55
+      },
+      {
+        "train_id": 2637705637,
+        "n_frames": 155,
+        "nnz": 2036752,
+        "mean_flagged_per_frame": 37195.52258064516,
+        "any_frame_flagged": 77036,
+        "any_frame_flagged_in_good_pixels": 43698,
+        "max_count": 63
+      },
+      {
+        "train_id": 2637705699,
+        "n_frames": 155,
+        "nnz": 1766958,
+        "mean_flagged_per_frame": 37195.05806451613,
+        "any_frame_flagged": 76949,
+        "any_frame_flagged_in_good_pixels": 43634,
+        "max_count": 53
+      },
+      {
+        "train_id": 2637705760,
+        "n_frames": 155,
+        "nnz": 1957485,
+        "mean_flagged_per_frame": 37195.948387096774,
+        "any_frame_flagged": 77002,
+        "any_frame_flagged_in_good_pixels": 43640,
+        "max_count": 53
+      },
+      {
+        "train_id": 2637705821,
+        "n_frames": 155,
+        "nnz": 1854610,
+        "mean_flagged_per_frame": 37195.8,
+        "any_frame_flagged": 77005,
+        "any_frame_flagged_in_good_pixels": 43690,
+        "max_count": 53
+      },
+      {
+        "train_id": 2637705882,
+        "n_frames": 155,
+        "nnz": 1667963,
+        "mean_flagged_per_frame": 37195.23870967742,
+        "any_frame_flagged": 76923,
+        "any_frame_flagged_in_good_pixels": 43609,
+        "max_count": 55
+      },
+      {
+        "train_id": 2637705943,
+        "n_frames": 155,
+        "nnz": 1555529,
+        "mean_flagged_per_frame": 37194.76774193548,
+        "any_frame_flagged": 76926,
+        "any_frame_flagged_in_good_pixels": 43621,
+        "max_count": 53
+      },
+      {
+        "train_id": 2637706005,
+        "n_frames": 155,
+        "nnz": 1586694,
+        "mean_flagged_per_frame": 37195.290322580644,
+        "any_frame_flagged": 76910,
+        "any_frame_flagged_in_good_pixels": 43596,
+        "max_count": 41
+      },
+      {
+        "train_id": 2637706066,
+        "n_frames": 155,
+        "nnz": 1809631,
+        "mean_flagged_per_frame": 37195.46451612903,
+        "any_frame_flagged": 77054,
+        "any_frame_flagged_in_good_pixels": 43706,
+        "max_count": 61
+      },
+      {
+        "train_id": 2637706127,
+        "n_frames": 155,
+        "nnz": 1904985,
+        "mean_flagged_per_frame": 37195.53548387097,
+        "any_frame_flagged": 77054,
+        "any_frame_flagged_in_good_pixels": 43699,
+        "max_count": 55
+      },
+      {
+        "train_id": 2637706188,
+        "n_frames": 155,
+        "nnz": 1993614,
+        "mean_flagged_per_frame": 37195.47096774194,
+        "any_frame_flagged": 76983,
+        "any_frame_flagged_in_good_pixels": 43681,
+        "max_count": 61
+      },
+      {
+        "train_id": 2637706250,
+        "n_frames": 155,
+        "nnz": 2124308,
+        "mean_flagged_per_frame": 37196.41935483871,
+        "any_frame_flagged": 77040,
+        "any_frame_flagged_in_good_pixels": 43714,
+        "max_count": 63
+      },
+      {
+        "train_id": 2637706311,
+        "n_frames": 155,
+        "nnz": 1932984,
+        "mean_flagged_per_frame": 37195.43225806452,
+        "any_frame_flagged": 76959,
+        "any_frame_flagged_in_good_pixels": 43624,
+        "max_count": 53
+      },
+      {
+        "train_id": 2637706372,
+        "n_frames": 155,
+        "nnz": 1813872,
+        "mean_flagged_per_frame": 37195.49677419355,
+        "any_frame_flagged": 77015,
+        "any_frame_flagged_in_good_pixels": 43719,
+        "max_count": 50
+      },
+      {
+        "train_id": 2637706433,
+        "n_frames": 155,
+        "nnz": 2098431,
+        "mean_flagged_per_frame": 37195.6129032258,
+        "any_frame_flagged": 76981,
+        "any_frame_flagged_in_good_pixels": 43672,
+        "max_count": 64
+      },
+      {
+        "train_id": 2637706494,
+        "n_frames": 155,
+        "nnz": 1803976,
+        "mean_flagged_per_frame": 37194.50322580645,
+        "any_frame_flagged": 76937,
+        "any_frame_flagged_in_good_pixels": 43633,
+        "max_count": 55
+      },
+      {
+        "train_id": 2637706556,
+        "n_frames": 155,
+        "nnz": 1778070,
+        "mean_flagged_per_frame": 37195.012903225805,
+        "any_frame_flagged": 76978,
+        "any_frame_flagged_in_good_pixels": 43661,
+        "max_count": 71
+      },
+      {
+        "train_id": 2637706617,
+        "n_frames": 155,
+        "nnz": 1891816,
+        "mean_flagged_per_frame": 37195.72258064516,
+        "any_frame_flagged": 77011,
+        "any_frame_flagged_in_good_pixels": 43702,
+        "max_count": 53
+      },
+      {
+        "train_id": 2637706678,
+        "n_frames": 155,
+        "nnz": 2211762,
+        "mean_flagged_per_frame": 37195.93548387097,
+        "any_frame_flagged": 77045,
+        "any_frame_flagged_in_good_pixels": 43748,
+        "max_count": 62
+      },
+      {
+        "train_id": 2637706739,
+        "n_frames": 155,
+        "nnz": 2000737,
+        "mean_flagged_per_frame": 37195.283870967745,
+        "any_frame_flagged": 76960,
+        "any_frame_flagged_in_good_pixels": 43663,
+        "max_count": 62
+      },
+      {
+        "train_id": 2637706800,
+        "n_frames": 155,
+        "nnz": 1994149,
+        "mean_flagged_per_frame": 37195.21935483871,
+        "any_frame_flagged": 76997,
+        "any_frame_flagged_in_good_pixels": 43676,
+        "max_count": 50
+      },
+      {
+        "train_id": 2637706862,
+        "n_frames": 155,
+        "nnz": 2001774,
+        "mean_flagged_per_frame": 37195.22580645161,
+        "any_frame_flagged": 76964,
+        "any_frame_flagged_in_good_pixels": 43665,
+        "max_count": 50
+      },
+      {
+        "train_id": 2637706923,
+        "n_frames": 155,
+        "nnz": 2176992,
+        "mean_flagged_per_frame": 37195.52903225806,
+        "any_frame_flagged": 77051,
+        "any_frame_flagged_in_good_pixels": 43713,
+        "max_count": 55
+      },
+      {
+        "train_id": 2637706984,
+        "n_frames": 155,
+        "nnz": 2330479,
+        "mean_flagged_per_frame": 37196.541935483874,
+        "any_frame_flagged": 77160,
+        "any_frame_flagged_in_good_pixels": 43789,
+        "max_count": 53
+      },
+      {
+        "train_id": 2637707045,
+        "n_frames": 155,
+        "nnz": 2057716,
+        "mean_flagged_per_frame": 37195.25161290322,
+        "any_frame_flagged": 77020,
+        "any_frame_flagged_in_good_pixels": 43717,
+        "max_count": 71
+      },
+      {
+        "train_id": 2637707106,
+        "n_frames": 155,
+        "nnz": 1731218,
+        "mean_flagged_per_frame": 37195.18709677419,
+        "any_frame_flagged": 77009,
+        "any_frame_flagged_in_good_pixels": 43685,
+        "max_count": 53
+      },
+      {
+        "train_id": 2637707168,
+        "n_frames": 155,
+        "nnz": 1673286,
+        "mean_flagged_per_frame": 37194.58064516129,
+        "any_frame_flagged": 76919,
+        "any_frame_flagged_in_good_pixels": 43606,
+        "max_count": 62
+      },
+      {
+        "train_id": 2637707229,
+        "n_frames": 155,
+        "nnz": 1986361,
+        "mean_flagged_per_frame": 37194.21290322581,
+        "any_frame_flagged": 76997,
+        "any_frame_flagged_in_good_pixels": 43672,
+        "max_count": 71
+      },
+      {
+        "train_id": 2637707290,
+        "n_frames": 155,
+        "nnz": 1909350,
+        "mean_flagged_per_frame": 37195.032258064515,
+        "any_frame_flagged": 76976,
+        "any_frame_flagged_in_good_pixels": 43618,
+        "max_count": 53
+      },
+      {
+        "train_id": 2637707351,
+        "n_frames": 155,
+        "nnz": 1512977,
+        "mean_flagged_per_frame": 37193.83870967742,
+        "any_frame_flagged": 76822,
+        "any_frame_flagged_in_good_pixels": 43539,
+        "max_count": 53
+      },
+      {
+        "train_id": 2637707412,
+        "n_frames": 155,
+        "nnz": 1933728,
+        "mean_flagged_per_frame": 37195.46451612903,
+        "any_frame_flagged": 76954,
+        "any_frame_flagged_in_good_pixels": 43641,
+        "max_count": 21
+      },
+      {
+        "train_id": 2637707474,
+        "n_frames": 155,
+        "nnz": 1742185,
+        "mean_flagged_per_frame": 37194.50322580645,
+        "any_frame_flagged": 76891,
+        "any_frame_flagged_in_good_pixels": 43582,
+        "max_count": 62
+      },
+      {
+        "train_id": 2637707535,
+        "n_frames": 155,
+        "nnz": 1820766,
+        "mean_flagged_per_frame": 37195.32258064516,
+        "any_frame_flagged": 76981,
+        "any_frame_flagged_in_good_pixels": 43669,
+        "max_count": 41
+      },
+      {
+        "train_id": 2637707596,
+        "n_frames": 155,
+        "nnz": 1812127,
+        "mean_flagged_per_frame": 37195.58064516129,
+        "any_frame_flagged": 77013,
+        "any_frame_flagged_in_good_pixels": 43701,
+        "max_count": 63
+      }
+    ],
+    "seconds_per_train": {
+      "read_data": 1.2771780911786481,
+      "read_mask": 2.301705237558344,
+      "encode": 1.5657764332171065
+    }
+  },
+  "constant_frames_per_ok_train": true,
+  "sizes": {
+    "candidates": {
+      "events_absolute": {
+        "bytes_total": 137418164,
+        "n_trains": 50,
+        "bytes_per_train": 2748363.28
+      },
+      "events_delta": {
+        "bytes_total": 100415256,
+        "n_trains": 50,
+        "bytes_per_train": 2008305.12
+      },
+      "flags_full": {
+        "bytes_total": 162388388,
+        "n_trains": 50,
+        "bytes_per_train": 3247767.76
+      },
+      "flags_diff_train_majority_mask": {
+        "bytes_total": 70194736,
+        "n_trains": 50,
+        "bytes_per_train": 1403894.72
+      },
+      "flags_diff_cell_base": {
+        "bytes_total": 373236,
+        "n_trains": 25,
+        "bytes_per_train": 14929.44
+      },
+      "flags_packed_bits": {
+        "bytes_total": 152613876,
+        "n_trains": 50,
+        "bytes_per_train": 3052277.52
+      },
+      "flag_base_once": {
+        "bytes_total": 3244091,
+        "n_trains": 1,
+        "bytes_per_train": 3244091.0
+      }
+    },
+    "chosen_layout": "events_delta + flags_diff_cell_base (+ flag_base_once)",
+    "chosen_bytes_per_train": 2023234.56,
+    "projection_gigabytes": {
+      "1000": 2.026478651,
+      "10000": 20.235589691,
+      "30000": 60.700280891
+    }
+  }
+}
