@@ -7,14 +7,30 @@ store) is the read-and-loop wrapper, as in ``analysis.saxs.worker``.
 from __future__ import annotations
 
 import re
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 
+from analysis.common.cpu import set_thread_env
+from analysis.common.plan import Block
 from analysis.common.status import DataCheckFailed, FrameStatus
+from analysis.xpcs.config import XpcsConfig
 from analysis.xpcs.store import FlagBase, TrainPhotons
 
-__all__ = ["MAX_COUNT", "encode_train", "train_sequences"]
+__all__ = [
+    "MAX_COUNT",
+    "ExtractResult",
+    "encode_train",
+    "init",
+    "init_from_detector",
+    "open_detector",
+    "process_block",
+    "sample_flag_base",
+    "train_sequences",
+]
 
 #: Photons per pixel the store can hold. The probe saw no count above 12 in any
 #: ring (r0423, r0450, 2026-10-13).
@@ -100,3 +116,139 @@ def _pointers(parts: list[np.ndarray]) -> np.ndarray:
     return np.concatenate([[0], np.cumsum([part.size for part in parts])]).astype(
         np.int64
     )
+
+
+def open_detector(cfg: XpcsConfig, dc: Any = None, run_dir: str | Path | None = None):
+    """The AGIPD detector of the proc run, all 16 modules required."""
+    from extra_data import RunDirectory, open_run
+    from extra_data.components import AGIPD1M
+
+    if dc is None:
+        dc = (
+            RunDirectory(str(run_dir))
+            if run_dir
+            else open_run(cfg.proposal, cfg.run, data="proc")
+        )
+    return AGIPD1M(dc, detector_name=cfg.saxs.detector_name, min_modules=16)
+
+
+def sample_flag_base(
+    cfg: XpcsConfig, detector: Any, train_ids: np.ndarray, envelope: np.ndarray
+) -> FlagBase:
+    """The flag base from the masks of ``train_ids`` (their data are not read)."""
+    from extra_data import by_id
+
+    bits = np.uint32(cfg.saxs.mask_bits)
+    samples = []
+    for train_id in train_ids.tolist():
+        key = detector.select_trains(by_id[[train_id]])["image.mask"]
+        mask = key.ndarray(decompress_threads=1)
+        flagged = [
+            np.flatnonzero((mask[:, frame].reshape(-1)[envelope] & bits) != 0)
+            for frame in range(mask.shape[1])
+        ]
+        samples.append((key.cell_id_coordinates(), flagged))
+    return FlagBase.from_samples(samples)
+
+
+@dataclass(slots=True)
+class ExtractResult:
+    """One block's trains, each carrying its own identity."""
+
+    block_index: int
+    photons: list[TrainPhotons]
+    bits_present: int = 0
+    timings: dict[str, float] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class _State:
+    cfg: XpcsConfig
+    envelope: np.ndarray
+    base: FlagBase
+    detector: Any
+
+
+_STATE: _State | None = None
+
+
+def init(
+    cfg: XpcsConfig,
+    envelope: np.ndarray,
+    base: FlagBase,
+    run_dir: str | None = None,
+) -> None:
+    """Process initializer: open the run."""
+    set_thread_env()
+    init_from_detector(cfg, envelope, base, open_detector(cfg, run_dir=run_dir))
+
+
+def init_from_detector(
+    cfg: XpcsConfig, envelope: np.ndarray, base: FlagBase, detector: Any
+) -> None:
+    """In-process initializer for tests and single-process runs."""
+    global _STATE
+    _STATE = _State(cfg, envelope, base, detector)
+
+
+def process_block(block: Block) -> ExtractResult:
+    """Read and encode one block's trains.
+
+    A train whose labels or frame count disagree with the plan is
+    ``LABEL_MISMATCH`` and one whose counts are not photons ``DATA_CHECK_FAILED``;
+    both are final and carry no photons. Anything else raises, so the block is
+    recorded as ``WORKER_ERROR`` and retried.
+    """
+    if _STATE is None:
+        raise RuntimeError("extract.init has not run in this process")
+    from extra_data import by_id
+
+    state = _STATE
+    timings = {"read_data": 0.0, "read_mask": 0.0, "encode": 0.0}
+    photons: list[TrainPhotons] = []
+    bits_present = 0
+    for train_id, expected in zip(block.train_ids, block.expected_frames, strict=True):
+        selected = state.detector.select_trains(by_id[[train_id]])
+        key = selected["image.data"]
+        started = time.perf_counter()
+        data = key.ndarray(decompress_threads=1)
+        timings["read_data"] += time.perf_counter() - started
+        started = time.perf_counter()
+        mask = selected["image.mask"].ndarray(decompress_threads=1)
+        timings["read_mask"] += time.perf_counter() - started
+
+        sequences = train_sequences(key)
+        sequence = min(sequences.values()) if sequences else -1
+        train_ids = key.train_id_coordinates()
+        if (
+            train_ids.size != expected
+            or data.shape[1] != expected
+            or mask.shape[1] != expected
+            or not np.all(train_ids == train_id)
+        ):
+            photons.append(
+                TrainPhotons.failed(train_id, FrameStatus.LABEL_MISMATCH, sequence)
+            )
+            continue
+        bits_present |= int(np.bitwise_or.reduce(mask, axis=None))
+        started = time.perf_counter()
+        try:
+            photons.append(
+                encode_train(
+                    data,
+                    mask,
+                    state.envelope,
+                    state.cfg.saxs.mask_bits,
+                    state.base,
+                    train_id=train_id,
+                    sequence=sequence,
+                    pulse_ids=key.pulse_id_coordinates(),
+                    cell_ids=key.cell_id_coordinates(),
+                )
+            )
+        except DataCheckFailed:
+            photons.append(
+                TrainPhotons.failed(train_id, FrameStatus.DATA_CHECK_FAILED, sequence)
+            )
+        timings["encode"] += time.perf_counter() - started
+    return ExtractResult(block.index, photons, bits_present, timings)

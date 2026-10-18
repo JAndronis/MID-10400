@@ -20,6 +20,7 @@ pytest.importorskip("pyFAI", reason="the XPCS pass needs pyFAI")
 sys.path.insert(0, str(Path(__file__).parents[1] / "saxs"))
 
 from extra_geom import AGIPD_1MGeometry  # noqa: E402
+from xpcs_fakes import EMPTY, FRAMES, SHORT, TRAIN_IDS  # noqa: E402
 
 from analysis.saxs.config import AgipdSaxsConfig  # noqa: E402
 from analysis.xpcs.config import XpcsConfig  # noqa: E402
@@ -69,3 +70,51 @@ def with_config(cfg):
         return replace(cfg, **changes)
 
     return make
+
+
+@pytest.fixture(scope="session")
+def mock_run_factory(memoised_run_factory):
+    """Mock AGIPD runs, cached by resolved signature."""
+    from mockrun import write_mock_run
+
+    return memoised_run_factory(write_mock_run, "xpcs-mockrun")
+
+
+@pytest.fixture(scope="session")
+def mock_run(mock_run_factory):
+    """``(MockRun, DataCollection)``: 12 frames a train, two awkward trains."""
+    return mock_run_factory(
+        train_ids=TRAIN_IDS,
+        frames_per_train=FRAMES,
+        short_module_trains=(SHORT,),
+        zero_frame_trains=(EMPTY,),
+    )
+
+
+@pytest.fixture
+def pipeline(cfg, geom, mock_run, tmp_path):
+    """Run :func:`run_xpcs_hits` on the mock run into ``tmp_path``."""
+    from types import SimpleNamespace
+
+    from xpcs_fakes import InlinePool
+
+    from analysis.xpcs.hits import HitSet
+    from analysis.xpcs.run import run_xpcs_hits
+
+    run, dc = mock_run
+
+    def go(hits, *, pool=InlinePool, **changes):
+        config = replace(cfg, output_root=str(tmp_path), **changes)
+        return run_xpcs_hits(
+            config,
+            hits if isinstance(hits, HitSet) else HitSet.of(hits),
+            dc=dc,
+            geometry=geom,
+            run_dir=run.path,
+            pool_factory=pool,
+        )
+
+    def configured(**changes):
+        return replace(cfg, output_root=str(tmp_path), **changes)
+
+    return SimpleNamespace(run=go, cfg=configured, mock=run, dc=dc, geom=geom)

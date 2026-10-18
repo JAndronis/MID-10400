@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+from concurrent.futures import BrokenExecutor, Future
 from pathlib import Path
 
 import numpy as np
@@ -11,6 +12,11 @@ import pytest
 from analysis.common.status import FrameStatus
 from analysis.xpcs.rings import Rings
 from analysis.xpcs.store import FlagBase, TrainPhotons
+
+TRAIN_IDS = tuple(range(10000, 10010))
+#: A train module 0 reports no frames for, and one nobody wrote a frame for.
+SHORT, EMPTY = 10002, 10004
+FRAMES = 12
 
 
 def make_rings(rng, n_env=300, n_rings=3, outside=0.25) -> Rings:
@@ -77,3 +83,39 @@ def load_extra_speckle_module(relative: str):
     module = importlib.util.module_from_spec(module_spec)
     module_spec.loader.exec_module(module)
     return module
+
+
+class InlinePool:
+    """Runs blocks in this process, so failure paths need no real children.
+
+    The initializer runs once, as a spawned worker would run it, and ``submit``
+    returns an already-resolved future.
+    """
+
+    def __init__(self, n_workers, initializer=None, initargs=(), **kwargs):
+        self.n_workers = n_workers
+        if initializer is not None:
+            initializer(*initargs)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def submit(self, fn, *args):
+        future: Future = Future()
+        try:
+            future.set_result(fn(*args))
+        except BaseException as error:  # noqa: BLE001 - mirrors a real pool
+            future.set_exception(error)
+        return future
+
+
+class BrokenPool(InlinePool):
+    """A pool that dies part-way through, as a killed worker would."""
+
+    def submit(self, fn, *args):
+        future: Future = Future()
+        future.set_exception(BrokenExecutor("worker died"))
+        return future

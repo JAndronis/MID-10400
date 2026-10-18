@@ -1,0 +1,323 @@
+"""One run end to end on the mock proc data: idempotence, resume, workers."""
+
+from __future__ import annotations
+
+import hashlib
+import os
+
+import h5py
+import numpy as np
+import pytest
+from mockrun import source
+from xpcs_fakes import EMPTY, FRAMES, SHORT, TRAIN_IDS, BrokenPool, InlinePool
+
+from analysis.common.lock import OutputBusy, output_lock
+from analysis.common.status import FrameStatus
+from analysis.common.writer import IncompleteRun
+from analysis.saxs.masks import build_static_bad
+from analysis.xpcs import extract
+from analysis.xpcs.config import Kernel
+from analysis.xpcs.hits import HitSet
+from analysis.xpcs.kernel import PairStatus
+from analysis.xpcs.rings import build_envelope, build_rings, pixel_map
+from analysis.xpcs.store import RingPhotonStore
+
+GOOD = (10000, 10001, 10003, 10005, 10006, 10007, 10009)
+VOLATILE = frozenset(
+    {
+        "config_hash", "host", "input_file_sha256", "lock", "lock_takeover",
+        "package_versions", "platform", "run_checks", "setup_timings", "started_at",
+        "timings", "wall_s", "n_workers", "n_blocks", "history", "config_operational",
+        "bits_present",
+    }
+)  # fmt: skip
+
+
+def sha(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def rows(path):
+    with h5py.File(path, "r") as f:
+        return {int(t): i for i, t in enumerate(f["hits/train_id"][()].tolist())}, f[
+            "hits/status"
+        ][()]
+
+
+def read_mock_train(run_path, train_id):
+    """A train straight out of the mock's module files: dense counts and mask."""
+    data, mask = [], []
+    for module in range(16):
+        with h5py.File(run_path / f"CORR-R0423-AGIPD{module:02d}-S00000.h5", "r") as f:
+            ids = f["INDEX/trainId"][()]
+            index = f[f"INDEX/{source(module)}/image"]
+            at = int(np.flatnonzero(ids == train_id)[0])
+            first, count = int(index["first"][at]), int(index["count"][at])
+            image = f[f"INSTRUMENT/{source(module)}/image"]
+            data.append(image["data"][first : first + count])
+            mask.append(image["mask"][first : first + count])
+    # (16, P, 512, 128) -> (P, 16·512·128)
+    to_frames = lambda a: np.stack(a).transpose(1, 0, 2, 3).reshape(a[0].shape[0], -1)  # noqa: E731
+    return to_frames(data), to_frames(mask)
+
+
+def test_sums_equal_an_independent_reading_of_the_mock_files(pipeline):
+    path = pipeline.run(GOOD)
+    cfg = pipeline.cfg()
+    pixels = pixel_map(cfg, pipeline.geom)
+    envelope = build_envelope(pixels, cfg)
+    rings = build_rings(pixels, envelope, build_static_bad(cfg.saxs).bad, cfg)
+    row_of, status = rows(path)
+    assert (status == FrameStatus.OK).all()
+
+    def good(mask):
+        flagged = ((mask[:, envelope.pixels] & np.uint32(cfg.saxs.mask_bits)) != 0).any(
+            0
+        )
+        return (rings.label >= 0) & ~flagged
+
+    with h5py.File(path, "r") as f:
+        for cur_id, prev_id in ((10001, 10000), (10003, 10001), (10000, None)):
+            data, mask = read_mock_train(pipeline.mock.path, cur_id)
+            x = data[:, envelope.pixels].astype(np.int64)
+            pair = good(mask)
+            if prev_id:
+                pdata, pmask = read_mock_train(pipeline.mock.path, prev_id)
+                y = pdata[:, envelope.pixels].astype(np.int64)
+                pair = pair & good(pmask)
+            row = row_of[cur_id]
+            assert f["hits/partner"][row] == (prev_id or 0)
+            for ring in range(rings.n_rings):
+                own = good(mask) & (rings.label == ring)
+                np.testing.assert_array_equal(
+                    f["sums/on"][row, ring], x[:, own] @ x[:, own].T
+                )
+                np.testing.assert_array_equal(
+                    f["sums/s_on"][row, ring], x[:, own].sum(1)
+                )
+                assert f["sums/cnt"][row, ring] == own.sum()
+                if prev_id:
+                    sel = pair & (rings.label == ring)
+                    np.testing.assert_array_equal(
+                        f["sums/off"][row, ring], x[:, sel] @ y[:, sel].T
+                    )
+                    assert f["sums/cnt_pair"][row, ring] == sel.sum()
+            assert bool(f["hits/has_off"][row]) == bool(prev_id)
+
+
+def test_trains_that_gave_no_photons_are_accounted_for_not_dropped(pipeline):
+    path = pipeline.run(sorted((*GOOD, SHORT, EMPTY)))
+    row_of, status = rows(path)
+    assert status[row_of[SHORT]] == FrameStatus.MISSING_MODULES
+    assert status[row_of[EMPTY]] == FrameStatus.NO_FRAMES
+    assert (status[[row_of[t] for t in GOOD]] == FrameStatus.OK).all()
+    with h5py.File(path, "r") as f:
+        pair = f["hits/pair_status"][()]
+        assert pair[row_of[SHORT]] == PairStatus.NOT_OK
+        # 10003 is two trains after 10001: the skipped ones are not hits
+        assert f["hits/partner"][row_of[10003]] == 10001
+
+
+def test_a_complete_run_is_answered_from_the_file_and_writes_nothing(
+    pipeline, tmp_path
+):
+    path = pipeline.run(GOOD)
+    cfg = pipeline.cfg()
+    files = (path, cfg.store_file)
+    before = [(os.stat(p).st_ino, os.stat(p).st_mtime_ns, sha(p)) for p in files]
+    assert pipeline.run(GOOD) == path
+    after = [(os.stat(p).st_ino, os.stat(p).st_mtime_ns, sha(p)) for p in files]
+    assert before == after
+    assert not list(tmp_path.rglob("*.lock"))
+
+
+def test_the_same_hits_with_a_broken_pool_still_answer_from_the_file(pipeline):
+    pipeline.run(GOOD)
+    pipeline.run(GOOD, pool=BrokenPool)  # no pool is ever asked for work
+
+
+def test_an_empty_hit_set_is_a_result_and_extracts_nothing(pipeline):
+    path = pipeline.run([])
+    with h5py.File(path, "r") as f:
+        assert f["hits/train_id"].shape == (0,)
+        assert f.attrs["finalised"] == 1
+    assert not pipeline.cfg().store_file.exists()
+    assert pipeline.run([]) == path
+
+
+def test_a_hit_that_is_not_a_train_of_the_run_is_refused_before_anything_is_written(
+    pipeline, tmp_path
+):
+    with pytest.raises(ValueError, match="not trains of r423"):
+        pipeline.run([10000, 99999])
+    assert not list(tmp_path.rglob("*.h5"))
+
+
+def test_a_held_lock_refuses_the_run_and_leaves_the_files_alone(pipeline, tmp_path):
+    cfg = pipeline.cfg()
+    with output_lock(cfg.output_file), pytest.raises(OutputBusy):
+        pipeline.run(GOOD)
+    assert not list(tmp_path.rglob("*.h5"))
+    pipeline.run(GOOD)
+
+
+def test_a_block_that_fails_is_retried_by_the_next_run(pipeline, monkeypatch):
+    real = extract.process_block
+    calls = []
+
+    def flaky(block):
+        calls.append(block.train_ids)
+        if 10005 in block.train_ids and len(calls) < 99 and not retry:
+            raise OSError("a node went away")
+        return real(block)
+
+    retry = False
+    monkeypatch.setattr(extract, "process_block", flaky)
+    with pytest.raises(IncompleteRun, match="not extracted"):
+        pipeline.run(GOOD)
+    cfg = pipeline.cfg()
+    with RingPhotonStore.open(cfg.store_file) as store:
+        ids = np.array(GOOD, dtype=np.uint64)
+        failed = store.unfinished(ids)
+        assert 10005 in failed.tolist() and failed.size < len(GOOD)
+        assert not cfg.output_file.exists()
+
+    calls.clear()
+    retry = True
+    pipeline.run(GOOD)
+    extracted = {t for ids in calls for t in ids}
+    assert 10005 in extracted
+    assert extracted == set(failed.tolist())
+    _, status = rows(cfg.output_file)
+    assert (status == FrameStatus.OK).all()
+
+
+def test_allow_incomplete_merges_what_there_is_and_marks_the_rest(
+    pipeline, monkeypatch
+):
+    real = extract.process_block
+    monkeypatch.setattr(
+        extract,
+        "process_block",
+        lambda b: (
+            (_ for _ in ()).throw(OSError("down")) if 10005 in b.train_ids else real(b)
+        ),
+    )
+    path = pipeline.run(GOOD, allow_incomplete=True)
+    row_of, status = rows(path)
+    assert status[row_of[10005]] == FrameStatus.WORKER_ERROR
+    assert (status[[row_of[t] for t in (10000, 10001)]] == FrameStatus.OK).all()
+
+
+def test_a_larger_hit_set_extracts_only_the_new_trains(pipeline, monkeypatch):
+    first = pipeline.run(GOOD[:4])
+    store = pipeline.cfg().store_file
+    seen = []
+    real = extract.process_block
+    monkeypatch.setattr(
+        extract, "process_block", lambda b: seen.append(b.train_ids) or real(b)
+    )
+    second = pipeline.run(GOOD)
+    assert first == second
+    assert sorted(t for ids in seen for t in ids) == sorted(set(GOOD) - set(GOOD[:4]))
+    assert second.with_name("xpcs_hits.prev.h5").exists()
+    with RingPhotonStore.open(store) as s:
+        assert sorted(s.train_ids().tolist()) == sorted(GOOD)
+    _, status = rows(second)
+    assert status.size == len(GOOD) and (status == FrameStatus.OK).all()
+
+
+def test_a_partner_gap_change_rebuilds_the_sums_and_never_touches_the_store(pipeline):
+    path = pipeline.run(GOOD)
+    store = pipeline.cfg().store_file
+    stored = sha(store)
+    row_of, _ = rows(path)
+    with h5py.File(path, "r") as f:
+        assert f["hits/partner"][row_of[10003]] == 10001
+    pipeline.run(GOOD, max_partner_gap=1)
+    assert sha(store) == stored
+    with h5py.File(path, "r") as f:
+        assert f["hits/partner"][row_of[10003]] == 0
+        assert f["hits/pair_status"][row_of[10003]] == PairStatus.GAP_TOO_LARGE
+        assert f["hits/partner"][row_of[10006]] == 10005
+        assert f.attrs["max_partner_gap"] == 1
+
+
+def test_another_kernel_rebuilds_the_sums_from_the_same_store(pipeline):
+    path = pipeline.run(GOOD)
+    store = pipeline.cfg().store_file
+    stored = sha(store)
+    pipeline.run(GOOD, kernel=Kernel.ES)
+    assert sha(store) == stored
+    with h5py.File(path, "r") as f:
+        assert f.attrs["kernel"] == "es"
+        assert f["hits/has_off"][()].all()  # extra-speckle gives every chain a baseline
+
+
+def test_a_store_made_for_another_envelope_is_refused_and_kept(pipeline):
+    from analysis.xpcs.store import StoreMismatch
+
+    pipeline.run(GOOD)
+    store = pipeline.cfg().store_file
+    stored = sha(store)
+    with pytest.raises(StoreMismatch):
+        pipeline.run(GOOD, envelope_margin_mm=1.0)
+    assert sha(store) == stored
+
+
+def test_worker_count_and_block_size_change_no_stored_number(
+    pipeline, mock_run, geom, tmp_path, h5_digest
+):
+    """The only test that spawns workers: 1 against 3, in blocks of 1 against 4."""
+    from dataclasses import replace
+
+    from analysis.xpcs.run import run_xpcs_hits
+
+    run, dc = mock_run
+    digests = []
+    for workers, block in ((1, 4), (3, 1)):
+        cfg = replace(
+            pipeline.cfg(),
+            output_root=str(tmp_path / f"w{workers}"),
+            n_workers=workers,
+            trains_per_block=block,
+        )
+        out = run_xpcs_hits(
+            cfg, HitSet.of(GOOD), dc=dc, geometry=geom, run_dir=run.path
+        )
+        digests.append((h5_digest(cfg.store_file, VOLATILE), h5_digest(out, VOLATILE)))
+    assert digests[0] == digests[1]
+
+
+def test_inline_and_spawned_pools_agree(pipeline, mock_run, geom, tmp_path, h5_digest):
+    pipeline.run(GOOD)
+    from dataclasses import replace
+
+    from analysis.xpcs.run import run_xpcs_hits
+
+    run, dc = mock_run
+    cfg = replace(
+        pipeline.cfg(), output_root=str(tmp_path / "again"), trains_per_block=2
+    )
+    run_xpcs_hits(
+        cfg,
+        HitSet.of(GOOD),
+        dc=dc,
+        geometry=geom,
+        run_dir=run.path,
+        pool_factory=InlinePool,
+    )
+    assert h5_digest(cfg.store_file, VOLATILE) == h5_digest(
+        pipeline.cfg().store_file, VOLATILE
+    )
+
+
+def test_the_results_name_the_inputs_that_made_them(pipeline):
+    path = pipeline.run(GOOD)
+    with h5py.File(path, "r") as f:
+        assert f.attrs["hits_sha256"] == HitSet.of(GOOD).sha256
+        assert f.attrs["n_frames"] == FRAMES
+        assert f["pattern/pulse_ids"][()].tolist() == list(range(FRAMES))
+        assert f["provenance"].attrs["hit_set_sha256"] == HitSet.of(GOOD).sha256
+        assert f.attrs["envelope_sha256"]
+    assert len(TRAIN_IDS) == 10
