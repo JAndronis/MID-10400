@@ -448,7 +448,7 @@ hits, as budgeted.
 **Installing, later (the user's go).** From a clean main checkout after the merge:
 `python scripts/install_context.py` (dry run: diff, ctxrunner evaluation of both files), read the
 diff (it should add only the `xpcs_hits_*` block), then `--install`. Then, per run, either let
-DAMNIT run the new column or `damnit reprocess --match "XPCS hits"`. The pass takes the output
+DAMNIT run the new column, or reprocess through `scripts/reprocess_all.sh xpcs-hits [RUNS]` (`context/damnit-integrity.md` §7.1: never a bare `--match "XPCS hits"`, which would run the AGIPD pass for a run that lacks it). The pass takes the output
 lock and answers a complete run from its files, so a relaunch writes nothing. A run's first pass
 extracts its hits from proc (about 14 trains/s at 36 workers on r0493, §10), so run it before the
 run's proc goes to tape; the photon store is what outlives proc.

@@ -27,6 +27,25 @@ DAMNIT write a fresh one, checking it, and only then deleting the old one:
 Never moves the AGIPD window sums (``usr/cached_files/agipd_pixel_sums``) or
 photon statistics (``usr/cached_files/agipd_photon_stats``): the pass never
 truncates them, and once proc is on tape they cannot be rebuilt.
+
+``-d xpcs`` is the hit-train XPCS product (``analysis.xpcs``, ``context/xpcs-hits.md``).
+The output moved aside, rebuilt and checked is the result file ``xpcs_hits.h5``,
+which is derived from the ring-photon store. The **store**
+(``agipd_ring_photons.h5``, ``cfg.store_file``) is the hit trains' only 2D record
+once proc is taped, so it is a companion like the window sums: test-read by
+``check``, never renamed, never in ``--match``. The pass itself also moves a
+result made for other inputs to ``xpcs_hits.prev.h5``; that file is not one of
+this script's backups. ``xpcs_hits_preprocessing`` depends on ``agipd_saxs``, so
+asking DAMNIT for it would run the AGIPD pass: ``start -d xpcs`` therefore
+refuses a run unless its AGIPD output is complete, and for a run whose store is
+absent unless its proc directory exists. What this script cannot judge for xpcs:
+whether the hit set is the classifier's current one and whether the merge hash
+matches today's config. Both need the classifier and the geometry, which a
+script must not import, so ``complete`` means only that the file is readable,
+finalised, has no unfinished or label-mismatched hit train, and that the store
+holds every hit train under the hash the result recorded. Final non-OK trains
+(NO_FRAMES and the like) are reported as notes. ``xpcs_hits_preprocessing`` is
+the judge of the rest, and answers a complete run from its file.
 ``--dry-run`` prints what would happen and changes nothing. Writes its report as
 JSON beside itself.
 
@@ -38,6 +57,7 @@ counts every run as busy. Non-cluster jobs run on cluster ``solaris``, hence
     python scripts/reprocess_safe.py status 423 426 -d agipd -d jf1
     python scripts/reprocess_safe.py start 423-428 -d agipd --dry-run
     python scripts/reprocess_safe.py check 423-428 -d agipd -j 8
+    python scripts/reprocess_safe.py start 493-496 -d xpcs --dry-run
 """
 
 from __future__ import annotations
@@ -84,6 +104,10 @@ class Detector:
         roots = {}
         if self.root_override:
             roots = {"output_root": self.root_override}
+        if self.name == "xpcs":
+            from analysis.xpcs.damnit import config_for
+
+            return config_for(PROPOSAL, run, **roots)
         if self.name == "agipd":
             from analysis.saxs.damnit import config_for
 
@@ -102,6 +126,8 @@ class Detector:
         return self.output(0).parent.parent
 
     def complete(self, run: int, path: Path) -> Any:
+        if self.name == "xpcs":
+            return xpcs_completeness(path, self.config(run).store_file)
         if self.name == "agipd":
             from analysis.saxs.complete import is_complete
 
@@ -117,6 +143,9 @@ class Detector:
             return [cfg.pixel_sums_file] + (
                 [cfg.photon_stats_file] if cfg.photon_stats else []
             )
+        if self.name == "xpcs":
+            store = self.config(run).store_file
+            return [store] if store.exists() else []
         return []
 
 
@@ -135,7 +164,91 @@ DETECTORS = {
     ),
     "jf1": Detector("jf1", ("JUNGFRAU preprocessing", "JF1 I(q)", "JUNGFRAU I(q)")),
     "jf2": Detector("jf2", ("JUNGFRAU preprocessing", "JF2 I(q)", "JUNGFRAU I(q)")),
+    # --match is a case-insensitive substring, so "XPCS hits" alone would also
+    # select "XPCS hits frames used", which reads the file the cluster job is
+    # still writing: `reprocess_all.sh refresh` does that cell afterwards. None of
+    # these is a substring of an old extra-speckle title ("XPCS g2", "XPCS TTCF",
+    # ...), which `scripts/match_titles.py --self-test` asserts against context.py.
+    "xpcs": Detector(
+        "xpcs",
+        (
+            "XPCS hits preprocessing",
+            "XPCS hits g2",
+            "XPCS hits TTCF",
+            "XPCS hits overview",
+        ),
+    ),
 }
+
+#: Where a run's proc data live, for judging whether a missing store can be rebuilt.
+PROC_DIR = Path("/gpfs/exfel/exp/MID/202601/p010400/proc")
+
+
+# ── the xpcs result file ──────────────────────────────────────────────────────
+@dataclass(frozen=True)
+class XpcsVerdict:
+    """What the result file and its store record; see the module docstring."""
+
+    path: Path
+    reasons: tuple[str, ...]
+    notes: tuple[str, ...] = ()
+
+
+def xpcs_completeness(path: Path, store: Path) -> XpcsVerdict:
+    """Why ``path`` is not complete, from what it and its store record alone.
+
+    Imports no classifier and builds no geometry, so it cannot tell a hit set or
+    a merge hash from the current ones (module docstring).
+    """
+    import h5py
+    import numpy as np
+
+    from analysis.common.status import UNFINISHED, FrameStatus
+    from analysis.xpcs.result import SCHEMA
+    from analysis.xpcs.store import ABSENT, RingPhotonStore, StoreMismatch
+
+    if not path.exists():
+        return XpcsVerdict(path, ("no file",))
+    reasons: list[str] = []
+    notes: list[str] = []
+    try:
+        with h5py.File(path, "r") as handle:
+            schema = handle.attrs.get("schema")
+            extract_hash = handle.attrs.get("extract_hash")
+            finalised = "finalised" in handle.attrs
+            train_ids = handle["hits/train_id"][()]
+            status = handle["hits/status"][()]
+    except (OSError, KeyError, ValueError) as error:
+        return XpcsVerdict(path, (f"unreadable: {error!r}",))
+    if schema != SCHEMA:
+        reasons.append(f"schema {schema}, this code's is {SCHEMA}")
+    if not finalised:
+        reasons.append("never finalised")
+    bad = (*sorted(UNFINISHED), FrameStatus.LABEL_MISMATCH)
+    for code in bad:
+        if n := int((status == code).sum()):
+            reasons.append(f"{n} trains {code.name}")
+    for code in FrameStatus:
+        if code not in bad and code != FrameStatus.OK and (status == code).any():
+            notes.append(f"{int((status == code).sum())} trains {code.name}")
+    if not train_ids.size:
+        notes.append("no hit train")
+        return XpcsVerdict(path, tuple(reasons), tuple(notes))
+    if not store.exists():
+        reasons.append(f"store {store} is missing")
+        return XpcsVerdict(path, tuple(reasons), tuple(notes))
+    try:
+        with RingPhotonStore.open(store) as photons:
+            if photons.extract_hash != extract_hash:
+                reasons.append("the store was extracted under another hash")
+            usable = status == FrameStatus.OK
+            held = photons.status(train_ids[usable])
+            lacking = int(np.isin(held, [int(c) for c in UNFINISHED] + [ABSENT]).sum())
+            if lacking:
+                reasons.append(f"the store lacks {lacking} of the OK hit trains")
+    except (OSError, KeyError, StoreMismatch) as error:
+        reasons.append(f"store unreadable: {error!r}")
+    return XpcsVerdict(path, tuple(reasons), tuple(notes))
 
 
 # ── names ─────────────────────────────────────────────────────────────────────
@@ -248,6 +361,9 @@ def frames_of(path: Path) -> dict[str, Any]:
     import numpy as np
 
     with h5py.File(path, "r") as handle:
+        if "hits/train_id" in handle:
+            hits = handle["hits/train_id"]
+            return {"frames": int(hits.shape[0]), "trains": hits[()].tolist()}
         return {
             "frames": int(handle["frames/status"].shape[0]),
             "trains": np.asarray(handle["trains/trainId"][:]).tolist(),
@@ -275,7 +391,10 @@ def status_one(run: int, detector: Detector, busy: set[int]) -> dict[str, Any]:
         },
     }
     if record["exists"] and not record["busy"] and record["lock"] is None:
-        record["complete_reasons"] = list(detector.complete(run, output).reasons)
+        verdict = detector.complete(run, output)
+        record["complete_reasons"] = list(verdict.reasons)
+        if notes := getattr(verdict, "notes", ()):
+            record["notes"] = list(notes)
     return record
 
 
@@ -301,8 +420,13 @@ def check_one(
     reasons += [f"not complete: {r}" for r in detector.complete(run, output).reasons]
     for path in (output, *detector.companions(run)):
         reasons += [f"{path.name}: {failure}" for failure in test_read(path)]
-    old, new = frames_of(backup), frames_of(output)
-    record["frames"] = {"before": old["frames"], "after": new["frames"]}
+    try:
+        old, new = frames_of(backup), frames_of(output)
+    except (OSError, KeyError) as error:
+        reasons.append(f"frames unreadable: {error!r}")
+        old = new = None
+    if old is not None:
+        record["frames"] = {"before": old["frames"], "after": new["frames"]}
     if old != new:
         change = (
             f"frames {old['frames']} -> {new['frames']}, trains "
@@ -341,14 +465,46 @@ def command_status(items, args, busy, arrays) -> dict[str, Any]:
         )
         backups = ", ".join(f"{Path(b).name}={v}" for b, v in r["backups"].items())
         why = "; ".join(r.get("complete_reasons") or [])
-        print(f"r{r['run']:04d} {r['detector']:5s} {state:10s} {why} {backups}")
+        notes = f" [{'; '.join(r['notes'])}]" if r.get("notes") else ""
+        print(f"r{r['run']:04d} {r['detector']:5s} {state:10s} {why}{notes} {backups}")
     return {"arrays": arrays, "results": results}
+
+
+def xpcs_start_problems(run: int, detector: Detector) -> list[str]:
+    """Why ``damnit reprocess`` must not be asked for the XPCS variables of ``run``.
+
+    ``xpcs_hits_preprocessing`` depends on ``agipd_saxs``: DAMNIT would run the
+    AGIPD pass, outside this script's protections, for a run whose AGIPD output
+    is not complete. The AGIPD output is always judged at its real location,
+    whatever ``--root`` says about the XPCS files.
+    """
+    tag = f"r{run:04d} xpcs"
+    agipd = DETECTORS["agipd"]
+    path = agipd.output(run)
+    if not path.exists():
+        return [f"{tag}: no AGIPD output {path}; DAMNIT would run the AGIPD pass"]
+    if path.with_name(f"{path.name}.lock").exists():
+        return [f"{tag}: the AGIPD output is locked"]
+    reasons = agipd.complete(run, path).reasons
+    problems = (
+        [f"{tag}: AGIPD output not complete ({'; '.join(reasons)})"] if reasons else []
+    )
+    store = detector.config(run).store_file
+    if not store.exists() and not (PROC_DIR / f"r{run:04d}").exists():
+        problems.append(f"{tag}: no photon store {store} and no proc directory")
+    return problems
 
 
 def command_start(items, args, busy, arrays) -> dict[str, Any]:
     problems: list[str] = []
     if arrays:
         problems.append(f"DAMNIT job arrays are active ({arrays}); runs unknown")
+    names = {detector.name for _, detector in items}
+    if "xpcs" in names and names - {"xpcs"}:
+        problems.append(
+            "-d xpcs needs the AGIPD output complete before it starts: reprocess "
+            "the AGIPD and JUNGFRAU outputs first, wait for the jobs, then xpcs"
+        )
     moves: list[tuple[Path, Path]] = []
     when = stamp()
     size = 0
@@ -364,8 +520,14 @@ def command_start(items, args, busy, arrays) -> dict[str, Any]:
         if output.exists():
             moves.append((output, backup_name(output, when)))
             size += output.stat().st_size
+        if detector.name == "xpcs":
+            problems += xpcs_start_problems(run, detector)
 
-    roots = {detector.root() for _, detector in items}
+    # A product not written yet has no directory: ask about the first one that exists.
+    roots = {
+        next(p for p in (detector.root(), *detector.root().parents) if p.exists())
+        for _, detector in items
+    }
     quota = {}
     for root in roots:
         try:
@@ -395,6 +557,7 @@ def command_start(items, args, busy, arrays) -> dict[str, Any]:
     shell = "module load exfel damnit/stable && " + shlex.join(damnit)
     record = {
         "moves": [[str(a), str(b)] for a, b in moves],
+        "never_moved": sorted({str(c) for run, d in items for c in d.companions(run)}),
         "bytes": size,
         "quota": quota,
         "command": shell,

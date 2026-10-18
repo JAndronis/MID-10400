@@ -348,6 +348,32 @@ called):
 - **The sha256 shortcut.** When the stored sha256 equals the one built on the checking node, the
   arrays are not read back (they are covered by it). Otherwise they are read and compared.
 
+### 7.1 The XPCS hits product (`-d xpcs`, added 2026-10-19)
+
+`scripts/reprocess_safe.py -d xpcs` covers `analysis.xpcs` (`context/xpcs-hits.md`).
+
+- **What moves.** `xpcs_hits.h5` (derived, rebuilt from the store in minutes). **The photon store
+  `agipd_ring_photons.h5` never moves**: proc cannot refill it once taped. `check` test-reads it
+  as a companion, as it does the AGIPD window sums. The pass itself keeps a result made for other
+  inputs as `xpcs_hits.prev.h5`; that is not one of this script's backups.
+- **Titles.** `XPCS hits preprocessing`, `g2`, `TTCF`, `overview`. `XPCS hits frames used` is left
+  to `reprocess_all.sh refresh`, because it reads the file the cluster job is still writing. None
+  is a substring of an old extra-speckle title, and `reprocess_all.sh xpcs` no longer matches the
+  bare `XPCS`. `python scripts/match_titles.py --self-test` lists every title of `context.py` per
+  `--match` and asserts both properties.
+- **Refusals.** `xpcs_hits_preprocessing` depends on `agipd_saxs`, so `start -d xpcs` refuses a run
+  with no AGIPD output, a locked or incomplete one (judged at the real location whatever `--root`
+  says), a run with no store and no proc directory, and any command that also names another
+  detector. The refusal is for the whole command, so name the runs.
+- **What `complete` means here.** Readable, schema current, finalised, no `WORKER_ERROR`,
+  `NOT_PROCESSED` or `LABEL_MISMATCH` hit train, and the store holds every OK hit train under the
+  hash the result recorded; final non-OK trains (`NO_FRAMES`, ...) are notes. It cannot tell the
+  current hit set or merge hash from the recorded ones (that needs the classifier and the
+  geometry, which a script must not import): `xpcs_hits_preprocessing` judges those and answers a
+  complete run from its file. A changed hit count needs `--accept-count-change`.
+- **Order.** `reprocess_all.sh launch` and let every job end, then `reprocess_all.sh xpcs-hits
+  [RUNS]`, then `reprocess_safe.py check RUNS -d xpcs` and `cleanup`, then `reprocess_all.sh refresh`.
+
 ## 8. Acceptance (2026-10-13)
 
 | Gate | Result |
