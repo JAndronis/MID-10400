@@ -70,7 +70,9 @@ def read_run_table(sqlite_path: Path) -> pd.DataFrame:
     """DAMNIT's ``runs`` table, `RUN_COLUMNS` only, sorted by run, opened read-only."""
     uri = f"file:{Path(sqlite_path)}?mode=ro"
     query = f"SELECT {', '.join(RUN_COLUMNS)} FROM runs ORDER BY run"
-    with closing(sqlite3.connect(uri, uri=True)) as con:
+    # Many DAMNIT jobs write runs.sqlite at once; wait for the lock (seconds, not
+    # sqlite's default of 5) instead of failing the hit rule of a run.
+    with closing(sqlite3.connect(uri, uri=True, timeout=300.0)) as con:
         return pd.read_sql(query, con)
 
 
