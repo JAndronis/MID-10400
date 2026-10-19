@@ -418,11 +418,14 @@ class Xpcs:
         transmission: "var#total_transmission",
         proposal: "meta#proposal",
         run_no: "meta#run_number",
+        hits: "var#hits.summary" = None,
     ):
         """Extract the droplet-hit trains and write their sums; a status, not a result.
 
         Green when every hit is usable, amber when some are final non-OK, red
         when the pass failed, grey when the run has no hit. `run` is unused.
+        `hits` is only there for the order: the hit rule runs, and its summary
+        cell exists, before this pass (it finds the same hits again).
         """
         from analysis.xpcs import damnit
 
@@ -656,6 +659,7 @@ class Xpcs:
         transmission: "var#total_transmission",
         proposal: "meta#proposal",
         run_no: "meta#run_number",
+        hits: "var#hits.summary" = None,
     ):
         """k̄ and single-frame contrast per XPCS ROI and ring, over the droplet hits.
 
@@ -725,6 +729,7 @@ class Hits:
         transmission: "var#total_transmission",
         proposal: "meta#proposal",
         run_no: "meta#run_number",
+        summary: "self#summary" = None,
         fit: "var#droplet_fit" = None,
     ):
         """Mesh scan map with the droplet's geometric approximation, f against time.

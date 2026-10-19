@@ -80,35 +80,27 @@ def self_test() -> int:
 
     every = titles()
     sets = {d: set(selected(list(DETECTORS[d].titles), every)) for d in DETECTORS}
-    refresh = selected(["frames used", "XPCS score", "Hits "], every)
+    refresh = selected(["frames used", "XPCS score"], every)
     reads_file = {t for t in every if t.lower().endswith(("frames used", "xpcs score"))}
-    xpcs_cells = {t for t in every if t.lower().startswith("xpcs ")}
-    shared = (sets["agipd"] & sets["xpcs"]) | (sets["jf1"] & sets["jf2"] - sets["jf1"])
+    xpcs_cells = {t for t in every if t.lower().startswith(("xpcs ", "hits "))}
     checks = {
         "xpcs titles select no file-reading cell": not sets["xpcs"] & reads_file,
-        "xpcs titles select every other XPCS cell but the photon statistics": (
-            sets["xpcs"]
-            == xpcs_cells
-            - reads_file
-            - {t for t in xpcs_cells if "photon statistics" in t.lower()}
-        ),
-        "agipd and xpcs sets share no variable": not shared,
-        "agipd titles select its preprocessing, I(q), SVD and photon statistics": {
+        "xpcs titles select every other XPCS and Hits cell": sets["xpcs"]
+        == xpcs_cells - reads_file,
+        "agipd and xpcs sets share no variable": not sets["agipd"] & sets["xpcs"],
+        "agipd titles select its preprocessing, I(q) and SVD": {
             "AGIPD preprocessing",
             "AGIPD I(q)",
             "AGIPD I(q) overview",
             "AGIPD SVD and chi2",
-            "XPCS photon statistics",
-            "XPCS photon statistics overview",
         }
         == sets["agipd"],
-        "refresh covers every frames-used cell, the score and the hit cells": {
+        "refresh covers every frames-used cell and the score": {
             t for t in every if t.lower().endswith("frames used")
         }
-        | {"XPCS score", "Hits summary", "Hits geometry"}
+        | {"XPCS score"}
         == set(refresh),
-        "every title of the context file is a group title or ungrouped": len(every)
-        == len(set(every)),
+        "every title of the context file is unique": len(every) == len(set(every)),
     }
     print(f"{len(every)} titles in {CONTEXT}")
     for name in DETECTORS:

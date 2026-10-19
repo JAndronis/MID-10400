@@ -24,8 +24,7 @@
 #          INCOMPLETE per run and detector. (`check` needs the backups `start`
 #          makes; with the outputs deleted there are none.)
 # refresh  once no DAMNIT job is left: the non-cluster cells that read the pass
-#          files instead of depending on them ("frames used", "XPCS score", and
-#          the "Hits" cells, which read agipd.saxs).
+#          files instead of depending on them ("frames used", "XPCS score").
 #          Run with launch they would see no file yet.
 # xpcs-hits the hit-train XPCS pass (analysis.xpcs), through `reprocess_safe.py
 #          start -d xpcs`: it prints the AGIPD and XPCS status, then refuses
@@ -90,7 +89,7 @@ case $command in
             echo "DAMNIT jobs are still queued or running; refresh once they end" >&2
             exit 1
         fi
-        damnit reprocess --in "$AMORE" --match 'frames used' --match 'XPCS score' --match 'Hits ' \
+        damnit reprocess --in "$AMORE" --match 'frames used' --match 'XPCS score' \
             "${runs[@]}"
         ;;
     xpcs-hits)

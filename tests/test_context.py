@@ -222,6 +222,7 @@ PREPROCESSING = {
         "saxs": "agipd.saxs",
         "xgm": "xgm_intensity",
         "transmission": "total_transmission",
+        "hits": "hits.summary",
     },
 }
 
@@ -371,3 +372,13 @@ def test_the_reproduced_xpcs_columns_wait_on_the_hit_pass_only(variables, name):
     deps = variables[name].arg_dependencies()
     assert deps.pop("rep", "rep_rate") == "rep_rate"
     assert deps == {"prep": "xpcs.preprocessing"}
+
+
+def test_the_hit_rule_comes_before_what_works_on_the_hits(variables):
+    """A clean run orders: preprocessing, SAXS/WAXS columns, the hit rule, then
+    the photon statistics and the hit-train pass on the hits (user, 2026-10-19).
+    The dependency on ``hits.summary`` is what makes DAMNIT run them in that order."""
+    assert variables["hits.summary"].arg_dependencies()["saxs"] == "agipd.saxs"
+    assert variables["hits.geometry"].arg_dependencies()["summary"] == "hits.summary"
+    for name in ("xpcs.preprocessing", "xpcs.photon_statistics"):
+        assert variables[name].arg_dependencies()["hits"] == "hits.summary", name

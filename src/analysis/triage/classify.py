@@ -49,6 +49,7 @@ which an absence of up to 22 s cannot drag down (`static_hits`).
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import h5py
@@ -522,6 +523,33 @@ def run_blocks(runs_table):
     return pd.DataFrame(rows).set_index("run")
 
 
+#: A neighbour's DAMNIT file is rewritten by that run's own jobs, so reading it
+#: mid-write fails (HDF5 "bad object header", or a q axis not yet filled). Such a
+#: read is retried this many times, this many seconds apart.
+MEMBER_TRIES = 6
+MEMBER_WAIT_S = 20.0
+
+
+def _member_signals(run: int, **kwargs):
+    """`train_signals` of another run of a mesh block, riding out a concurrent write.
+
+    :raises LookupError: the run has no agipd_saxs, or
+    :raises FileNotFoundError: no DAMNIT file: the caller leaves it out of the block.
+    :raises OSError: or ValueError: the file stayed unreadable through every try.
+        Not treated as "missing": leaving a run out of its block silently changes
+        the cut every run of the block is classified with.
+    """
+    for attempt in range(MEMBER_TRIES):
+        try:
+            return train_signals(run, **kwargs)
+        except (LookupError, FileNotFoundError):
+            raise
+        except (OSError, ValueError):
+            if attempt == MEMBER_TRIES - 1:
+                raise
+            time.sleep(MEMBER_WAIT_S)
+
+
 def _log_ratio(ds, name: str) -> np.ndarray:
     with np.errstate(invalid="ignore", divide="ignore"):
         return np.log10((ds[name] / ds.flux).values)
@@ -547,7 +575,9 @@ def hits(
     :param signals: this run's `train_signals`, when they come from memory
         (`signals_from`) rather than DAMNIT's file. The other runs of a mesh
         block are still read from their files; one with no ``agipd_saxs`` yet
-        is left out of the block and named in ``summary["block_missing"]``.
+        is left out of the block and named in ``summary["block_missing"]``. A
+        file that stays unreadable (a concurrent write) raises after
+        `MEMBER_TRIES` tries rather than being left out.
     :returns: ``train_ids`` (the hits), ``classes`` (a DataArray over every train:
         "on"/"edge"/"off"/"none" for mesh runs, "on"/"off"/"none" for the others),
         ``overlap`` (a DataArray of f per train for mesh runs, None for the others),
@@ -577,11 +607,11 @@ def hits(
             if int(r) == int(run):
                 continue
             try:
-                member = train_signals(
+                member = _member_signals(
                     int(r), damnit_root=damnit_root, proposal=proposal,
                     cache_dir=cache_dir,
                 )  # fmt: skip
-            except (LookupError, FileNotFoundError, OSError):
+            except (LookupError, FileNotFoundError):
                 missing.append(int(r))
                 continue
             xs[int(r)] = _log_ratio(member, "saxs_mid")

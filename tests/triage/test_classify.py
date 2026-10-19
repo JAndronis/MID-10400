@@ -374,3 +374,59 @@ def test_hits_take_this_run_from_memory_and_skip_members_not_yet_stored(tmp_path
     fewer = hits(121, damnit_root=root, cache_dir=None, signals=signals_from(*memory))
     assert fewer["summary"]["block_missing"] == [122]
     assert fewer["kind"] == "mesh" and fewer["train_ids"].size > 0
+
+
+def _three_run_block(tmp_path):
+    rng = np.random.default_rng(7)
+    root = tmp_path / "amore"
+    (root / "extracted_data").mkdir(parents=True)
+    rows = []
+    for r in (120, 121, 122):
+        x, _ = mesh_run(rng, -4.3, 0.2, n=400)
+        saxs = np.broadcast_to((10.0**x)[:, None, None], (400, 2, 30)).copy()
+        write_damnit(root / "extracted_data" / f"p10400_r{r}.h5", saxs,
+                     xgm=np.full(400, 10.0))  # fmt: skip
+        rows.append(run_row(r, scan_type="dmesh SSHEX", total_transmission=0.0123,
+                            pulses=350.0))  # fmt: skip
+    write_sqlite(root / "runs.sqlite", rows)
+    return root
+
+
+def test_a_neighbour_being_written_is_waited_for_not_left_out(tmp_path, monkeypatch):
+    """A block member's file that is unreadable at first (its own job is writing
+    it) is read again, and the block is classified with every member."""
+    from analysis.triage import classify
+
+    root = _three_run_block(tmp_path)
+    want = hits(121, damnit_root=root, cache_dir=None)
+    monkeypatch.setattr(classify, "MEMBER_WAIT_S", 0.0)
+    real, calls = classify.train_signals, {"n": 0}
+
+    def flaky(run, **kwargs):
+        if run == 122 and calls["n"] < 2:
+            calls["n"] += 1
+            raise OSError("bad object header version number")
+        return real(run, **kwargs)
+
+    monkeypatch.setattr(classify, "train_signals", flaky)
+    got = hits(121, damnit_root=root, cache_dir=None)
+    assert calls["n"] == 2 and got["summary"]["block_missing"] == []
+    np.testing.assert_array_equal(got["train_ids"], want["train_ids"])
+
+
+def test_a_neighbour_that_stays_unreadable_fails_the_run(tmp_path, monkeypatch):
+    """Not "missing": leaving a run out would change the cut of the whole block."""
+    from analysis.triage import classify
+
+    root = _three_run_block(tmp_path)
+    monkeypatch.setattr(classify, "MEMBER_WAIT_S", 0.0)
+    real = classify.train_signals
+
+    def broken(run, **kwargs):
+        if run == 122:
+            raise ValueError("agipd.saxs has no q bin in (0.3, 0.5)")
+        return real(run, **kwargs)
+
+    monkeypatch.setattr(classify, "train_signals", broken)
+    with pytest.raises(ValueError, match="no q bin"):
+        hits(121, damnit_root=root, cache_dir=None)

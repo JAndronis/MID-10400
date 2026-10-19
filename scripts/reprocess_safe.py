@@ -148,6 +148,23 @@ class Detector:
             return [store] if store.exists() else []
         return []
 
+    def derived(self, run: int) -> list[Path]:
+        """Regenerable caches built from this run's DAMNIT values, deleted by
+        ``--fresh`` instead of moved: the hit rule's per-train signals
+        (`analysis.triage.classify.train_signals`), keyed by the DAMNIT file's size
+        and mtime, which a reprocess changes. They are rebuilt in seconds on demand."""
+        if self.name not in ("agipd", "xpcs"):
+            return []
+        from analysis.triage.classify import CACHE_DIR
+
+        pattern = re.compile(rf"^signals_r{run:04d}_[0-9a-f]+\.nc$")
+        root = (
+            Path(self.root_override) / "run_triage" if self.root_override else CACHE_DIR
+        )
+        if not root.exists():
+            return []
+        return sorted(p for p in root.iterdir() if pattern.match(p.name))
+
     def caches(self, run: int) -> list[Path]:
         """`companions`, whether or not they exist now: what ``--fresh`` moves."""
         if self.name == "xpcs":
@@ -168,18 +185,23 @@ DETECTORS = {
             "AGIPD preprocessing",
             "AGIPD I(q)",
             "AGIPD SVD and chi2",
-            "XPCS photon statistics",
         ),
     ),
     "jf1": Detector("jf1", ("JUNGFRAU preprocessing", "JF1 I(q)", "JUNGFRAU I(q)")),
     "jf2": Detector("jf2", ("JUNGFRAU preprocessing", "JF2 I(q)", "JUNGFRAU I(q)")),
-    # Every cluster variable of the hit-train pass and its figures. Not "XPCS
-    # frames used" and "XPCS score", which read the file the cluster job is still
-    # writing: `reprocess_all.sh refresh` does those afterwards. "XPCS g2" also
-    # selects the g2 figure and fit, "XPCS TTCF" the per-train TTCF.
+    # Everything after the AGIPD and JUNGFRAU wave, in the order DAMNIT runs it by
+    # dependency: the hit rule ("Hits summary", "Hits geometry"), the photon
+    # statistics over the hits, then the hit-train pass and its figures. All of it
+    # needs every run of a mesh block's agipd.saxs, so none of it is in the first
+    # wave. Not "XPCS frames used" and "XPCS score", which read the file the cluster
+    # job is still writing: `reprocess_all.sh refresh` does those afterwards. "XPCS
+    # g2" also selects the g2 figure and fit, "XPCS TTCF" the per-train TTCF.
     "xpcs": Detector(
         "xpcs",
         (
+            "Hits summary",
+            "Hits geometry",
+            "XPCS photon statistics",
             "XPCS preprocessing",
             "XPCS g2",
             "XPCS TTCF",
@@ -531,6 +553,7 @@ def command_start(items, args, busy, arrays) -> dict[str, Any]:
             "the AGIPD and JUNGFRAU outputs first, wait for the jobs, then xpcs"
         )
     moves: list[tuple[Path, Path]] = []
+    deletes: list[Path] = []
     when = stamp()
     size = 0
     for run, detector in items:
@@ -546,6 +569,7 @@ def command_start(items, args, busy, arrays) -> dict[str, Any]:
             moves.append((output, backup_name(output, when)))
             size += output.stat().st_size
         if args.fresh:
+            deletes += detector.derived(run)
             for companion in detector.caches(run):
                 if backups_of(companion):
                     problems.append(
@@ -592,6 +616,7 @@ def command_start(items, args, busy, arrays) -> dict[str, Any]:
     shell = "module load exfel damnit/stable && " + shlex.join(damnit)
     record = {
         "moves": [[str(a), str(b)] for a, b in moves],
+        "deleted_caches": [str(c) for c in deletes],
         "never_moved": []
         if args.fresh
         else sorted({str(c) for run, d in items for c in d.companions(run)}),
@@ -600,8 +625,11 @@ def command_start(items, args, busy, arrays) -> dict[str, Any]:
         "command": shell,
         "problems": problems,
     }
+    deletes = sorted(set(deletes))
     for source, target in moves:
         print(f"rename {source} -> {target.name}")
+    if deletes:
+        print(f"delete {len(deletes)} regenerable signal caches ({deletes[0].parent})")
     print(f"then: bash -lc {shlex.quote(shell)}")
     if problems:
         print("\nnot starting:\n- " + "\n- ".join(problems))
@@ -612,6 +640,8 @@ def command_start(items, args, busy, arrays) -> dict[str, Any]:
 
     for source, target in moves:
         source.rename(target)
+    for cache in deletes:
+        cache.unlink()
     if args.no_trigger:
         print(
             "\n--no-trigger: moved aside; start DAMNIT yourself with the command above"
