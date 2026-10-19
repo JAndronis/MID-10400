@@ -1,5 +1,7 @@
 # Run diagnostics (`<pkg>.diagnostics`), XPCS SNR, frame cells and droplet videos
 
+> **Variable names.** Since 2026-10-19 the DAMNIT columns are `Group` classes (`agipd.saxs`, `xpcs.g2`, ...); the flat names used below (`agipd_saxs`, `xpcs_hits_g2`, `xpcs_score`, ...) are the earlier ones. The map is `context/damnit-integrity.md` §8.1; `analysis.damnit_names` reads both.
+
 Context file for CLAUDE.md open task 20 (session S4, 2026-10-13). Read `CLAUDE.md` first;
 the XPCS keep rule is `context/run-triage.md` §4.6, the photon-statistics quality check
 `context/xpcs-quality.md`.

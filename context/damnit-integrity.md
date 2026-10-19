@@ -401,3 +401,96 @@ called):
 - `python scripts/install_context.py --install --accept-live 44561ba487b3`, provided the live files
   have not changed since the 2026-10-07 state that id names;
 - then `reprocess_safe.py` for the bulk reprocess, after S3 and S2.
+
+## 8. Groups, the clean reprocess and what went wrong (2026-10-19)
+
+### 8.1 The context in `Group` classes
+
+`src/amore/context.py` groups the analysis columns by technique (DAMNIT 0.4.0 `Group`). A group
+names its variables `<group>.<var>` and titles them `<group title> <var title>`; with
+`sep=" "` the titles are the old ones, so `damnit reprocess --match "frames used"` still works.
+Metadata, beam, transmission and `droplet_fit` stay flat (`analysis.cache`, `analysis.utils` and
+the triage inventory read them by name). Dependencies inside a group are `self#<var>`, across
+groups `var#<group>.<var>`. `tests/test_context.py` loads the file through `ctxrunner` and
+asserts each wrapper is an import plus a call.
+
+| Group (instance) | Variables (`<group>.<var>`) |
+|---|---|
+| `agipd` (AGIPD) | `preprocessing` (cluster, the one read of AGIPD proc), `saxs`, `iq_overview`, `frames_used`, `diagnostics` (SVD, χ² over hits) |
+| `jungfrau` (JUNGFRAU) | `preprocessing`, `jf1`, `jf2`, `iq_overview`, `combined`, `jf1_frames_used`, `jf2_frames_used` |
+| `hits` (Hits) | `summary` (hit / edge / off per run), `geometry` (mesh map, f against time) |
+| `xpcs` (XPCS) | `preprocessing` (hit-train pass), `g2`, `ttcf`, `overview`; the old extra-speckle figures `q_rings`, `beamcenter`, `outliers`, `intensity_outliers`, `kbar`, `correction`, `ttcfs`, `figure_g2`, `g2_fit`, `saxs_figure` and data `mean_dataset`, `saxs_curves`, `ttcf_per_train`; `photon_statistics` (+ overview); `frames_used`, `score` |
+| `camera` (Camera) | `video`, `first_image` (not computed for every run yet) |
+
+Old flat names → new: `agipd_saxs` → `agipd.saxs`, `agipd_preprocessing`, `agipd_iq_overview`,
+`agipd_frames_used`, `diagnostics_overview` → `agipd.*`; `jungfrau_waxs_jf1/jf2/combined/overview`
+→ `jungfrau.jf1/jf2/combined/iq_overview`; `xpcs_hits_*` → `xpcs.*`; `xpcs_pipeline` and its
+`xpcs_*_plot` columns are gone (reproduced by `analysis.xpcs.figures`, §8.4); `photon_statistics*`,
+`xpcs_score` → `xpcs.*`; `droplet_video`, `droplet_first_image` → `camera.*`.
+`analysis.damnit_names` holds the names, and `stored(file, name)` finds the grouped group in a
+results file, else the flat one of a run processed before the groups. **That fallback is
+transitional**: after the reprocess every run has the new names, and a missing new name should
+now be an error, not an old value.
+
+### 8.2 A clean run's order
+
+1. `agipd.preprocessing`, `jungfrau.preprocessing` (per run, independent).
+2. `agipd.saxs`, `jungfrau.jf1/jf2`, the overviews (read the files of 1).
+3. `hits.summary`, `hits.geometry`: the hit rule. **A barrier across runs**: a mesh block is
+   classified together, so every run of the block needs step 2.
+4. On the hits only, independent of each other: `xpcs.photon_statistics`, and the hit-train pass
+   (`xpcs.preprocessing` → extract, outlier mask, sums → `g2`, `ttcf`, the figures).
+   `xpcs.preprocessing`, `xpcs.photon_statistics` and `hits.geometry` depend on `hits.summary`,
+   which is what orders them for DAMNIT.
+5. `xpcs.score` (the SNR reads k̄ and pixel counts from the XPCS results, so it follows 4) and the
+   `*_frames_used` cells, last: they read finished files and have no `var#` on the passes.
+
+`reprocess_all.sh` follows it: `launch` (steps 1–2, `-d agipd -d jf1 -d jf2`), then `xpcs-hits`
+(steps 3–4, `-d xpcs`, which needs every AGIPD output complete), then `refresh` (step 5).
+`match_titles.py --self-test` checks that the three title sets cover each variable once.
+
+### 8.3 Reprocessing from a clean slate
+
+`reprocess_safe.py start --fresh` (both `launch` and `xpcs-hits` pass it) moves the companion
+caches aside with the outputs, with the same stamp: the window sums, the photon histograms and the
+XPCS photon store. Before it they were "never moved", so a complete companion was found and reused.
+It also deletes the regenerable hit-rule signal caches (`scratch/run_triage/signals_r*.nc`).
+`cleanup` and `restore` follow the companions. Stale locks go with a directory renamed aside
+(`usr/cached_files/xpcs_hits_aborted_<stamp>`), never deleted while a job may run.
+
+The DAMNIT files are the other cache: DAMNIT keeps the old value of a column until it is
+recomputed. A renamed column leaves the old one in the table, with the same title.
+`scripts/prune_damnit_variables.py` (dry run by default; `--delete` backs up `runs.sqlite` first)
+removes from the database every variable the live context does not define. **It does not touch
+the per-run `extracted_data/*.h5`**: the old groups stay inside the files, unlisted.
+
+### 8.4 What went wrong, for next time
+
+- **`reprocess_safe` refuses while *any* DAMNIT array is active**, including one you started a
+  minute before. A second launch the same hour silently did nothing for 22 runs until the first
+  array ended. Launch one wave at a time, or name the runs after the array is gone.
+- **Concurrent writers make healthy files look broken.** Many array jobs, the listener
+  (`xdamnprd`) and other people's jobs write the same `runs.sqlite` and per-run `.h5`. Seen:
+  `database is locked` in DAMNIT's own `BEGIN IMMEDIATE`, in the hit rule's read of `runs.sqlite`
+  (fixed: it waits 300 s), `bad object header` and `addr overflow` when a file is read during a
+  write. The files were intact (a full integrity walk read every object); the cell that read
+  them recorded an error. Judge file health only after the listener is quiet (nothing modified
+  for 8 minutes), and use a reduced `--concurrent-jobs` (3–5).
+- **A neighbour read mid-write used to drop the run from its block silently.** The hit rule
+  reads the other runs of a mesh block from their DAMNIT files. Now it retries 6 × 20 s and then
+  fails the run (`classify._member_signals`); only "no agipd_saxs" or "no file" leaves a run out.
+- **`*.writing.h5` files** next to a run's file are DAMNIT's temporary copies. A killed job leaves
+  them (18 were left, 16 GB). Globs such as `p10400_r*.h5` match them; use `_r\d+\.h5$`.
+- **A cell is recomputed with its dependencies.** Selecting one variable re-runs the ones it
+  depends on, so a title match can start more than it names.
+- **Old values stay until the column is removed.** The r163 kbar figure that looked like the
+  rerun was the old `xpcs_kbar_plot` (all trains), shown under the same title as the new one.
+
+### 8.5 State after the 2026-10-19 reprocess
+
+AGIPD 459 of 461 runs, JF 418 per detector (43 dark), XPCS hit results 459 of 459, all complete.
+r0356 and r0382 have no AGIPD output, so no XPCS. 160 runs have no droplet hit (grey cells), 121 g2 fits did
+not converge, and r52, r53, r56 are single-pulse runs (no lag, so no score). Backups and
+`_superseded_` files are deleted except three jf1 files of r0016, r0017, r0041 (no current
+output). `xpcs_hits_aborted_*` and `agipd_ring_photons_aborted_*` in `usr/cached_files` are the
+caches of the aborted first XPCS array, kept aside.

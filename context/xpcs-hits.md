@@ -1,5 +1,7 @@
 # Hit-train XPCS (`analysis.xpcs`) — design, P0 facts, state
 
+> **Variable names.** Since 2026-10-19 the DAMNIT columns are `Group` classes (`agipd.saxs`, `xpcs.g2`, ...); the flat names used below (`agipd_saxs`, `xpcs_hits_g2`, `xpcs_score`, ...) are the earlier ones. The map is `context/damnit-integrity.md` §8.1; `analysis.damnit_names` reads both.
+
 Context file for the replacement of extra-speckle's `xpcs_offline` by a pass that reads only
 the droplet-hit trains. Read `CLAUDE.md` first (pitfalls 4, 8, 12, 17, 20, 26, 29, 30, 31), then
 `context/xpcs-quality.md` (the histogram product that shares this read of proc) and

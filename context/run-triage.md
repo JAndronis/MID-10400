@@ -1,5 +1,7 @@
 # Run triage (`analysis.triage`): design and implementation guide
 
+> **Variable names.** Since 2026-10-19 the DAMNIT columns are `Group` classes (`agipd.saxs`, `xpcs.g2`, ...); the flat names used below (`agipd_saxs`, `xpcs_hits_g2`, `xpcs_score`, ...) are the earlier ones. The map is `context/damnit-integrity.md` §8.1; `analysis.damnit_names` reads both.
+
 Context file for `<pkg>.triage`. It characterises every run of p010400 from what DAMNIT already
 holds and ranks candidates for the "red box". Read `CLAUDE.md` first.
 
