@@ -1,0 +1,110 @@
+{
+  "generated_at": "2026-10-19T00:24:56.544760+00:00",
+  "host": "max-cfel029.desy.de",
+  "platform": "Linux-5.14.0-687.56.1.el9_8.x86_64-x86_64-with-glibc2.34",
+  "python": "3.12.11",
+  "git_commit": "9f13445f18a5d6bd36caf9581fd4360ea3d81cb2",
+  "thread_env": {
+    "EXTRA_NUM_THREADS": "1",
+    "OMP_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1"
+  },
+  "run": 493,
+  "workers": 36,
+  "work": "/gpfs/exfel/exp/MID/202601/p010400/scratch/bench_extract_blocks/r0493_20261019T002456Z",
+  "bench_src": "/gpfs/exfel/u/usr/MID/202601/p010400/Shared/IA/MID-10400/.claude/worktrees/store-block-merge/src",
+  "baseline": {
+    "generated_at": "2026-10-19T00:24:57.960859+00:00",
+    "host": "max-cfel029.desy.de",
+    "platform": "Linux-5.14.0-687.56.1.el9_8.x86_64-x86_64-with-glibc2.34",
+    "python": "3.12.11",
+    "git_commit": "9f13445f18a5d6bd36caf9581fd4360ea3d81cb2",
+    "thread_env": {
+      "EXTRA_NUM_THREADS": "1",
+      "OMP_NUM_THREADS": "1",
+      "MKL_NUM_THREADS": "1",
+      "OPENBLAS_NUM_THREADS": "1"
+    },
+    "run": 493,
+    "workers": 36,
+    "work": "/gpfs/exfel/exp/MID/202601/p010400/scratch/bench_extract_blocks/r0493_20261019T002456Z/baseline_work/r0493_20261019T002457Z",
+    "bench_src": "/gpfs/exfel/exp/MID/202601/p010400/scratch/bench_extract_blocks/baseline_src/src",
+    "extract": {
+      "n_hits": 2994,
+      "workers": 36,
+      "whole_pass_wall_s": 368.14499479392543,
+      "extract_stage_wall_s": 279.9368838479277,
+      "extract_s_per_train": 0.09349929320238065,
+      "worker_core_s": {
+        "read_data": 1138.592332905624,
+        "read_mask": 2028.6937000518665,
+        "encode": 3463.9602219798835
+      },
+      "setup_s": {
+        "rings": 0.5942575050285086,
+        "plan": 2.24885460594669,
+        "flag_base": 6.28230583795812,
+        "write_blocks": 219.65529902011622
+      },
+      "parent_merge_s": 219.65529902011622,
+      "same_extract_hash_as_real_store": true,
+      "real_status": {
+        "OK": 2994
+      },
+      "new_status": {
+        "OK": 2994
+      },
+      "store_bytes": 6857440216,
+      "real_store_bytes": 6857428323,
+      "comparison": {
+        "trains_checked": 2994,
+        "mismatches": [],
+        "n_mismatches": 0,
+        "extra_trains": 0,
+        "base_and_envelope_identical": true,
+        "identical": true
+      },
+      "host": "max-cfel029.desy.de"
+    },
+    "returncode": 0
+  },
+  "extract": {
+    "n_hits": 2994,
+    "workers": 36,
+    "whole_pass_wall_s": 326.2490925670136,
+    "extract_stage_wall_s": 238.03679057094269,
+    "extract_s_per_train": 0.07950460606911913,
+    "worker_core_s": {
+      "read_data": 1138.334291327512,
+      "read_mask": 2027.5249708782649,
+      "encode": 3448.2168588648783,
+      "write_block": 223.553654879448
+    },
+    "setup_s": {
+      "rings": 0.6072832000209019,
+      "plan": 2.1602285150438547,
+      "flag_base": 6.2506908510113135,
+      "write_blocks": 21.26863383234013
+    },
+    "parent_merge_s": 21.26863383234013,
+    "same_extract_hash_as_real_store": true,
+    "real_status": {
+      "OK": 2994
+    },
+    "new_status": {
+      "OK": 2994
+    },
+    "store_bytes": 6855525989,
+    "real_store_bytes": 6857428323,
+    "comparison": {
+      "trains_checked": 2994,
+      "mismatches": [],
+      "n_mismatches": 0,
+      "extra_trains": 0,
+      "base_and_envelope_identical": true,
+      "identical": true
+    },
+    "host": "max-cfel029.desy.de"
+  }
+}
