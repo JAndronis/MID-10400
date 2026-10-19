@@ -23,10 +23,12 @@ read-only and never copied back or modified.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+_src = os.environ.get("BENCH_SRC") or str(Path(__file__).resolve().parents[1] / "src")
+sys.path.insert(0, _src)
 
 import argparse  # noqa: E402
 import logging  # noqa: E402
@@ -56,7 +58,7 @@ from analysis.saxs.config import AgipdSaxsConfig  # noqa: E402
 from analysis.xpcs.config import XpcsConfig  # noqa: E402
 from analysis.xpcs.hits import HitSet  # noqa: E402
 from analysis.xpcs.run import run_xpcs_hits  # noqa: E402
-from analysis.xpcs.store import RingPhotonStore, write_block_file  # noqa: E402
+from analysis.xpcs.store import RingPhotonStore  # noqa: E402
 
 log = logging.getLogger("scripts.bench_extract_blocks")
 
@@ -158,6 +160,8 @@ def stage_extract(args: argparse.Namespace, work: Path, real_path: Path) -> dict
 
 
 def stage_scale(args: argparse.Namespace, work: Path, real_path: Path) -> dict:
+    from analysis.xpcs.store import write_block_file
+
     with RingPhotonStore.open(real_path) as real:
         ok = np.sort(real.train_ids())
         ok = ok[real.status(ok) == int(FrameStatus.OK)]
@@ -243,6 +247,31 @@ def stage_scale(args: argparse.Namespace, work: Path, real_path: Path) -> dict:
     return out
 
 
+def run_baseline(args: argparse.Namespace, work: Path) -> dict:
+    """The extract stage of another source tree, in a child process on this node.
+
+    :param args.baseline_src: a ``src`` directory (``git archive`` of the commit
+        before block files), imported instead of this checkout's.
+    """
+    import json
+    import subprocess
+
+    out = work / "baseline.json"
+    command = [
+        sys.executable, __file__, "--local", "--run", str(args.run), "-w",
+        str(args.workers), "--stages", "extract", "--json", str(out),
+        "--work-dir", str(work / "baseline_work"),
+    ]  # fmt: skip
+    if args.n_hits:
+        command += ["--n-hits", str(args.n_hits)]
+    done = subprocess.run(
+        command, env={**os.environ, "BENCH_SRC": args.baseline_src}, check=False
+    )
+    report = json.loads(out.read_text()) if out.exists() else {}
+    report["returncode"] = done.returncode
+    return report
+
+
 def run_one(args: argparse.Namespace) -> int:
     configure_logging("scripts.bench_extract_blocks")
     real_path = (
@@ -251,8 +280,18 @@ def run_one(args: argparse.Namespace) -> int:
     work = args.work_dir / f"r{args.run:04d}_{stamp()}"
     work.mkdir(parents=True)
     assert not str(work).startswith(str(CACHED)), "never write under cached_files"
-    report = report_header(run=args.run, workers=args.workers, work=str(work))
+    report = report_header(
+        run=args.run, workers=args.workers, work=str(work), bench_src=_src
+    )
     ok = True
+    if args.baseline_src:
+        report["baseline"] = run_baseline(args, work)
+        ok &= (
+            report["baseline"]
+            .get("extract", {})
+            .get("comparison", {})
+            .get("identical", False)
+        )
     for name, fn in (("extract", stage_extract), ("scale", stage_scale)):
         if name not in args.stages:
             continue
@@ -281,6 +320,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--n-scale", type=int, default=240)
     parser.add_argument(
         "--work-dir", type=Path, default=SCRATCH / "bench_extract_blocks"
+    )
+    parser.add_argument(
+        "--baseline-src",
+        default=None,
+        help="a src tree to run the extract stage from first, on the same node",
     )
     parser.add_argument("--keep", action="store_true")
     parser.add_argument("--json", type=Path, default=None)
