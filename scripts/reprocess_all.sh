@@ -4,7 +4,6 @@
 #   bash scripts/reprocess_all.sh launch [--dry-run] [-n CONCURRENT]
 #   bash scripts/reprocess_all.sh status
 #   bash scripts/reprocess_all.sh refresh
-#   bash scripts/reprocess_all.sh xpcs [-n CONCURRENT]
 #   bash scripts/reprocess_all.sh xpcs-hits [--dry-run] [-n CONCURRENT] [RUNS...]
 #
 # Order: launch (and let every job finish) -> xpcs-hits -> refresh. The
@@ -21,12 +20,9 @@
 #          INCOMPLETE per run and detector. (`check` needs the backups `start`
 #          makes; with the outputs deleted there are none.)
 # refresh  once no DAMNIT job is left: the non-cluster cells that read the pass
-#          files instead of depending on them ("frames used", "XPCS score").
+#          files instead of depending on them ("frames used", "XPCS score", and
+#          the "Hits" cells, which read agipd.saxs).
 #          Run with launch they would see no file yet.
-# xpcs     extra-speckle's XPCS pipeline only (XPCS_OLD_MATCH below: "XPCS
-#          PIPELINE" and its readers, never "XPCS hits ..."). Not part of launch:
-#          it overwrites scratch/xpcs/r*/ in place (no lock, no backup) and those
-#          files are Leonau's. Run `refresh` again after it, for the XPCS score.
 # xpcs-hits the hit-train XPCS pass (analysis.xpcs), through `reprocess_safe.py
 #          start -d xpcs`: it prints the AGIPD and XPCS status, then refuses
 #          unless every run's AGIPD output is complete, a job or lock is absent,
@@ -43,7 +39,7 @@ AMORE=$PROP/usr/Shared/amore
 PYTHON=$PROP/usr/Software/MID-10400/.venv/bin/python
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
-command=${1:?usage: reprocess_all.sh launch|status|refresh|xpcs|xpcs-hits [--dry-run] [-n N] [RUNS...]}
+command=${1:?usage: reprocess_all.sh launch|status|refresh|xpcs-hits [--dry-run] [-n N] [RUNS...]}
 shift
 dry_run=()
 concurrent=()
@@ -57,17 +53,6 @@ while (($#)); do
     esac
     shift
 done
-
-# Titles of extra-speckle's pipeline. Each is a case-insensitive substring of
-# the DAMNIT titles it selects; none may be a substring of an "XPCS hits ..."
-# title. `python scripts/match_titles.py --self-test` checks this against
-# src/amore/context.py. ("XPCS SAXS" also selects "XPCS SAXS overview", "XPCS
-# TTCF" also "XPCS TTCF's", "XPCS g2" also "XPCS g2 fit".)
-XPCS_OLD_MATCH=(
-    'XPCS PIPELINE' 'XPCS mean dataset' 'XPCS SAXS' 'XPCS q-rings'
-    'XPCS beamcenter' 'XPCS outliers' 'XPCS intensity outliers' 'XPCS kbar'
-    'XPCS correction' 'XPCS TTCF' 'XPCS g2' 'XPCS score'
-)
 
 # Runs with a proc directory that are also in DAMNIT's run table.
 mapfile -t runs < <(
@@ -101,13 +86,8 @@ case $command in
             echo "DAMNIT jobs are still queued or running; refresh once they end" >&2
             exit 1
         fi
-        damnit reprocess --in "$AMORE" --match 'frames used' --match 'XPCS score' \
+        damnit reprocess --in "$AMORE" --match 'frames used' --match 'XPCS score' --match 'Hits ' \
             "${runs[@]}"
-        ;;
-    xpcs)
-        match=()
-        for title in "${XPCS_OLD_MATCH[@]}"; do match+=(--match "$title"); done
-        damnit reprocess --in "$AMORE" "${match[@]}" "${concurrent[@]}" "${runs[@]}"
         ;;
     xpcs-hits)
         cd "$HERE"

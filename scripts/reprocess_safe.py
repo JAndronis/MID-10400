@@ -151,31 +151,41 @@ class Detector:
 
 DETECTORS = {
     # The preprocessing variable reads proc and writes the files; the others
-    # read them (user, 2026-10-14). --match takes titles by substring, so
-    # "AGIPD I(q)" also matches its overview and "Photon statistics" its own.
+    # read them (user, 2026-10-14). --match takes case-insensitive title
+    # substrings, so "AGIPD I(q)" also matches its overview. Titles are the
+    # group's title plus the variable's (src/amore/context.py groups,
+    # 2026-10-19); `scripts/match_titles.py --self-test` asserts each set
+    # against the context file.
     "agipd": Detector(
         "agipd",
         (
             "AGIPD preprocessing",
             "AGIPD I(q)",
-            "Photon statistics",
-            "Diagnostics overview",
+            "AGIPD SVD and chi2",
+            "XPCS photon statistics",
         ),
     ),
     "jf1": Detector("jf1", ("JUNGFRAU preprocessing", "JF1 I(q)", "JUNGFRAU I(q)")),
     "jf2": Detector("jf2", ("JUNGFRAU preprocessing", "JF2 I(q)", "JUNGFRAU I(q)")),
-    # --match is a case-insensitive substring, so "XPCS hits" alone would also
-    # select "XPCS hits frames used", which reads the file the cluster job is
-    # still writing: `reprocess_all.sh refresh` does that cell afterwards. None of
-    # these is a substring of an old extra-speckle title ("XPCS g2", "XPCS TTCF",
-    # ...), which `scripts/match_titles.py --self-test` asserts against context.py.
+    # Every cluster variable of the hit-train pass and its figures. Not "XPCS
+    # frames used" and "XPCS score", which read the file the cluster job is still
+    # writing: `reprocess_all.sh refresh` does those afterwards. "XPCS g2" also
+    # selects the g2 figure and fit, "XPCS TTCF" the per-train TTCF.
     "xpcs": Detector(
         "xpcs",
         (
-            "XPCS hits preprocessing",
-            "XPCS hits g2",
-            "XPCS hits TTCF",
-            "XPCS hits overview",
+            "XPCS preprocessing",
+            "XPCS g2",
+            "XPCS TTCF",
+            "XPCS overview",
+            "XPCS q-rings",
+            "XPCS beamcenter",
+            "XPCS outliers",
+            "XPCS intensity outliers",
+            "XPCS kbar",
+            "XPCS correction",
+            "XPCS SAXS",
+            "XPCS mean dataset",
         ),
     ),
 }

@@ -5,20 +5,19 @@
 the titles off ``src/amore/context.py`` by AST (nothing is executed, no DAMNIT)
 and prints, for each string given, the titles it selects.
 
-    python scripts/match_titles.py 'XPCS hits' 'frames used'
+    python scripts/match_titles.py 'XPCS g2' 'frames used'
     python scripts/match_titles.py --self-test
 
-``--self-test`` checks the XPCS reprocess routes against the context file: the
-``-d xpcs`` titles of ``reprocess_safe.py`` select exactly the cluster variables
-of the hit-train pass and nothing of extra-speckle's pipeline, and the
-``XPCS_OLD_MATCH`` array of ``reprocess_all.sh`` selects every other title that
-contains "XPCS", the old ones, and no ``XPCS hits`` one.
+``--self-test`` checks every ``reprocess_safe.py -d`` route against the context file:
+the titles of each detector select what it should, the AGIPD, JUNGFRAU and XPCS sets
+share no variable, and the ``-d xpcs`` titles never select a cell that reads a file the
+cluster job is still writing ("frames used", "XPCS score"), which ``reprocess_all.sh
+refresh`` does last.
 """
 
 from __future__ import annotations
 
 import ast
-import re
 import sys
 from pathlib import Path
 
@@ -28,21 +27,46 @@ SHELL = HERE / "reprocess_all.sh"
 
 
 def titles(path: Path = CONTEXT) -> list[str]:
-    """Every ``@Variable`` title: its first positional argument or ``title=``."""
-    found = []
-    for node in ast.walk(ast.parse(path.read_text())):
-        if not isinstance(node, ast.FunctionDef):
-            continue
-        for deco in node.decorator_list:
-            if not (
+    """Every variable's DAMNIT title: ``@Variable``'s first argument or ``title=``.
+
+    A variable inside a ``Group`` class is titled ``<group title><sep><title>``,
+    where the instance (``agipd = Agipd(title="AGIPD", sep=" ")``) gives both.
+    """
+    tree = ast.parse(path.read_text())
+    groups = {}
+    for node in tree.body:
+        if (
+            isinstance(node, ast.Assign)
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Name)
+        ):
+            kwargs = {k.arg: ast.literal_eval(k.value) for k in node.value.keywords}
+            groups[node.value.func.id] = (
+                kwargs.get("title", ""),
+                kwargs.get("sep", "/"),
+            )
+
+    def declared(function):
+        for deco in function.decorator_list:
+            if (
                 isinstance(deco, ast.Call)
                 and getattr(deco.func, "id", "") == "Variable"
             ):
-                continue
-            args = [a for a in deco.args[:1]] + [
-                k.value for k in deco.keywords if k.arg == "title"
-            ]
-            found.append(ast.literal_eval(args[0]))
+                args = [a for a in deco.args[:1]] + [
+                    k.value for k in deco.keywords if k.arg == "title"
+                ]
+                return ast.literal_eval(args[0])
+        return None
+
+    found = []
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and (title := declared(node)):
+            found.append(title)
+        elif isinstance(node, ast.ClassDef) and node.name in groups:
+            prefix, sep = groups[node.name]
+            for member in node.body:
+                if isinstance(member, ast.FunctionDef) and (title := declared(member)):
+                    found.append(f"{prefix}{sep}{title}")
     return found
 
 
@@ -50,37 +74,46 @@ def selected(matches: list[str], all_titles: list[str]) -> list[str]:
     return [t for t in all_titles if any(m.lower() in t.lower() for m in matches)]
 
 
-def old_match() -> list[str]:
-    body = re.search(r"XPCS_OLD_MATCH=\(([^)]*)\)", SHELL.read_text()).group(1)
-    return re.findall(r"'([^']+)'", body)
-
-
 def self_test() -> int:
     sys.path.insert(0, str(HERE))
     from reprocess_safe import DETECTORS
 
     every = titles()
-    new = selected(list(DETECTORS["xpcs"].titles), every)
-    old = selected(old_match(), every)
-    hits = [t for t in every if t.lower().startswith("xpcs hits")]
-    others = [t for t in every if "xpcs" in t.lower() and t not in hits]
-    refresh = selected(["frames used", "XPCS score"], every)
+    sets = {d: set(selected(list(DETECTORS[d].titles), every)) for d in DETECTORS}
+    refresh = selected(["frames used", "XPCS score", "Hits "], every)
+    reads_file = {t for t in every if t.lower().endswith(("frames used", "xpcs score"))}
+    xpcs_cells = {t for t in every if t.lower().startswith("xpcs ")}
+    shared = (sets["agipd"] & sets["xpcs"]) | (sets["jf1"] & sets["jf2"] - sets["jf1"])
     checks = {
-        "xpcs titles select only XPCS hits variables": set(new) <= set(hits),
-        "xpcs titles select every hits cluster variable": set(new)
-        == set(hits) - {"XPCS hits frames used"},
-        "old match selects no XPCS hits variable": not set(old) & set(hits),
-        "old match selects every other XPCS title": set(old) == set(others),
-        "refresh covers XPCS hits frames used": "XPCS hits frames used" in refresh,
+        "xpcs titles select no file-reading cell": not sets["xpcs"] & reads_file,
+        "xpcs titles select every other XPCS cell but the photon statistics": (
+            sets["xpcs"]
+            == xpcs_cells
+            - reads_file
+            - {t for t in xpcs_cells if "photon statistics" in t.lower()}
+        ),
+        "agipd and xpcs sets share no variable": not shared,
+        "agipd titles select its preprocessing, I(q), SVD and photon statistics": {
+            "AGIPD preprocessing",
+            "AGIPD I(q)",
+            "AGIPD I(q) overview",
+            "AGIPD SVD and chi2",
+            "XPCS photon statistics",
+            "XPCS photon statistics overview",
+        }
+        == sets["agipd"],
+        "refresh covers every frames-used cell, the score and the hit cells": {
+            t for t in every if t.lower().endswith("frames used")
+        }
+        | {"XPCS score", "Hits summary", "Hits geometry"}
+        == set(refresh),
+        "every title of the context file is a group title or ungrouped": len(every)
+        == len(set(every)),
     }
     print(f"{len(every)} titles in {CONTEXT}")
-    for name, titles_ in (
-        ("reprocess_safe -d xpcs", new),
-        ("reprocess_all xpcs (old)", old),
-        ("reprocess_all refresh", refresh),
-    ):
-        print(f"\n{name}:\n  " + "\n  ".join(titles_))
-    print()
+    for name in DETECTORS:
+        print(f"\nreprocess_safe -d {name}:\n  " + "\n  ".join(sorted(sets[name])))
+    print("\nreprocess_all refresh:\n  " + "\n  ".join(refresh) + "\n")
     for name, ok in checks.items():
         print(("ok   " if ok else "FAIL ") + name)
     return 0 if all(checks.values()) else 1
