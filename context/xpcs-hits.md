@@ -318,7 +318,7 @@ The cache for r0423 is wrong and should be rebuilt by whoever owns it.
 | **G3** CLEAN against extra-speckle c2 at lags 1, 10, 100 per ring | r0423, identical rings, against the real `xpcs_offline`: rings 0 to 5 within 0.6 sigma of CLEAN; ring 6 (0.75 to 0.86 nm⁻¹) differs by up to 6.7 sigma (extra-speckle c2 0.03 to 0.07 against about 0 for CLEAN; extra-speckle drops this ring itself as noisy). Not the chain's first train: leaving it out changes nothing. r0493 to r0496 (own geometry, against Kernel.ES on the same store): rms z 0.56, 0.42, 0.52, 0.60, **max |z| 1.0 to 1.5**, no row above 2 sigma |
 | **G4** workers and blocks, 96 trains of r0423 | **Pass.** 36 and 8 workers, blocks of 8, 1 and 3: the sha256 of `sums/*`, of `hits/ pattern/ rings/` and of the store's `trains/*` are identical in all four |
 | **G5** rerun | **Pass** on r0423, r0493 to r0496: inode, mtime and sha256 of store and results unchanged; 0.5 to 0.7 s |
-| **G6** | extract 14.4 trains/s at 36 workers on r0493 (0.0695 s a train, 2994 trains); 0.43 to 0.49 s a train on 200 to 400 trains, where 25 to 50 blocks cannot keep 36 workers busy. Worker core-seconds a train: 0.32 read data, 0.57 read mask, 0.65 encode on r0493 (r0423: 0.74, 1.4, 1.85). **The parent's serial block writes took 167 s of r0493's 208 s extraction** (56 ms a train): the bottleneck, not the reads. Kernel 244 core-ms a train on r0493 (537 on r0423 and 410 in the smoke test), 65 s for 2994 trains at 36 workers. Store 2.29 MB a train on r0493 (1.79 on r0423), results 0.23 MB: **25.2 GB per 10 000 hits** (20.0 on r0423). `g2()` over 2994 trains 9.3 s (pooled, binned or not), `ttcf` 8.4 s |
+| **G6** | extract 14.4 trains/s at 36 workers on r0493 (0.0695 s a train, 2994 trains); 0.43 to 0.49 s a train on 200 to 400 trains, where 25 to 50 blocks cannot keep 36 workers busy. Worker core-seconds a train: 0.32 read data, 0.57 read mask, 0.65 encode on r0493 (r0423: 0.74, 1.4, 1.85). **The parent's serial block writes took 167 s of r0493's 208 s extraction** (56 ms a train): the bottleneck, not the reads. **Fixed 2026-10-19 by block files merged with H5Ocopy (§10.2): 280 to 238 s paired on max-cfel029.** Kernel 244 core-ms a train on r0493 (537 on r0423 and 410 in the smoke test), 65 s for 2994 trains at 36 workers. Store 2.29 MB a train on r0493 (1.79 on r0423), results 0.23 MB: **25.2 GB per 10 000 hits** (20.0 on r0423). `g2()` over 2994 trains 9.3 s (pooled, binned or not), `ttcf` 8.4 s |
 | **B4** partner gap (pooled baseline against gap 1, jackknife over 50 blocks, rms z over ring and lags 1 to 60) | r0493 (1150 trains): gap 2 **2.2**, 5 3.3, 10 3.3, 50 3.9; the mean baseline shift at gap 2 is 1.1e-3, as large as c2 itself (about 3e-3). r0494 to r0496 (350 trains): gap 2 1.06 to 1.15, 5 1.3 to 1.9, 10 1.6 to 2.1, 50 2.6 to 3.3. r0423 stand-in (150 trains): about 1.0 at every gap to 50. **Recommended `max_partner_gap` = 1** (the previous train only); 10, the current default, is not supported: the baseline moves by more than its error on every PEG 6K reference run |
 | **E3** our g2 against `analysis.triage.xpcs` on DAMNIT's `xpcs_ttcf`, same trains | max |z| over lags 1 to 10 below 1.0 for every ring of r0493 (400 or 2994 shared trains), below 0.8 for r0494 to r0496, 0.3 on r0423 (200); ring 6 of r0423 1.6. rms z over all lags 0.12 to 0.83. The two estimators and the geometries differ (G2), and agree within their errors |
 | **A1** store against `agipd_photon_stats` (r0423 and r0493, 100 trains, 15 500 frames each) | **Exact**: s1 and n_valid equal in every frame and ring (max difference 0), on the file's own 17 ring labels. The store's envelope holds every ring pixel |
@@ -334,14 +334,79 @@ proc sequence files `LABEL_MISMATCH` instead of chaining it under the minimum (t
 **Open problems after P4.**
 
 - ~~`Averaging.ES` g2 does not apply extra-speckle's noisy-ring rule~~ closed 2026-10-19 (§6).
-- The parent's serial writes dominate extraction: batch the gzip writes, or give the store a
-  writer per block.
+- ~~The parent's serial writes dominate extraction~~ closed 2026-10-19 (§10.2): workers write
+  block files, the parent only merges them. What limits extraction now is the workers' read and
+  encode time, which on max-cfel029 is 1.8 times what it was on max-m004 (same code).
 - ~~`max_partner_gap` is still 10~~ set to 1 by the user on 2026-10-19. A sparse hit set (mesh
   runs) loses the baseline of most trains; whether a mesh run needs its own policy is open.
 - ~~The G1 g2 float32 explanation is unproven~~ proved on 2026-10-19 (§10.1).
 - The 5 mm envelope margin, the flag-base trains, r0423's hit set and r0450's missing signals.
 - `Kernel.ES` still assumes the 16 modules cut sequences identically; the extract worker now
   refuses a train where they do not, but a run is not checked up front.
+
+### 10.2 Block files: workers compress, the parent merges (2026-10-19)
+
+The 167 s of serial `put` in G6 was gzip level 4 on seven datasets a train plus a flush per train
+in the one process allowed to write. `scripts/bench_store_write.py` timed the ways out on 300 real
+r0493 trains; the user's rule was to merge when that is close to writing directly. Arm B won on that
+rule: workers write one temporary block file per block (`write_block_file`, the store's own layout,
+gzip 4, written as `.tmp` and `os.replace`d), and the parent copies finished groups into the store
+with `Group.copy` (H5Ocopy), which does not recompress: 5.5 ms a train in the parent against 76 ms
+serial, identical stored bytes.
+
+**Behaviour.**
+
+- The parent stays the only writer to `agipd_ring_photons.h5`. Block files live in
+  `agipd_ring_photons.blocks/` beside the store and are created, merged and removed under the
+  store's output lock.
+- `RingPhotonStore.merge_block` copies a group without attributes, checks the copy against its
+  source (dataset names, shapes, dtypes, stored bytes), and only then sets `sequence` and `status`,
+  so a group that carries a status is complete and a crash leaves it unfinished. A final group is
+  skipped and an unfinished one replaced, as `put` does, so replaying a block writes nothing.
+  The block file is deleted only after that.
+- `recover_blocks` runs at the start of an extraction: `.tmp` files are removed, finished leftover
+  block files (a worker finished, the parent died first) are merged, and one that cannot be read or
+  carries another extract hash is renamed `.bad` and logged. The directory is removed when empty.
+- A block that fails in a worker writes no block file; the parent marks its trains `WORKER_ERROR`
+  as before and the next run retries them.
+- `ExtractResult` carries the block file path in place of pickled photons. `SCHEMA`, `GZIP` and the
+  extract hash are unchanged, so existing stores stay valid.
+
+**Measured** (r0493, 2994 hits from nothing into a scratch store, 36 workers, max-cfel029; the
+real store was only read). Paired in one job, previous tree (`git archive` of 401c5d1) first:
+
+| | serial `put` | block files |
+|---|---|---|
+| extract stage wall (rings, plan, flag base, fan-out) | 279.9 s | **238.0 s** |
+| parent seconds writing | 219.7 | 21.3 (7 ms a train) |
+| worker core-s: read data / read mask / encode | 1139 / 2029 / 3464 | 1138 / 2028 / 3448 |
+| worker core-s writing block files | 0 | 224 (0.075 s a train) |
+| store bytes | 6 857 440 216 | 6 855 525 989 |
+
+Every one of the 2994 trains of the new store equals the real store's, field by field
+(`TrainPhotons` arrays and dtypes, attributes, stored bytes per dataset, flag base, envelope), in
+both arms. The first block-file run alone (job 25338246) gave 241.0 s. The 208 s of G6 was on
+max-m004, whose workers took 955 / 1703 / 1955 core-s; on max-cfel029 the same code takes
+1139 / 2029 / 3464, so against its own node the change is 280 to 238 s, not 208 to 238. The time
+now left is the workers: 6838 core-s over 36 workers is 190 s, plus about 13 s of setup and a
+spin-up of about 50 s before the first block lands. The parent's merge runs beside them and is
+not on the critical path. **Why encode is 1.8 times slower on max-cfel029 is not established**
+(a node effect, since both arms show it).
+
+**Merge at real size.** `merge_block` of 240 new trains into a copy of the real store (6.86 GB,
+2994 groups) took 5.77 ms a train, into an empty store 5.85 ms (ratio 0.99): the cost does not grow
+with the file. A replay of the same blocks wrote nothing in 0.23 ms a train at either size. The
+copies read back through `get`.
+
+JSONs: `scripts/bench_extract_blocks_r0493_20261019T002300Z.json` (block files, then the scale
+test), `scripts/bench_extract_blocks_paired_r0493.json` (paired). Tests: `tests/xpcs/test_xpcs_store_blocks.py`
+and three at the end of `tests/xpcs/test_xpcs_run.py`.
+
+**Not verified.** G1 and G2 were not rerun: they test the merge stage, which reads the store through
+`get`, and `get` returned identical arrays. The read-back before a block file is deleted compares
+metadata and stored sizes, not decompressed content. A kill (not an exception) of the parent
+mid-merge was simulated in tests, never on a node. Only gzip 4 was merged; the block-file
+directory on GPFS has not been tried with preempted and requeued jobs.
 
 ### 10.1 G1's g2: extra-speckle's float32, proved (2026-10-19)
 

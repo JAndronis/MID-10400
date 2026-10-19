@@ -20,7 +20,7 @@ from analysis.xpcs.config import Kernel
 from analysis.xpcs.hits import HitSet
 from analysis.xpcs.kernel import PairStatus
 from analysis.xpcs.rings import build_envelope, build_rings, pixel_map
-from analysis.xpcs.store import RingPhotonStore
+from analysis.xpcs.store import RingPhotonStore, block_dir_for
 
 GOOD = (10000, 10001, 10003, 10005, 10006, 10007, 10009)
 VOLATILE = frozenset(
@@ -396,3 +396,53 @@ def test_a_block_that_fails_to_sum_is_reported_and_retried(pipeline, monkeypatch
     state["fail"] = False
     pipeline.run(GOOD)
     assert (rows(path)[1] == FrameStatus.OK).all()
+
+
+def test_a_finished_run_leaves_no_block_files(pipeline):
+    pipeline.run(GOOD)
+    assert not block_dir_for(pipeline.cfg().store_file).exists()
+
+
+def test_a_block_that_dies_before_writing_leaves_no_file(pipeline, monkeypatch):
+    real = extract.process_block
+
+    def flaky(block):
+        if 10005 in block.train_ids:
+            raise OSError("a node went away")
+        return real(block)
+
+    monkeypatch.setattr(extract, "process_block", flaky)
+    with pytest.raises(IncompleteRun):
+        pipeline.run(GOOD)
+    assert not list(block_dir_for(pipeline.cfg().store_file).glob("*"))
+
+
+def test_block_files_a_crashed_parent_left_are_merged_not_extracted_again(
+    pipeline, monkeypatch
+):
+    """A worker finished and its file landed, but the parent died before merging it."""
+    real = extract.process_block
+
+    def parent_dies(block):
+        real(block)
+        raise OSError("parent gone")
+
+    monkeypatch.setattr(extract, "process_block", parent_dies)
+    with pytest.raises(IncompleteRun):
+        pipeline.run(GOOD)
+    cfg = pipeline.cfg()
+    folder = block_dir_for(cfg.store_file)
+    assert list(folder.glob("block_*.h5"))
+    (folder / "block_999999.h5.tmp").write_bytes(b"half")
+    with RingPhotonStore.open(cfg.store_file) as store:
+        assert store.unfinished(np.array(GOOD, dtype=np.uint64)).size == len(GOOD)
+
+    seen = []
+    monkeypatch.setattr(
+        extract, "process_block", lambda b: seen.append(b.train_ids) or real(b)
+    )
+    path = pipeline.run(GOOD)
+    assert seen == []
+    assert not folder.exists()
+    _, status = rows(path)
+    assert (status == FrameStatus.OK).all()

@@ -1,0 +1,83 @@
+{
+  "generated_at": "2026-10-19T00:12:57.674426+00:00",
+  "host": "max-cfel029.desy.de",
+  "platform": "Linux-5.14.0-687.56.1.el9_8.x86_64-x86_64-with-glibc2.34",
+  "python": "3.12.11",
+  "git_commit": "2406049d18728e08a44314d7d6cf2cb58df14952",
+  "thread_env": {
+    "EXTRA_NUM_THREADS": "1",
+    "OMP_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1"
+  },
+  "run": 493,
+  "workers": 36,
+  "work": "/gpfs/exfel/exp/MID/202601/p010400/scratch/bench_extract_blocks/r0493_20261019T001257Z",
+  "extract": {
+    "n_hits": 2994,
+    "workers": 36,
+    "whole_pass_wall_s": 329.16853811300825,
+    "extract_stage_wall_s": 240.96321375505067,
+    "extract_s_per_train": 0.08048203532232821,
+    "worker_core_s": {
+      "read_data": 1141.3276968356222,
+      "read_mask": 2032.9270835923962,
+      "encode": 3451.641472343472,
+      "write_block": 217.41517152485903
+    },
+    "setup_s": {
+      "rings": 0.6025835960172117,
+      "plan": 5.100717453984544,
+      "flag_base": 7.099310782970861,
+      "write_blocks": 22.514452378847636
+    },
+    "parent_merge_s": 22.514452378847636,
+    "same_extract_hash_as_real_store": true,
+    "real_status": {
+      "OK": 2994
+    },
+    "new_status": {
+      "OK": 2994
+    },
+    "store_bytes": 6855523686,
+    "real_store_bytes": 6857428323,
+    "comparison": {
+      "trains_checked": 2994,
+      "mismatches": [],
+      "n_mismatches": 0,
+      "extra_trains": 0,
+      "base_and_envelope_identical": true,
+      "identical": true
+    },
+    "host": "max-cfel029.desy.de"
+  },
+  "scale": {
+    "n_scale_trains": 240,
+    "block": 8,
+    "empty_replay_written": 0,
+    "empty_replay_ms_per_train": 0.2322404291286754,
+    "copy_real_store_s": 11.174967024009675,
+    "real_copy_replay_written": 0,
+    "real_copy_replay_ms_per_train": 0.23517618731906018,
+    "runs": [
+      {
+        "label": "empty",
+        "groups_before": 0,
+        "merged": 240,
+        "merge_ms_per_train": 5.850250250659883,
+        "merge_cpu_ms_per_train": 5.524857324999981,
+        "file_bytes_after": 553580591
+      },
+      {
+        "label": "real_copy",
+        "groups_before": 2994,
+        "merged": 240,
+        "merge_ms_per_train": 5.772986125763661,
+        "merge_cpu_ms_per_train": 5.59282703333442,
+        "file_bytes_after": 7407680239
+      }
+    ],
+    "ratio_real_copy_over_empty": 0.9867930222493462,
+    "merged_reads_back": true
+  }
+}

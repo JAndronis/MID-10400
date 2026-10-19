@@ -48,7 +48,7 @@ from analysis.xpcs.rings import (
     pixel_map,
     static_bad_for,
 )
-from analysis.xpcs.store import ABSENT, FlagBase, RingPhotonStore
+from analysis.xpcs.store import ABSENT, FlagBase, RingPhotonStore, block_dir_for
 
 __all__ = ["build_prelude", "run_xpcs_hits"]
 
@@ -171,8 +171,7 @@ class _StoreSink:
         self.store = store
 
     def write_block(self, block: Block, result: Any) -> None:
-        for photons in result.photons:
-            self.store.put(photons)
+        self.store.merge_block(result.block_file)
 
     def mark(self, block: Block, status: FrameStatus, message: str = "") -> None:
         for train_id in block.train_ids:
@@ -252,6 +251,10 @@ def _extract(
         for record in wanted:
             if record.status is not FrameStatus.OK:
                 store.mark(record.train_id, record.status)
+        block_dir = block_dir_for(store_path)
+        recovered = store.recover_blocks(block_dir)
+        if recovered:
+            log.info("r%d: %d trains recovered from block files", cfg.run, recovered)
         todo_ids = set(store.unfinished(hits.train_ids).tolist())
         todo = [r for r in usable if r.train_id in todo_ids]
         blocks = build_blocks(todo, cfg.trains_per_block)
@@ -273,9 +276,12 @@ def _extract(
                 envelope.pixels,
                 store.base,
                 str(run_dir) if run_dir else None,
+                str(block_dir),
+                extract_hash,
             ),
             pool_factory=pool_factory,
         )
+        _remove_if_empty(block_dir)
         left = store.unfinished(hits.train_ids)
         summary = store.status_summary()
         store.record_pass(
@@ -295,6 +301,14 @@ def _extract(
             | locks[store_path].provenance()
         )
     return _Extracted(left, summary)
+
+
+def _remove_if_empty(folder: Path) -> None:
+    """The block directory goes with its last file; a ``.bad`` one stays."""
+    try:
+        folder.rmdir()
+    except OSError:
+        pass
 
 
 def _result_payload(cfg: XpcsConfig) -> dict[str, Any]:
