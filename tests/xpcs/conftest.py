@@ -57,6 +57,9 @@ def cfg(saxs_cfg) -> XpcsConfig:
         ring_edges_nm=TEST_EDGES_NM,
         # The mock hits sit two ids apart; the production default is 1.
         max_partner_gap=10,
+        # The kernel tests compare against rings built without it; the outlier
+        # tests switch it on (test_xpcs_outliers.py).
+        outlier_thresholds=None,
         envelope_margin_mm=5.0,
         n_workers=2,
         trains_per_block=2,

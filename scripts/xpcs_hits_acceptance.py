@@ -477,12 +477,20 @@ def stage_g1(ctx: Ctx) -> dict[str, Any]:
     masks_file = es_dir / "all_masks.npy"
     root = ctx.dir / "g1"
     es_pass = run_pass(
-        ctx.cfg(root / "es", kernel=Kernel.ES, ring_masks_file=str(masks_file)),
+        ctx.cfg(
+            root / "es",
+            kernel=Kernel.ES,
+            ring_masks_file=str(masks_file),
+            outlier_thresholds=None,
+        ),
         hits,
     )
     # the CLEAN kernel on the same store, for G3 on identical rings
     clean_cfg = ctx.cfg(
-        root / "es", kernel=Kernel.CLEAN, ring_masks_file=str(masks_file)
+        root / "es",
+        kernel=Kernel.CLEAN,
+        ring_masks_file=str(masks_file),
+        outlier_thresholds=None,
     )
     clean_out = clean_cfg.output_file.with_name("xpcs_hits_clean.h5")
     run_xpcs_hits(clean_cfg, hits, output_path=clean_out)

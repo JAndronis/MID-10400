@@ -17,6 +17,7 @@ import h5py
 import numpy as np
 import pandas as pd
 
+from analysis.damnit_names import stored
 from analysis.triage.samples import REFERENCE_SAMPLES, effective_sample
 
 __all__ = [
@@ -47,6 +48,8 @@ RUN_COLUMNS = (
     "total_transmission", "xgm_intensity",
 )  # fmt: skip
 #: DAMNIT product -> its main dataset, the one that must hold data for "present".
+#: Keyed by the flat name `facts` reports under; `damnit_names.stored` finds the
+#: grouped one in a file.
 TRACKED: dict[str, str] = {
     "agipd_saxs": "intensity",
     "jungfrau_waxs_jf1": "intensity",
@@ -124,6 +127,8 @@ def _first_line(value) -> str:
 
 
 def _status(f: h5py.File, name: str, main: str) -> tuple[str, str | None]:
+    flat = name
+    name = stored(f, name)
     if name in f:
         group = f[name]
         if main not in group or group[main].ndim == 0:
@@ -131,8 +136,10 @@ def _status(f: h5py.File, name: str, main: str) -> tuple[str, str | None]:
         if name == "droplet_fit" and not np.isfinite(group[main][:]).any():
             return "empty", None
         return "present", None
-    if ".errors" in f and name in f[".errors"]:
-        return "errored", _first_line(f[".errors"][name][()])
+    if ".errors" in f:
+        for key in (name, flat):
+            if key in f[".errors"]:
+                return "errored", _first_line(f[".errors"][key][()])
     return "absent", None
 
 
@@ -149,11 +156,8 @@ def file_facts(path: Path) -> dict:
             facts[f"var_{name}"] = status
             if err is not None:
                 errors[name] = err
-        jf = (
-            f["jungfrau_waxs_jf1/cellId"][:]
-            if "jungfrau_waxs_jf1/cellId" in f
-            else None
-        )
+        jf1 = stored(f, "jungfrau_waxs_jf1")
+        jf = f[f"{jf1}/cellId"][:] if f"{jf1}/cellId" in f else None
         xgm = (
             f["xgm_intensity/Energy"][:]
             if facts["var_xgm_intensity"] == "present"

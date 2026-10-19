@@ -35,6 +35,7 @@ from analysis.common.status import UNFINISHED, FrameStatus
 from analysis.xpcs.config import DEFAULT_XPCS_ROOT
 from analysis.xpcs.hits import HitSet
 from analysis.xpcs.kernel import Pairing, PairStatus, TrainSums
+from analysis.xpcs.outliers import OutlierMask
 from analysis.xpcs.rings import Rings
 
 __all__ = [
@@ -55,7 +56,8 @@ __all__ = [
 
 log = logging.getLogger(__name__)
 
-SCHEMA = 1
+#: 2: the outlier mask (``outlier/``) and its applied labels in ``rings/label``.
+SCHEMA = 2
 GZIP = {"compression": "gzip", "compression_opts": 1, "shuffle": True}
 
 
@@ -104,21 +106,22 @@ class ResultWriter:
         merge_hash: str,
         extract_hash: str,
         attrs: dict[str, Any],
+        outlier: OutlierMask | None = None,
+        static_label: np.ndarray | None = None,
         overwrite: bool = False,
     ) -> ResultWriter:
         """Resume a file made for these exact inputs, else build it afresh.
 
         A file made for other inputs is moved to ``xpcs_hits.prev.h5`` first: it
         is derived, so replacing it loses minutes, not data.
+
+        :param rings: the labels the sums use, the outlier mask already applied.
+        :param outlier: that mask, recorded under ``outlier/``.
+        :param static_label: the labels before it, for the figures' "before".
         """
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        identity = {
-            "schema": SCHEMA,
-            "merge_hash": merge_hash,
-            "hits_sha256": hits.sha256,
-            "prelude_sha256": prelude.sha256(),
-        }
+        identity = result_identity(merge_hash, hits, prelude)
         if path.exists():
             if not overwrite and _identity(path) == identity:
                 return cls(h5py.File(path, "r+"), hits)
@@ -126,6 +129,8 @@ class ResultWriter:
             log.info("%s was made for other inputs; kept as xpcs_hits.prev.h5", path)
         handle = h5py.File(path, "w")
         cls._layout(handle, hits, prelude, rings, extract_hash, identity, attrs)
+        if outlier is not None:
+            _write_outlier(handle, outlier, static_label)
         return cls(handle, hits)
 
     @staticmethod
@@ -246,6 +251,59 @@ class ResultWriter:
 
     def __exit__(self, *exc: object) -> None:
         self.close()
+
+
+def result_identity(merge_hash: str, hits: HitSet, prelude: Prelude) -> dict[str, Any]:
+    """What a results file must carry to be resumed rather than rebuilt."""
+    return {
+        "schema": SCHEMA,
+        "merge_hash": merge_hash,
+        "hits_sha256": hits.sha256,
+        "prelude_sha256": prelude.sha256(),
+    }
+
+
+def _write_outlier(
+    handle: h5py.File, outlier: OutlierMask, static_label: np.ndarray | None
+) -> None:
+    group = handle.create_group("outlier")
+    if static_label is not None:
+        group.create_dataset("label_before", data=static_label, **GZIP)
+    group.create_dataset("ratio", data=outlier.ratio, **GZIP)
+    group.create_dataset("mask", data=outlier.mask, **GZIP)
+    group.attrs["thresholds"] = np.asarray(outlier.thresholds, dtype=np.float64)
+    group.attrs["q_bins"] = outlier.q_bins
+    group.attrs["n_trains"] = outlier.n_trains
+    group.attrs["sha256"] = outlier.sha256
+    handle.flush()
+
+
+def stored_outlier(path: str | Path, identity: dict[str, Any]) -> OutlierMask | None:
+    """The outlier mask of a results file made for ``identity``, else None.
+
+    A resumed merge reads its mask back instead of recomputing it.
+    """
+    path = Path(path)
+    if not path.exists() or _identity(path) != identity:
+        return None
+    with h5py.File(path, "r") as handle:
+        if "outlier" not in handle:
+            return None
+        return _read_outlier(handle["outlier"])
+
+
+def _read_outlier(group: h5py.Group) -> OutlierMask:
+    mask = group["mask"][()].astype(bool)
+    outlier = OutlierMask(
+        group["ratio"][()],
+        mask,
+        tuple(float(t) for t in group.attrs["thresholds"]),
+        int(group.attrs["q_bins"]),
+        int(group.attrs["n_trains"]),
+    )
+    if outlier.sha256 != group.attrs["sha256"]:
+        raise ValueError(f"{group.file.filename}: the outlier mask fails its sha256")
+    return outlier
 
 
 def _identity(path: Path) -> dict[str, Any] | None:
@@ -422,6 +480,14 @@ class XpcsHits:
             self.attrs: dict[str, Any] = {k: v for k, v in f.attrs.items()}
 
     # ── what is in it ────────────────────────────────────────────────────────
+    def outlier(self) -> tuple[OutlierMask, np.ndarray] | None:
+        """The applied pixel-outlier mask and the ring labels before it; None if off."""
+        with h5py.File(self.path, "r") as handle:
+            if "outlier" not in handle:
+                return None
+            group = handle["outlier"]
+            return _read_outlier(group), group["label_before"][()]
+
     @property
     def roi_q(self) -> np.ndarray:
         """Ring centres in Å⁻¹, the unit DAMNIT's ``roi_q`` uses (ring numbers
@@ -643,6 +709,14 @@ class XpcsHits:
             },
             name="kbar",
         )
+
+    def pixels(self, trains: np.ndarray | None = None) -> np.ndarray:
+        """Pixels summed into each ring of each usable train, ``(train, ring)``."""
+        rows = self._rows(trains)
+        if rows.size == 0:
+            return np.zeros((0, self.n_rings), dtype=np.int64)
+        with h5py.File(self.path, "r") as f:
+            return f["sums/cnt"][rows.tolist()].astype(np.int64)
 
     def per_train(self, trains: np.ndarray | None = None) -> xr.Dataset:
         """Each train's own normalised maps, in extra-speckle's layout and rules.

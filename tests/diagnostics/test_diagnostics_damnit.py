@@ -194,7 +194,7 @@ def test_the_xpcs_score_cell(monkeypatch, ok, plain, extractable, best, expected
     from analysis.diagnostics.damnit import xpcs_score_cell
 
     score = {
-        "run": 318, "kind": "mesh", "block": "x", "n_hits": 259,
+        "run": 318, "n_hits": 259,
         "hits": {}, "kbar": None, "n_rois_kbar_ok": ok, "n_plain_rois_kbar_ok": plain,
         "snr": {"best_snr": best, "extractable": extractable, "slices": []},
     }  # fmt: skip
@@ -208,12 +208,12 @@ def test_the_xpcs_score_cell(monkeypatch, ok, plain, extractable, best, expected
     assert colour(cell) == COLORS[expected]
 
 
-def test_the_xpcs_score_skips_a_run_not_in_damnit(monkeypatch):
+def test_the_xpcs_score_skips_a_run_without_results(monkeypatch):
     from analysis.diagnostics.damnit import xpcs_score_cell
 
     def missing(run, proposal):
-        raise LookupError("r5 is not in DAMNIT's run table")
+        raise LookupError("r5: no XPCS results file under /x")
 
     monkeypatch.setattr("analysis.diagnostics.xpcs.xpcs_score", missing)
-    with pytest.raises(Skip, match="run table"):
+    with pytest.raises(Skip, match="no XPCS results file"):
         xpcs_score_cell(10400, 5)

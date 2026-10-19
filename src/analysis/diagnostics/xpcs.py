@@ -1,6 +1,7 @@
 """Per-run XPCS SNR, the keep criterion (context/run-triage.md §4.6), for one run.
 
-A thin layer over `analysis.triage.xpcs`: the same reduction (`measure_run`), the same
+A thin layer over `analysis.triage.xpcs`: the same reduction (`measure_run`, from the
+run's hit-train results file, `analysis.xpcs.result.XpcsHits`), the same
 analytical SNR per 30 s slice (`summarise`),
 
     SNR = β · k̄ · sqrt(N_pix · (F − 1) · φ · n) / √2,
@@ -13,40 +14,46 @@ set. A report's ``beta`` block can still be passed in to compare.
 An unknown β gives SNR NaN and ``extractable`` None — never False.
 
 `xpcs_score` is the per-run diagnostic score: the SNR and the k̄ per XPCS ROI, both
-over the run's droplet hits only (`analysis.triage.classify.hits`; user, 2026-10-13),
-and the number of ROIs whose mean k̄ reaches `KBAR_MIN` (user, 2026-10-14).
+over the run's droplet hits only (the results file's hit set, which the pass took from
+`analysis.triage.classify.hits`; user, 2026-10-13), and the number of ROIs whose
+mean k̄ reaches `KBAR_MIN` (user, 2026-10-14).
+
+Nothing here reads DAMNIT's ``xpcs_ttcf`` or extra-speckle's ``kbar.nc``; the
+slices are anchored to the first usable hit, because the results file knows only
+its hits.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from pathlib import Path
 from typing import Any
 
-import h5py
 import numpy as np
 
-from analysis.saxs.config import DEFAULT_OUTPUT_ROOT as SAXS_ROOT
-from analysis.triage.inventory import DAMNIT_ROOT, damnit_file
-from analysis.triage.xpcs import ROI_MATCH_A, Beta, fixed_beta, measure_run, summarise
+from analysis.triage.xpcs import (
+    KBAR_MIN,
+    ROI_MATCH_A,
+    Beta,
+    fixed_beta,
+    measure_run,
+    roi_edges_from,
+    roi_kinds,
+    summarise,
+)
+from analysis.xpcs.config import DEFAULT_XPCS_ROOT
+from analysis.xpcs.result import XpcsHits, read
 
 __all__ = [
     "KBAR_MIN",
-    "XPCS_ROOT",
     "beta_by_roi",
     "kbar_rois",
     "load_beta",
-    "rep_rate_hz",
+    "open_results",
     "xpcs_score",
     "xpcs_snr",
 ]
-
-#: Mean photons per pixel per frame a ROI needs (user, 2026-10-14). The same number
-#: is extra-speckle's default ``kbar_threshold`` (pipeline/pipeline.py:89), below which
-#: it drops a frame pair from the TTCF; here it is applied to the ROI's mean over hits.
-KBAR_MIN = 3e-3
-#: extra-speckle's per-run output; ``kbar.nc`` is k̄ per (trainId, frame, roi_q).
-XPCS_ROOT = Path("/gpfs/exfel/exp/MID/202601/p010400/scratch/xpcs")
 
 
 def load_beta(report: str | Path | dict) -> dict[float, Beta]:
@@ -76,14 +83,23 @@ def beta_by_roi(roi_q_A: np.ndarray, beta: dict[float, Beta]) -> dict[int, Beta]
     return out
 
 
-def rep_rate_hz(path: str | Path) -> float:
-    """DAMNIT's ``rep_rate`` [MHz] of a run, in Hz."""
-    import h5py
+def open_results(
+    run: int,
+    *,
+    proposal: int = 10400,
+    output_root: str | Path = DEFAULT_XPCS_ROOT,
+    hits: XpcsHits | None = None,
+) -> XpcsHits:
+    """The run's hit-train results file (``hits`` as given).
 
-    with h5py.File(path, "r") as f:
-        if "rep_rate/data" not in f:
-            raise KeyError(f"{path}: no rep_rate variable")
-        return float(f["rep_rate/data"][()]) * 1e6
+    :raises LookupError: the run has no results file; its hit-train pass has not run.
+    """
+    if hits is not None:
+        return hits
+    try:
+        return read(proposal, run, output_root=output_root)
+    except FileNotFoundError:
+        raise LookupError(f"r{run}: no XPCS results file under {output_root}") from None
 
 
 def xpcs_snr(
@@ -91,32 +107,30 @@ def xpcs_snr(
     beta: dict[float, Beta] | None = None,
     *,
     proposal: int = 10400,
-    damnit_root: str | Path = DAMNIT_ROOT,
-    saxs_root: str | Path = SAXS_ROOT,
-    rep_rate: float | None = None,
+    output_root: str | Path = DEFAULT_XPCS_ROOT,
+    hits: XpcsHits | None = None,
     select: np.ndarray | None = None,
+    span: tuple[int, int] | None = None,
 ) -> dict[str, Any]:
     """One run's SNR per plain ROI and 30 s slice, and its keep verdict.
 
     :param beta: None for `REFERENCE_BETA`, or `load_beta` of a triage XPCS report.
-    :param rep_rate: pulse rate [Hz]; default DAMNIT's ``rep_rate`` of the run.
+    :param hits: an open results file, else the run's under ``output_root``.
     :param select: train ids to restrict to (e.g. a mesh run's `on` trains).
+    :param span: first and last train id the slices are anchored to (default: the
+        first and last usable hit).
     :returns: ``summary`` (the `summarise` dict without its slices), ``slices`` (a
         DataFrame: slice, start in s, usable trains, best plain SNR, SNR per ROI),
         ``rois`` (a DataFrame per ROI: kind, k̄, N_pix, φ, ρ, the fit, the β used and
         the run SNR) and ``measurement`` (the `RunMeasurement`).
-    :raises LookupError: the run has no XPCS TTCF in DAMNIT.
+    :raises LookupError: the run has no results file.
     """
     import pandas as pd
 
     from analysis.triage.xpcs import SLICE_TRAINS, snr
 
-    path = damnit_file(run, Path(damnit_root), proposal)
-    scratch = Path(saxs_root) / f"r{run:04d}" / "agipd_saxs.h5"
-    rate = rep_rate if rep_rate is not None else rep_rate_hz(path)
-    m = measure_run(run, path, scratch, rate, select=select)
-    if m is None:
-        raise LookupError(f"r{run}: no xpcs_ttcf matrix in {path}")
+    opened = open_results(run, proposal=proposal, output_root=output_root, hits=hits)
+    m = measure_run(run, opened, select=select, span=span)
     b = fixed_beta(m.roi_q_A) if beta is None else beta_by_roi(m.roi_q_A, beta)
     summary = summarise(m, b)
     rows = summary.pop("slices")
@@ -165,67 +179,37 @@ def kbar_rois(
     run: int,
     trains=None,
     *,
-    xpcs_root: str | Path = XPCS_ROOT,
     proposal: int = 10400,
-    damnit_root: str | Path = DAMNIT_ROOT,
-    saxs_root: str | Path = SAXS_ROOT,
+    output_root: str | Path = DEFAULT_XPCS_ROOT,
+    hits: XpcsHits | None = None,
     kbar_min: float = KBAR_MIN,
 ):
-    """Mean k̄ of each XPCS ROI over ``trains``, and whether it reaches ``kbar_min``.
+    """Mean k̄ of each XPCS ring over ``trains``, and whether it reaches ``kbar_min``.
 
-    From extra-speckle's ``kbar.nc`` (photons per pixel per frame, every frame of the
-    selected trains). Without it, from DAMNIT's agipd_saxs weighted by the pass's
-    pixels per bin (`triage.xpcs.read_saxs_kbar`), our geometry. On r0423 the two
-    agree to 0.4–3 % per ROI (2026-10-14).
+    From the results file (`XpcsHits.kbar`: photons per pixel per frame, every frame
+    of the usable trains).
 
-    :param trains: train ids to average over, e.g. ``hits(run)["train_ids"]``; None
-        for every train.
+    :param trains: train ids to average over (they must be hits); None for every
+        usable hit.
     :returns: a DataFrame per ROI (``roi_q_A``, ``kind``, ``kbar``, ``above``), with
         ``attrs``: ``source``, ``n_trains``, ``kbar_min``, ``n_above``,
         ``n_plain_above``.
     """
     import pandas as pd
-    import xarray as xr
 
-    from analysis.triage.xpcs import (
-        read_npix_per_bin,
-        read_saxs_kbar,
-        roi_edges_nm,
-        roi_kinds,
+    opened = open_results(run, proposal=proposal, output_root=output_root, hits=hits)
+    da = opened.kbar(None if trains is None else np.asarray(trains, dtype=np.uint64))
+    n_trains = int(da.sizes["trainId"])
+    values = (
+        da.mean(("trainId", "frame"), skipna=True).values
+        if n_trains
+        else np.full(opened.n_rings, np.nan)
     )
-
-    path = Path(xpcs_root) / f"r{run:04d}" / "kbar.nc"
-    wanted = None if trains is None else np.asarray(trains, dtype=np.uint64)
-    if path.exists():
-        with xr.open_dataarray(path) as da:
-            if wanted is not None:
-                da = da.sel(trainId=da.trainId.isin(wanted))
-            n_trains = int(da.sizes["trainId"])
-            values = da.mean(("trainId", "frame"), skipna=True).values
-            roi_q = da.roi_q.values
-        source = str(path)
-    else:
-        damnit = damnit_file(run, Path(damnit_root), proposal)
-        with h5py.File(damnit, "r") as f:
-            q = f["agipd_saxs/q"][:]
-        npix = read_npix_per_bin(Path(saxs_root) / f"r{run:04d}" / "agipd_saxs.h5", q)
-        saxs = read_saxs_kbar(damnit, roi_edges_nm(), npix)
-        keep = np.ones(saxs.train_ids.size, dtype=bool)
-        if wanted is not None:
-            keep = np.isin(saxs.train_ids, wanted)
-        n_trains = int(keep.sum())
-        frames = saxs.n_frames[keep][:, None]
-        with np.errstate(invalid="ignore", divide="ignore"):
-            values = np.nansum(saxs.kbar[keep] * frames, axis=0) / frames.sum()
-        roi_q = roi_edges_nm().mean(axis=1) / 10.0  # centres, Å⁻¹, as DAMNIT stores
-        source = f"{damnit} (our geometry; no {path.name})"
-    kinds = roi_kinds(roi_edges_nm())
-    table = pd.DataFrame(
-        {"roi_q_A": roi_q, "kind": kinds[: len(roi_q)], "kbar": values}
-    )
+    kinds = roi_kinds(roi_edges_from(opened.edges_nm, opened.n_rings))
+    table = pd.DataFrame({"roi_q_A": opened.roi_q, "kind": kinds, "kbar": values})
     table["above"] = table.kbar >= kbar_min
     table.attrs.update(
-        source=source,
+        source=str(opened.path),
         n_trains=n_trains,
         kbar_min=kbar_min,
         n_above=int(table.above.sum()),
@@ -239,35 +223,26 @@ def xpcs_score(
     *,
     beta=None,
     proposal: int = 10400,
-    damnit_root: str | Path = DAMNIT_ROOT,
-    saxs_root: str | Path = SAXS_ROOT,
-    xpcs_root: str | Path = XPCS_ROOT,
+    output_root: str | Path = DEFAULT_XPCS_ROOT,
+    hits: XpcsHits | None = None,
 ) -> dict:
-    """The per-run XPCS diagnostic score, over the run's droplet hits only.
+    """The per-run XPCS diagnostic score, over the hits in the run's results file.
 
-    :returns: ``hits`` (the classification summary), ``n_hits``, ``kbar`` (the
-        `kbar_rois` table over the hits), ``n_rois_kbar_ok`` and
-        ``n_plain_rois_kbar_ok``, and ``snr`` (`xpcs_snr`'s summary over the hits,
-        None when the run has no hit or no TTCF).
+    :returns: ``n_hits`` (the file's hit set), ``hits`` (its `Coverage` as a dict),
+        ``kbar`` (the `kbar_rois` table over the usable hits), ``n_rois_kbar_ok``
+        and ``n_plain_rois_kbar_ok`` (None without a usable hit), and ``snr``
+        (`xpcs_snr`'s summary, None without a usable hit).
+    :raises LookupError: the run has no results file.
     """
-    from analysis.triage.classify import hits
-
-    roots = {"proposal": proposal, "damnit_root": damnit_root, "saxs_root": saxs_root}
-    h = hits(run, proposal=proposal, damnit_root=damnit_root)
-    trains = h["train_ids"]
-    kbar = kbar_rois(run, trains, xpcs_root=xpcs_root, **roots) if trains.size else None
-    snr = None
-    if trains.size:
-        try:
-            snr = xpcs_snr(run, beta, select=trains, **roots)["summary"]
-        except LookupError:  # no TTCF in DAMNIT for this run
-            snr = None
+    opened = open_results(run, proposal=proposal, output_root=output_root, hits=hits)
+    coverage = opened.coverage()
+    usable = coverage.n_usable > 0
+    kbar = kbar_rois(run, hits=opened) if usable else None
+    snr = xpcs_snr(run, beta, hits=opened)["summary"] if usable else None
     return {
         "run": int(run),
-        "kind": h["kind"],
-        "block": h["block"],
-        "n_hits": int(trains.size),
-        "hits": h["summary"],
+        "n_hits": coverage.n_hits,
+        "hits": dataclasses.asdict(coverage),
         "kbar": kbar,
         "n_rois_kbar_ok": None if kbar is None else kbar.attrs["n_above"],
         "n_plain_rois_kbar_ok": None if kbar is None else kbar.attrs["n_plain_above"],

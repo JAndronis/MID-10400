@@ -8,6 +8,8 @@ from numpy.typing import ArrayLike, NDArray
 from scipy.interpolate import interp1d
 from scipy.optimize import curve_fit
 
+from analysis.damnit_names import stored_in_file
+
 N_A: float = 6.02214076e23
  
 M_APOFERRITIN: float = 481_000.0  # g/mol, horse spleen (Gilbert et al. 1987)
@@ -34,7 +36,9 @@ MU_RHO_9P04_KEV: dict[str, float] = {
 # Droplet camera pixel size: droplet_fit(px=13.9) in src/amore/context.py.
 DROPLET_PX_MM: float = 13.9e-3
 
-DB_VARIABLES = Literal["agipd_saxs", "jungfrau_waxs_jf1", "jungfrau_waxs_jf2", "jungfrau_waxs_combined"]
+DB_VARIABLES = Literal[
+    "agipd.saxs", "jungfrau.jf1", "jungfrau.jf2", "jungfrau.combined"
+]
 
 
 def plot_saxs_series(dataset, ax, step=100, bg=None):
@@ -49,7 +53,8 @@ def plot_saxs_series(dataset, ax, step=100, bg=None):
 
 def read_intensity(run_nr, db, variable: DB_VARIABLES):
     assert variable in get_args(DB_VARIABLES), f"Variable {variable} not in {DB_VARIABLES}"
-    return xr.open_dataset(db[run_nr].file, group=variable).intensity
+    file = db[run_nr].file
+    return xr.open_dataset(file, group=stored_in_file(file, variable)).intensity
 
 
 def read_volume(run_nr, db):

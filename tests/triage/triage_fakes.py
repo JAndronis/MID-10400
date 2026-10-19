@@ -175,3 +175,54 @@ def write_xpcs_run(
         "sigma_pair": sigma_pair,
         "train_ids": tids,
     }
+
+
+#: The seven XPCS rings, edges in nm⁻¹ (what the pass stores for `ROI_EDGES_A`).
+ring_densities = (0.2, 0.1, 0.01, 0.005, 0.0005, 0.0002, 0.0001)
+
+
+def write_hit_results(
+    path: Path,
+    *,
+    n_trains: int = 60,
+    n_frames: int = 14,
+    densities=ring_densities,
+    failed: dict[int, int] | None = None,
+    seed: int = 3,
+):
+    """A hit-train results file (`analysis.xpcs.result`) of synthetic photon trains.
+
+    One ring per XPCS ROI; ring r lights each pixel of each frame with probability
+    ``densities[r]`` (photons of 1 to 3, mean 2, so k̄ ≈ 2 · density). The trains are
+    consecutive from `FIRST_TRAIN`. ``failed`` maps train id -> `FrameStatus` code of
+    hits that gave no photons. Returns the open `XpcsHits`.
+    """
+    import sys
+
+    sys.path.append(str(Path(__file__).resolve().parents[1] / "xpcs"))
+    from xpcs_fakes import build_results, make_flags, make_train
+
+    from analysis.common.status import FrameStatus
+    from analysis.triage.xpcs import ROI_EDGES_A
+    from analysis.xpcs.rings import Rings
+
+    rng = np.random.default_rng(seed)
+    n_env, n_rings = 400, len(densities)
+    label = rng.integers(0, n_rings, n_env).astype(np.int8)
+    label.flags.writeable = False
+    edges = tuple(10.0 * np.asarray(ROI_EDGES_A))
+    rings = Rings(edges, label, n_rings, "rings")
+    per_pixel = np.asarray(densities)[label]
+    failed = {t: FrameStatus(c) for t, c in (failed or {}).items()}
+    ids = [
+        int(FIRST_TRAIN) + i
+        for i in range(n_trains)
+        if int(FIRST_TRAIN) + i not in failed
+    ]
+    photons = []
+    for t in ids:
+        lit = rng.random((n_frames, n_env)) < per_pixel
+        dense = (lit * rng.integers(1, 4, (n_frames, n_env))).astype(np.int32)
+        photons.append(make_train(t, dense, make_flags(rng, n_frames, n_env)))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return build_results(path, photons, rings, failed=failed)

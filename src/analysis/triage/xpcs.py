@@ -12,9 +12,11 @@ extra-speckle's kbar filter, n the trains, and √2 the extra variance of subtra
 TTCF_off. β, the contrast, is measured here from the data: the τ → 0 intercept of
 the runs whose decay is slow and well measured.
 
-Every input is read from DAMNIT's per-run file and the SAXS pass's scratch file. The
-TTCF is reduced in one pass to per-train sums and counts of its finite diagonal
-entries, from which g2 over any set of trains follows exactly.
+Every input is read from the run's hit-train results file (`analysis.xpcs.result.
+XpcsHits`; P6, 2026-10-19). The TTCF is reduced to per-train sums and counts of its
+finite diagonal entries, from which g2 over any set of trains follows exactly. The
+readers of DAMNIT's ``xpcs_ttcf`` and ``agipd_saxs`` and `measure_run_legacy` remain
+for the acceptance comparison only.
 
 β is one table for every run, `REFERENCE_BETA` (user, 2026-10-13), from the runs
 whose g2 decays almost completely inside the lag window. `measure_beta`, the median
@@ -29,10 +31,16 @@ from __future__ import annotations
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import h5py
 import numpy as np
 from scipy.optimize import curve_fit
+
+from analysis.damnit_names import AGIPD_SAXS, stored
+
+if TYPE_CHECKING:
+    from analysis.xpcs.result import XpcsHits
 
 __all__ = [
     "BETA_MIN_DECAY_LAGS",
@@ -44,6 +52,7 @@ __all__ = [
     "REFERENCE_BETA",
     "REFERENCE_BETA_RUNS",
     "ROI_EDGES_A",
+    "KBAR_MIN",
     "SKIP_LAST_LAGS",
     "SLICE_TRAINS",
     "SNR_MIN",
@@ -61,11 +70,13 @@ __all__ = [
     "jackknife_g2",
     "measure_beta",
     "measure_run",
+    "measure_run_legacy",
     "read_npix_per_bin",
     "read_saxs_kbar",
     "read_ttcf_diagonals",
     "reference_beta",
     "roi_bin_masks",
+    "roi_edges_from",
     "roi_edges_nm",
     "roi_kinds",
     "slice_index",
@@ -90,6 +101,9 @@ SKIP_LAST_LAGS = 10
 BETA_MIN_PRECISION, BETA_MIN_DECAY_LAGS = 10.0, 5.0
 #: Noise factor of the pipeline's TTCF_raw − TTCF_off: two estimates, one variance each.
 OFF_SUBTRACTION = float(np.sqrt(2.0))
+#: Mean photons per pixel per frame below which a frame drops out of a pair: the
+#: results file's `ES_KBAR_MIN`, extra-speckle's default ``kbar_threshold``.
+KBAR_MIN = 3e-3
 #: OK frames whose normalization is median-combined into N_pix per bin.
 NPIX_FRAMES = 10
 #: Runs whose g2 decays almost completely inside the 60 µs lag window (user,
@@ -240,7 +254,7 @@ def read_saxs_kbar(
     Frames are averaged over the slots with ``n_frames == 1`` only.
     """
     with h5py.File(path, "r") as f:
-        g = f["agipd_saxs"]
+        g = f[stored(f, AGIPD_SAXS)]
         q = g["q"][:]
         tids = g["trainId"][:].astype(np.uint64)
         weights = roi_bin_masks(q, edges_nm) * npix_per_bin[None, :]
@@ -402,7 +416,124 @@ def _damnit_g2(path: Path):
         return f["xpcs_mean_dataset/roi_q"][:], f["xpcs_mean_dataset/g2"][:]
 
 
+def _reduce(
+    run: int,
+    roi_q_A: np.ndarray,
+    edges: np.ndarray,
+    sums: np.ndarray,
+    counts: np.ndarray,
+    kbar_t: np.ndarray,
+    train_ids: np.ndarray,
+    npix: np.ndarray,
+    f_frames: int,
+    k_max: int,
+    rep_rate_hz: float,
+    span: tuple[int, int] | None,
+    n_blocks: int,
+) -> RunMeasurement:
+    """The usable trains' diagonal sums, k̄ and N_pix reduced to a `RunMeasurement`.
+
+    Shared by `measure_run` (the hit-train store) and `measure_run_legacy`
+    (DAMNIT's files). ``span`` is the first and last train id the slices are
+    anchored to; None for the usable trains' own.
+    """
+    tau = np.arange(1, k_max + 1) / rep_rate_hz
+    n = train_ids.size
+    n_roi = len(edges)
+    phi = counts[:, :, 0].sum(axis=0) / max(n * (f_frames - 1), 1)
+    kbar = np.nanmean(kbar_t, axis=0) if n else np.full(n_roi, np.nan)
+    if n >= 2:
+        # A ROI whose every pair fell to the kbar filter is all NaN: its g2, σ and
+        # fit come back NaN, which is the answer, not a warning per ROI and block.
+        with warnings.catch_warnings(), np.errstate(invalid="ignore", divide="ignore"):
+            warnings.simplefilter("ignore", RuntimeWarning)
+            g2, sigma, loo = jackknife_g2(
+                sums[:, :, :k_max], counts[:, :, :k_max], n_blocks
+            )
+            fits = [fit_decay(tau, g2[r], sigma[r], loo[:, r]) for r in range(n_roi)]
+            analytic = OFF_SUBTRACTION / (
+                kbar * np.sqrt(npix * (f_frames - 1) * phi * n)
+            )
+            rho = np.nanmean(sigma[:, :3], axis=1) / analytic
+    else:
+        g2 = sigma = np.full((n_roi, k_max), np.nan)
+        nan = float("nan")
+        fits = [DecayFit(nan, nan, nan, nan, nan, False)] * n_roi
+        rho = np.full(n_roi, np.nan)
+
+    slices = []
+    if n:
+        first, last = span if span is not None else (train_ids[0], train_ids[-1])
+        idx = slice_index(train_ids, int(first), int(last))
+        for s in np.unique(idx):
+            m = idx == s
+            slices.append(
+                {
+                    "slice": int(s),
+                    "n_usable": int(m.sum()),
+                    "kbar": np.nanmean(kbar_t[m], axis=0),
+                    "phi": counts[m, :, 0].sum(axis=0) / (m.sum() * (f_frames - 1)),
+                }
+            )
+    return RunMeasurement(
+        run=run, roi_q_A=roi_q_A, edges_nm=edges, kinds=roi_kinds(edges),
+        n_frames=f_frames, rep_rate_hz=rep_rate_hz, npix=npix, n_usable=int(n),
+        kbar=kbar, phi=phi, tau=tau, g2=g2, sigma_g2=sigma, fits=fits, rho=rho,
+        damnit_max_z=np.full(n_roi, np.nan), slices=slices,
+    )  # fmt: skip
+
+
 def measure_run(
+    run: int,
+    hits: XpcsHits,
+    *,
+    select: np.ndarray | None = None,
+    span: tuple[int, int] | None = None,
+    kbar_min: float = KBAR_MIN,
+    n_blocks: int = N_BLOCKS,
+) -> RunMeasurement:
+    """Reduce one run's hit-train results file to a `RunMeasurement`.
+
+    Usable trains are the file's usable hits with a baseline (a train with no
+    ``TTCF_off`` has no ``raw − off``); ``select`` (train ids, e.g. the ``on``
+    trains of a mesh run) narrows them further. The diagonals come from
+    `XpcsHits.diagonals` with extra-speckle's k̄ filter, k̄ from `XpcsHits.kbar`
+    (the mean over frames, then trains), N_pix from the ring pixel counts the
+    pass stores per train (`XpcsHits.pixels`, the median over the usable
+    trains), and the lag from the file's pulse pattern. Nothing is read from
+    DAMNIT.
+
+    :param span: first and last train id the 30 s slices are anchored to; the
+        file knows only the hits, so the default is the first and last usable
+        hit.
+    """
+    chosen = hits.train_ids[hits.usable & hits.has_off]
+    if select is not None:
+        chosen = np.intersect1d(chosen, np.asarray(select, dtype=np.uint64))
+    diag = hits.diagonals(kbar_min=kbar_min, trains=chosen)
+    kbar_t = (
+        hits.kbar(diag.train_ids).mean("frame", skipna=True).values
+        if diag.train_ids.size
+        else np.empty((0, hits.n_rings))
+    )
+    pixels = hits.pixels(diag.train_ids)
+    npix = np.median(pixels, axis=0) if pixels.size else np.full(hits.n_rings, np.nan)
+    return _reduce(
+        run, diag.roi_q_A, roi_edges_from(hits.edges_nm, hits.n_rings), diag.sums,
+        diag.counts, kbar_t, diag.train_ids, npix, hits.n_frames, hits.lags().size,
+        1.0 / hits.period_s, span, n_blocks,
+    )  # fmt: skip
+
+
+def roi_edges_from(edges_nm: np.ndarray, n_rings: int) -> np.ndarray:
+    """(R, 2) ROI edges in nm⁻¹ from a results file's ring edges."""
+    e = np.asarray(edges_nm, dtype=np.float64)
+    if e.size != n_rings + 1:
+        return np.full((n_rings, 2), np.nan)  # rings from a masks file: no q edges
+    return np.c_[e[:-1], e[1:]]
+
+
+def measure_run_legacy(
     run: int,
     damnit_path: Path,
     scratch_path: Path,
@@ -411,10 +542,14 @@ def measure_run(
     select: np.ndarray | None = None,
     n_blocks: int = N_BLOCKS,
 ) -> RunMeasurement | None:
-    """Read one run and reduce it to a `RunMeasurement`; None without a TTCF.
+    """LEGACY: read one run from DAMNIT's ``xpcs_ttcf`` and ``agipd_saxs``.
+
+    Retired from production with extra-speckle's columns; kept for the acceptance
+    comparison (``scripts/xpcs_hits_acceptance.py``) and for `measure_run` to be
+    compared with. None without a TTCF.
 
     Usable trains have every frame present in the SAXS grid and a TTCF; ``select``
-    (train ids) narrows them further, e.g. to the `on` trains of a mesh run.
+    (train ids) narrows them further.
     """
     ttcf = read_ttcf_diagonals(damnit_path)
     if ttcf is None:
@@ -435,64 +570,23 @@ def measure_run(
         usable = np.intersect1d(usable, np.asarray(select, dtype=np.uint64))
     it = np.searchsorted(ttcf.train_ids, usable)
     ks = np.searchsorted(saxs.train_ids, usable)
-    sums, counts = ttcf.sums[it], ttcf.counts[it]
-    kbar_t = saxs.kbar[ks]
+    m = _reduce(
+        run, ttcf.roi_q_A, edges, ttcf.sums[it], ttcf.counts[it], saxs.kbar[ks],
+        usable, npix, f_frames, f_frames - 1 - SKIP_LAST_LAGS, rep_rate_hz,
+        (int(saxs.train_ids[0]), int(saxs.train_ids[-1])), n_blocks,
+    )  # fmt: skip
 
-    k_max = f_frames - 1 - SKIP_LAST_LAGS
-    tau = np.arange(1, k_max + 1) / rep_rate_hz
-    n = usable.size
-    phi = counts[:, :, 0].sum(axis=0) / max(n * (f_frames - 1), 1)
-    kbar = np.nanmean(kbar_t, axis=0) if n else np.full(len(edges), np.nan)
-    if n >= 2:
-        # A ROI whose every pair fell to the kbar filter is all NaN: its g2, σ and
-        # fit come back NaN, which is the answer, not a warning per ROI and block.
-        with warnings.catch_warnings(), np.errstate(invalid="ignore", divide="ignore"):
-            warnings.simplefilter("ignore", RuntimeWarning)
-            g2, sigma, loo = jackknife_g2(
-                sums[:, :, :k_max], counts[:, :, :k_max], n_blocks
-            )
-            fits = [
-                fit_decay(tau, g2[r], sigma[r], loo[:, r]) for r in range(len(edges))
-            ]
-            analytic = OFF_SUBTRACTION / (
-                kbar * np.sqrt(npix * (f_frames - 1) * phi * n)
-            )
-            rho = np.nanmean(sigma[:, :3], axis=1) / analytic
-    else:
-        g2 = sigma = np.full((len(edges), k_max), np.nan)
-        nan = float("nan")
-        fits = [DecayFit(nan, nan, nan, nan, nan, False)] * len(edges)
-        rho = np.full(len(edges), np.nan)
-
-    max_z = np.full(len(edges), np.nan)
     d_roi, d_g2 = _damnit_g2(damnit_path)
     if d_roi is not None:
         for j, rq in enumerate(d_roi):
             r = int(np.argmin(np.abs(ttcf.roi_q_A - rq)))
             if abs(ttcf.roi_q_A[r] - rq) < 1e-6:
                 with np.errstate(invalid="ignore", divide="ignore"):
-                    z = (g2[r, :10] - d_g2[j, :10]) / sigma[r, :10]
-                max_z[r] = np.nanmax(np.abs(z)) if np.isfinite(z).any() else np.nan
-
-    slices = []
-    if n:
-        idx = slice_index(usable, int(saxs.train_ids[0]), int(saxs.train_ids[-1]))
-        for s in np.unique(idx):
-            m = idx == s
-            slices.append(
-                {
-                    "slice": int(s),
-                    "n_usable": int(m.sum()),
-                    "kbar": np.nanmean(kbar_t[m], axis=0),
-                    "phi": counts[m, :, 0].sum(axis=0) / (m.sum() * (f_frames - 1)),
-                }
-            )
-    return RunMeasurement(
-        run=run, roi_q_A=ttcf.roi_q_A, edges_nm=edges, kinds=roi_kinds(edges),
-        n_frames=f_frames, rep_rate_hz=rep_rate_hz, npix=npix, n_usable=int(n),
-        kbar=kbar, phi=phi, tau=tau, g2=g2, sigma_g2=sigma, fits=fits, rho=rho,
-        damnit_max_z=max_z, slices=slices,
-    )  # fmt: skip
+                    z = (m.g2[r, :10] - d_g2[j, :10]) / m.sigma_g2[r, :10]
+                m.damnit_max_z[r] = (
+                    np.nanmax(np.abs(z)) if np.isfinite(z).any() else np.nan
+                )
+    return m
 
 
 # ── β and the run summary ─────────────────────────────────────────────────────

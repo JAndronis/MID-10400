@@ -11,9 +11,9 @@ T2a, ``--phase xpcs``:
 * the analytical XPCS SNR (§4.6) per run and 30 s slice
 * β from `REFERENCE_BETA`, one table for every run (user, 2026-10-13); the median
   over β-eligible runs and the reference runs' re-measurement are reported beside it
-* the noise check ρ and the cross-check against DAMNIT's own g2
+* the noise check ρ
 * by default only on the T2a acceptance runs; ``--runs all`` takes every static and
-  silica run with an XPCS result
+  silica run with a hit-train XPCS results file (``--xpcs-root``)
 
 T2b, ``--phase classify``:
 * droplet hits for every mesh, static and reference run (``analysis.triage.classify``):
@@ -22,7 +22,8 @@ T2b, ``--phase classify``:
 * checks: r318 against lowq_report's own hit rule, the runs that must come out
   ambiguous (r68–69, r140) and all-on (r309–311)
 
-Everything is read from DAMNIT, the SAXS pass's scratch files and raw, read-only.
+The XPCS phase reads the hit-train results files and raw; the rest, DAMNIT and raw.
+All read-only.
 Nothing is written next to them.
 
     python scripts/run_triage.py --phase inventory
@@ -53,7 +54,6 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
 from analysis.common.cpu import default_pool  # noqa: E402
-from analysis.saxs.config import DEFAULT_OUTPUT_ROOT as SAXS_ROOT  # noqa: E402
 from analysis.triage.classify import (  # noqa: E402
     OFF_SIGMA,
     SEPARATION_BANDS,
@@ -72,7 +72,6 @@ from analysis.triage.inventory import (  # noqa: E402
     read_run_table,
 )
 from analysis.triage.series import load_droplet, segment  # noqa: E402
-from analysis.triage.stats import z_for_tests  # noqa: E402
 from analysis.triage.xpcs import (  # noqa: E402
     N_BLOCKS,
     REFERENCE_BETA_RUNS,
@@ -84,6 +83,7 @@ from analysis.triage.xpcs import (  # noqa: E402
     reference_beta,
     summarise,
 )
+from analysis.xpcs.config import DEFAULT_XPCS_ROOT  # noqa: E402
 
 #: §9 T1: series the notebooks and the user already established, as run lists.
 KNOWN_SERIES: dict[str, list[int]] = {
@@ -196,17 +196,22 @@ def inventory_phase(args) -> dict[str, Any]:
     }
 
 
+def results_path(run: int, root: str | Path = DEFAULT_XPCS_ROOT) -> Path:
+    """A run's hit-train results file (`analysis.xpcs.result.read`'s path)."""
+    return Path(root) / "xpcs_hits" / f"r{run:04d}" / "xpcs_hits.h5"
+
+
 def _measure(job):
     """One run in a worker: its optics state and its `RunMeasurement`, or the error."""
     import extra_data as ed
 
-    run, proposal, damnit_path, scratch_path, rep_rate_hz = job
+    from analysis.xpcs.result import XpcsHits
+
+    run, proposal, path = job
     t0 = time.perf_counter()
     try:
         optics = crl_state(ed.open_run(proposal, run, data="raw"))
-        m = measure_run(run, Path(damnit_path), Path(scratch_path), rep_rate_hz)
-        if m is None:  # recorded, not dropped: a run asked for must be accounted for
-            return run, optics, None, "no xpcs_ttcf matrix in the DAMNIT file", 0.0
+        m = measure_run(run, XpcsHits(path))
         return run, optics, m, None, time.perf_counter() - t0
     except Exception as error:  # noqa: BLE001 - recorded per run, never fatal
         return run, None, None, f"{type(error).__name__}: {error}", 0.0
@@ -225,7 +230,6 @@ def _roi_rows(m, eligible) -> list[dict[str, Any]]:
                 "n_pix": float(m.npix[r]),
                 "phi": float(m.phi[r]),
                 "rho": float(m.rho[r]),
-                "damnit_max_z": float(m.damnit_max_z[r]),
                 "A": fit.amplitude,
                 "sigma_A": fit.sigma_amplitude,
                 "gamma_per_s": fit.rate,
@@ -250,17 +254,15 @@ def xpcs_phase(args) -> dict[str, Any]:
     inv = build_inventory(read_run_table(args.damnit_root / "runs.sqlite"),
                           args.damnit_root, args.proposal).set_index("run")  # fmt: skip
     wanted = (inv.cls == "static_droplet") | (inv["sample"] == "silica_np")
-    wanted &= inv.var_xpcs_ttcf == "present"
+    wanted &= pd.Series(
+        [results_path(int(r), args.xpcs_root).exists() for r in inv.index],
+        index=inv.index,
+    )
     if args.runs == ["all"]:
         runs = [int(r) for r in inv.index[wanted & (inv.cls != "mesh_sshex")]]
     else:
         runs = [int(r) for r in (XPCS_ACCEPTANCE if not args.runs else args.runs)]
-    jobs = [
-        (r, args.proposal, str(damnit_file(r, args.damnit_root, args.proposal)),
-         str(Path(SAXS_ROOT) / f"r{r:04d}" / "agipd_saxs.h5"),
-         float(inv.loc[r, "rep_rate_mhz"]) * 1e6)
-        for r in runs
-    ]  # fmt: skip
+    jobs = [(r, args.proposal, str(results_path(r, args.xpcs_root))) for r in runs]
     with default_pool(min(args.workers, len(jobs))) as pool:
         results = list(pool.map(_measure, jobs))
 
@@ -300,10 +302,6 @@ def xpcs_phase(args) -> dict[str, Any]:
         r: [row["rho"] for row in rows if row["kind"] == "plain"]
         for r, rows in roi_tables.items()
     }
-    n_cmp = sum(
-        np.isfinite(row["damnit_max_z"]) for rows in roi_tables.values() for row in rows
-    )
-    z_cut = z_for_tests(max(int(n_cmp) * 10, 1), two_sided=True)
     by_run = {s["run"]: s for s in summaries}
     checks = {
         "rho_within": {
@@ -311,14 +309,6 @@ def xpcs_phase(args) -> dict[str, Any]:
             "runs_outside": {
                 r: v for r, v in rhos.items()
                 if any(np.isfinite(x) and abs(x - 1) > RHO_TOLERANCE for x in v)
-            },
-        },
-        "damnit_g2": {
-            "z_cut": z_cut,
-            "outside": {
-                r: [row["roi_q_A"] for row in rows if row["damnit_max_z"] > z_cut]
-                for r, rows in roi_tables.items()
-                if any(row["damnit_max_z"] > z_cut for row in rows)
             },
         },
         "beta_eligible_per_plain_roi": {
@@ -341,7 +331,6 @@ def xpcs_phase(args) -> dict[str, Any]:
     reproduced = checks["reference_beta_reproduced"]
     passed = (
         not checks["rho_within"]["runs_outside"]
-        and not checks["damnit_g2"]["outside"]
         and all(checks["r450_r400_extractable"].values())
         and (reproduced is None or all(v["agree"] for v in reproduced.values()))
     )
@@ -510,6 +499,8 @@ def parse_args(argv=None):
     parser.add_argument("--proposal", type=int, default=10400)
     parser.add_argument("--damnit-root", type=Path, default=DAMNIT_ROOT)
     parser.add_argument("--runs", nargs="*", default=None, help="run numbers, or 'all'")
+    parser.add_argument("--xpcs-root", type=Path, default=Path(DEFAULT_XPCS_ROOT),
+                        help="where xpcs_hits/r####/xpcs_hits.h5 live")  # fmt: skip
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--json", type=Path, default=None)
     return parser.parse_args(argv)
@@ -526,11 +517,11 @@ def print_xpcs(report) -> None:
             "best_snr", "best_roi_q_A", "t_needed_s", "extractable", "seconds"]  # fmt: skip
     table = pd.DataFrame(report["runs"])
     print(table[[c for c in cols if c in table]].round(2).to_string(index=False))
-    print("\nper plain ROI (kbar, n_pix, phi, rho, damnit_max_z):")
+    print("\nper plain ROI (kbar, n_pix, phi, rho):")
     for r, rows in report["rois"].items():
         print(f"  r{r}: " + "; ".join(
             f"{x['roi_q_A']:.4f}: {x['kbar']:.2e} {x['n_pix']:.0f} {x['phi']:.2f} "
-            f"{x['rho']:.2f} {x['damnit_max_z']:.1f}"
+            f"{x['rho']:.2f}"
             for x in rows if x["kind"] == "plain"))  # fmt: skip
     if report["errors"]:
         print("errors:", report["errors"])

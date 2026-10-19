@@ -287,7 +287,13 @@ It checks nothing against extra-speckle: that is P4.
 See §10 for what P4 settled and left open.
 
 - **P5**: done in the worktree (§11); open is `install_context.py --install`, the user's go.
-- **P6**: `triage.xpcs.measure_run`, `inventory` and `xpcs_score` onto `read()`. Until then
+- **P6 (2026-10-19)**: `triage.xpcs.measure_run(run, XpcsHits)`, `diagnostics.xpcs.xpcs_score` / `xpcs_snr` /
+  `kbar_rois` and `scripts/run_triage.py --phase xpcs` read the results file only (lag from the pulse ids,
+  N_pix from `XpcsHits.pixels`, k-bar from `kbar`, diagonals from `diagonals(kbar_min=3e-3)`); slices are
+  anchored to the first usable hit. `measure_run_legacy` and the DAMNIT readers stay for gate e3. Against the
+  old path on r0493, r0240, r0250 the run SNR is 2 to 10 % lower and the verdict unchanged: N_pix is the
+  store's (3.5 to 9 % fewer pixels than the full ring) and a hit without a previous-train baseline has no
+  `raw - off`, where extra-speckle paired it. `inventory` is still to move.
   `analysis.triage.xpcs.ROI_EDGES_A` and `RING_EDGES_NM` are two lists; a test pins them equal.
 
 ## 10. P4, node acceptance (2026-10-18)
@@ -518,3 +524,156 @@ lock and answers a complete run from its files, so a relaunch writes nothing. A 
 extracts its hits from proc (about 14 trains/s at 36 workers on r0493, §10), so run it before the
 run's proc goes to tape; the photon store is what outlives proc.
 
+
+## 12. The pixel-outlier mask, and what else `xpcs_offline` did (design, 2026-10-19)
+
+User decision (2026-10-19): the hit pass reproduces the **whole** behaviour of the old
+`xpcs_pipeline` column (one `xpcs_offline` call, `git show HEAD:src/amore/context.py`, the
+`xpcs_pipeline` variable), restricted to hit trains. The first gap is extra-speckle's pixel-outlier
+mask: on r0493 it removes 2415 ring pixels the hit pass kept, pixels whose mean depends on the
+memory cell in 32-frame blocks (0.96 / 1.13 / 0.93 / 0.96 of the mean), which leave 32-frame blocks
+in the pooled raw and off maps. It is to be **kept, computed from the hit trains, and applied at the
+merge**, so the store is untouched.
+
+### 12.1 What extra-speckle computes (read from the installed source, confirmed on r0493)
+
+`pipeline.xpcs_offline(outlier_masking=True, outlier_thresholds=(0.75, 1.75),
+outlier_q_bounds=None)` (the DAMNIT call passes only `outlier_masking=True`; `log.txt` of
+`scratch/xpcs/r0493` records the thresholds) calls `stats.tools.mask_outlier(mean_pixelcell, setup)`:
+
+```
+mean_pixelcell[f, p] = Σ_t x[t,f,p]·g[t,f,p] / Σ_t g[t,f,p]      g = not image.mask[t,f,p] and not static[p]
+                                                                 (stats.calc_stats, mask_dynamic=True; 0/0 → NaN)
+                                                                 f = frame position in the train (pulse_coord 'idx'), every train of the run
+s[p]   = sqrt(nanmean_f mean_pixelcell[f,p]²)                     "std_of_mean": an RMS over frames, not a std
+c_i    = the 300 bin centres of saxs.get (pyFAI integrate1d, npt=300 hard-wired, q_A^-1, whole detector)
+ratio[p] = s[p] / nanmedian{ s[p'] : c_i < q[p'] ≤ c_{i+1} }      for the interval p falls in
+ratio[p] = 1.25 (the mean of the thresholds) when p is in no interval
+outlier[p] = ratio[p] < 0.75  or  ratio[p] > 1.75                 NaN ratio → not an outlier
+setup.mask |= outlier                                             then every ROI mask, so the TTCFs and g2 lose them
+```
+
+So the statistic is **one number per pixel**, not per memory-cell block: a pixel whose mean differs
+between cell blocks has a large RMS over frames and is removed whole. Nothing in it works per
+block. `mask_TTCF_diagonal_boxes` (32×32 diagonal blocks) exists in extra-speckle and was **off**.
+
+Check (`scratch`, read-only, extra-speckle's own `mean_pixelcell.npy` and `SAXS.nc` for r0493, q
+from our geometry at extra-speckle's 9.000 keV and 7.5315962 m): the formula above gives 3275
+outliers (1933 low, 1342 high) against the 3278 of `outlier_mask.npy`, 13 pixels different, the
+size of the encoder-vs-file geometry difference of G2. The 300 centres run 0.008234 to 0.105113
+Å⁻¹ in steps of 3.2401e-4.
+
+### 12.2 Design
+
+- **Config.** `XpcsConfig.outlier_thresholds: tuple[float, float] | None = (0.75, 1.75)` (None
+  switches it off; the production values, not the figure's guess) and `outlier_q_bins: int = 300`
+  (extra-speckle's hard-wired `npt`). Both enter `merge_hash` as
+  `"outlier": None | {"thresholds", "q_bins"}`. Not in `extract_hash`: the store is unchanged.
+- **Statistic, over the hit trains.** The trains are the prelude's OK ones (one pulse pattern),
+  *all* of them, whether paired or not: the mask is a property of the run's pixels, so it does not
+  depend on `max_partner_gap` or the kernel. Per frame position `f` and envelope pixel `p`:
+  `S[f,p]` = photons where the frame does not flag `p` (the flag base XOR the frame's listed
+  difference, i.e. `mask_dynamic=True`), `C[f,p]` = trains in which it is not flagged. The
+  candidates are the envelope pixels that are not statically bad (ring or margin: the median of a
+  q bin at a ring edge needs the pixels just outside the ring, as extra-speckle's covers the whole
+  detector). The q bins are extra-speckle's construction on our geometry: 300 equal bins over the
+  q range of the detector's not-statically-bad pixels, intervals between consecutive centres,
+  1.25 outside them.
+- **Where it enters.** `outlier[p]` is folded into the ring labels (`label = −1`) before the merge
+  workers start, like the static mask. `train_sums`, `MaskPolicy.ANY_FRAME` (which still acts per
+  train on top), the pair mask and both kernels are unchanged, so `Averaging.ES` and `POOLED`
+  read the same sums and stay consistent. `XpcsHits.pixels` (N_pix) follows the applied labels.
+- **What the results file records.** `rings/label` is the applied map; new
+  `outlier/{ratio (float32, n_env), mask (bool, n_env), label_before (int8)}`, attrs `thresholds`,
+  `q_bins`, `n_trains`, `sha256` of the mask, and the same sha in provenance. `SCHEMA` 1 → 2.
+- **Hash: the inputs, not the mask's sha.** The mask is a deterministic function of the store, the
+  hit set (whose OK trains are fixed by the prelude), the static rings and the settings, all of
+  which `merge_hash` already names. Putting the mask's own sha256 in `merge_hash` would force the
+  statistic pass to run before a complete run could be answered from the file, which is G5's
+  0.5 s rerun becoming a minute. The mask's sha256 is stored and recorded for audit instead, and a
+  resumed merge (same identity) reads the mask back from the file rather than recomputing it.
+- **Cost.** One more read of every OK hit train from the store (`store.get` ≈ 0.12 s a train,
+  2.7 M events a train on r0493, measured on a login node), by `fan_out` over blocks of at most 257
+  trains (so a block's sums fit uint16: 257 × 255) and at least one per worker. Each block returns
+  a dense `(P, n_env)` uint16 sum (295 MB at r0493's size) and its flag counts sparse; the parent
+  adds them into uint32. A sparse return does not pay: 8 trains give 19.7 M distinct (frame, pixel)
+  keys out of 21.5 M events. Expected on r0493 at 36 workers: ~15 s of reads in the workers,
+  ~10 GB through the pipes, under a minute in all (to be measured, §12.4). Memory: ~0.45 GB a
+  worker, ~1.2 GB in the parent. r0423 scales with its hit count.
+- **A block that fails** cannot be left out (it would change the mask), so a failed block stops the
+  merge with an error, before any results row is written; a rerun retries it.
+- **Not supported with `ring_masks_file`** (no q per pixel): `XpcsConfig` refuses
+  `ring_masks_file` with `outlier_thresholds` set. The G1 harness sets it to None.
+- **Invalidated.** Every `xpcs_hits.h5` (schema 1, and the merge hash moved): the next pass moves it
+  to `xpcs_hits.prev.h5` and rebuilds it from the store, minutes, no proc. That is
+  `usr/cached_files/xpcs_hits/r0493/xpcs_hits.h5` and anything under `scratch/xpcs_hits_p5`. No
+  photon store is invalidated.
+
+```
+outlier_mask(store, ok_trains, envelope, static_bad, q_nm, thresholds, q_bins):
+    S = zeros((P, n_env), uint32); flagged = zeros((P, n_env), int32)
+    for block in blocks(ok_trains, ≤ 257):                       # workers
+        for t in block: s16[f, p] += x[t,f,p] where not flag[t,f,p]; flagged += flag[t]
+    C = n_trains − flagged
+    s = sqrt(nanmean_f (S/C)²)  over candidates (not static_bad), NaN where C = 0 in every frame
+    centres = linspace bins over q of the detector's good pixels; ratio as §12.1
+    return ratio < lo or ratio > hi
+```
+
+### 12.3 Gap list: `xpcs_offline` as the DAMNIT column called it, against the hit pass
+
+| Old behaviour (argument) | Here |
+|---|---|
+| every train of the run (`selected_trains=None`) | **differently, on purpose**: the hit trains only (the point of the pass) |
+| `remove_outer_points=False` | reproduced (nothing removed) |
+| geometry `geom=None` (motor encoders, pitfall 16), `px/py` 607.46/672.08, `sdd` 7531.5962 mm, photon energy from the run (9.000 keV) | **differently, on purpose**: `geom_latest.geom`, 7.531 m, 9.04 keV (G2: 28 151 ring pixels differ, every one explained) |
+| `q_range` 0.0225 … 0.086 Å⁻¹, seven rings | reproduced (`RING_EDGES_NM`) |
+| `mask=MASK_PATH` | reproduced (plus ASIC seams, already inside it) |
+| `mask_dynamic=True`: per-frame `image.mask` in the stats, any frame of a train in the TTCF | reproduced (`MaskPolicy.ANY_FRAME`; per frame in the outlier statistic) |
+| `calc_stats=True`: `mean_pixelcell`, `mean_intensity` | `mean_intensity` reproduced on ring pixels (`figures.mean_intensity`); `mean_pixelcell` is computed inside the outlier pass and not kept as a product |
+| `refine_beamcenter=False` | reproduced (no fit; `figure_beamcenter` is a check) |
+| **`outlier_masking=True`, (0.75, 1.75), whole q range** | **missing → implemented here (§12.2)** |
+| `intensity_masking=False` (`xgm_source` used only by it) | reproduced (no train removed); `figure_intensity_outliers` draws it |
+| `run_saxs_analysis=True` (`SAXS.nc`, per-frame I(q), pyFAI 300 bins) | **differently**: `figures.saxs_curves` bins the store's annulus (plain means, no pixel splitting); the AGIPD SAXS pass is the product |
+| `run_xpcs_analysis=True`, `sparsify=True`, `photonize=False`, `extra_filtering=False`, all pulses | reproduced bit for bit by `Kernel.ES` (G1); `Kernel.CLEAN` **differs on purpose** (§4: previous hit within `max_partner_gap`, no chain restart, no own-mask first train) |
+| `kbar_masking=True`, `kbar_threshold=3e-3` | reproduced in `Averaging.ES` only; the pooled view has no k-bar cut, on purpose (no source for 3e-3) |
+| `subtract_TTCF_off=True` | reproduced (`c2 = raw − off`) |
+| `mask_noisy=True`, `nan_thresh=0.025` | reproduced in `Averaging.ES` (§6) |
+| `mask_TTCF_diagonal_boxes=False` | reproduced (not done) |
+| `bin_g2=True`, `(50, 20, 10)` | reproduced (ES view: medians as extra-speckle; pooled: summed numerators, on purpose) |
+| `rep_rate` from DAMNIT | reproduced, as a check (`RepRateMismatch`) |
+| `fit_result=True` (`xpcs.fit`, `dr=True`) | reproduced (`figures.fit_g2`) |
+| `run_xsvs_analysis`, `run_xcca_analysis` False | nothing to reproduce |
+| a train with missing modules or a short frame count is dropped by `chunk_trains_agipd` | reproduced as statuses (§5), counted rather than dropped |
+| g2 without error bars | addition: jackknife `sigma` |
+
+Nothing else in the call is missing. The open item is the outlier mask; everything marked
+"differently" is a recorded decision.
+
+### 12.4 Implemented and checked on r0493 (2026-10-19)
+
+`analysis.xpcs.outliers` (statistic, worker, sink), `XpcsConfig.outlier_thresholds` /
+`outlier_q_bins`, `run._outlier_mask` before the merge, `result` schema 2 (`outlier/`,
+`XpcsHits.outlier()`), `figures` (the applied mask in `figure_outliers`, `figure_q_rings`,
+`q_curves`). Tests: `tests/xpcs/test_xpcs_outliers.py` (the statistic against a dense rewrite of
+`mask_outlier`, flag base vs listed flags, uint16 bound, hash, labels and `cnt`, workers, a complete
+rerun answered without the statistic, a failed block refuses). The test `cfg` fixture sets
+`outlier_thresholds=None` so the kernel tests keep their independent rings. The G1 harness passes
+`outlier_thresholds=None` with `ring_masks_file`.
+
+Job 25339400 (max-wn164, 36 workers), `scratch/xpcs_hits_outlier/verify.py`, the real store
+through a symlink, results under `scratch/xpcs_hits_outlier/root` (`usr/cached_files` not written),
+JSON `scratch/xpcs_hits_outlier/r0493/verify.json`:
+
+| | |
+|---|---|
+| outlier pass | **25.9 s** for 2994 trains (whole merge 140.6 s wall) |
+| pixels | 2617 in the envelope, **2402 in a ring**; extra-speckle 2415 in our rings: **2385 common**, 30 only theirs, 17 only ours, every one of the 47 with our ratio within 0.004 of a threshold (0.746 to 0.761, 1.748 to 1.751): bin edges and geometry (9.04 vs 9.000 keV, all trains vs hits) |
+| 32-frame blocks, pooled maps | gone: diagonal block means of `raw` at 0.0605 Å⁻¹ 1.122/1.121/1.109/1.108/1.111 → 1.099/1.098/1.099/1.098/1.100; block spread of `off` 0.0047 → 0.0018 (0.0605), 0.0044 → 0.0009 (0.067) |
+| g2, `Averaging.ES` vs extra-speckle's `g2.nc`, median relative difference | 0.0605 Å⁻¹ **11.7 % → 0.17 %**; 0.067 Å⁻¹ **32.2 % → 1.35 %** |
+
+Figures: `figures/xpcs_hits/r0493_outlier_maps.png`, `r0493_outlier_mask_vs_es.png`,
+`r0493_figure_outliers.png`, `r0493_figure_q_rings.png`. Left visible: a faint line at frame ≈ 30
+in the 0.0605 Å⁻¹ raw map, and single-frame spikes in I(q) of the first frames that the RMS over 155
+frames does not catch (extra-speckle's statistic has the same blind spot). Not run: r0423 (no hit
+set, §10).

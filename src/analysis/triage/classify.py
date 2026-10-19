@@ -54,6 +54,7 @@ from pathlib import Path
 import h5py
 import numpy as np
 
+from analysis.damnit_names import AGIPD_SAXS, JF1, stored
 from analysis.triage.inventory import DAMNIT_ROOT, damnit_file
 
 __all__ = [
@@ -101,6 +102,7 @@ PLATEAU_MIN_TRAINS = 20
 def _band_mean(path: Path, group: str, band) -> tuple | None:
     """Per train: mean over present frames of the mean over ``band``'s q bins."""
     with h5py.File(path, "r") as f:
+        group = stored(f, group)
         if group not in f or "intensity" not in f[group]:
             return None
         g = f[group]
@@ -226,7 +228,7 @@ def train_signals(
         if not refresh and (ds := _load(cached, inputs, sources)) is not None:
             return ds
 
-    saxs = _band_mean(path, "agipd_saxs", MID_BAND_NM)
+    saxs = _band_mean(path, AGIPD_SAXS, MID_BAND_NM)
     if saxs is None:
         raise LookupError(f"r{run}: no agipd_saxs in {path}")
     tids, mid, present = saxs
@@ -240,7 +242,7 @@ def train_signals(
     flux = per_train_flux(path).reindex(trainId=tids)
     for name in ("xgm_uJ", "total_transmission", "flux"):
         ds[name] = flux[name]
-    waxs = _band_mean(path, "jungfrau_waxs_jf1", WAXS_RING_NM)
+    waxs = _band_mean(path, JF1, WAXS_RING_NM)
     if waxs is None:
         ds["waxs_ring"] = ("trainId", np.full(tids.size, np.nan))
     else:

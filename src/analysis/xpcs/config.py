@@ -114,6 +114,13 @@ class XpcsConfig:
     #: disagreement of open task 4 (4.0 mm) for a later move of the centre to
     #: stay inside the store.
     envelope_margin_mm: float = 5.0
+    #: extra-speckle's pixel-outlier mask (``mask_outlier``, production values of
+    #: ``xpcs_offline``): a pixel whose RMS over frames of its per-frame mean lies
+    #: outside these multiples of its q bin's median is removed from every ring.
+    #: Computed from the hit trains at the merge; None switches it off.
+    outlier_thresholds: tuple[float, float] | None = (0.75, 1.75)
+    #: extra-speckle's q bins for that median (``saxs.get``'s hard-wired npt).
+    outlier_q_bins: int = 300
     # ── scheduling and output (operational) ──────────
     n_workers: int | None = None
     trains_per_block: int = 8
@@ -153,6 +160,22 @@ class XpcsConfig:
             raise ValueError(
                 "envelope_margin_mm must not be negative, got "
                 f"{self.envelope_margin_mm}"
+            )
+        if self.outlier_thresholds is not None:
+            low, high = self.outlier_thresholds
+            if not 0 <= low < high:
+                raise ValueError(
+                    "outlier_thresholds must be (low, high) with 0 <= low < high, "
+                    f"got {self.outlier_thresholds}"
+                )
+            if self.ring_masks_file is not None:
+                raise ValueError(
+                    "the outlier mask needs each pixel's q, which ring_masks_file "
+                    "does not give: set outlier_thresholds=None"
+                )
+        if self.outlier_q_bins < 2:
+            raise ValueError(
+                f"outlier_q_bins must be at least 2, got {self.outlier_q_bins}"
             )
         if self.flag_base_trains < 1:
             raise ValueError(
@@ -230,7 +253,9 @@ class XpcsConfig:
         """What changes a stored sum: the extract hash plus how it is combined.
 
         ``rings_sha256`` covers the ring edges, the ring masks file and the
-        static mask, which all act through the label array.
+        static mask, which all act through the label array. The outlier mask
+        enters through its settings: it is a function of the store, the hit set
+        and the rings, so a complete run can be answered without recomputing it.
         """
         return _sha256(
             {
@@ -240,6 +265,12 @@ class XpcsConfig:
                 "kernel": self.kernel.value,
                 "mask_policy": self.mask_policy.value,
                 "max_partner_gap": self.max_partner_gap,
+                "outlier": None
+                if self.outlier_thresholds is None
+                else {
+                    "thresholds": [float(t) for t in self.outlier_thresholds],
+                    "q_bins": self.outlier_q_bins,
+                },
             }
         )
 

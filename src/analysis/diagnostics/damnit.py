@@ -324,13 +324,13 @@ def photon_statistics_overview(stats) -> Any:
 def xpcs_score_cell(proposal: int, run_no: int) -> Any:
     """The ``xpcs_score`` cell: hits, ROIs at k̄ ≥ 3e-3, best 30 s SNR.
 
-    Reads what DAMNIT and extra-speckle have stored (``diagnostics.xpcs.
-    xpcs_score``), so it shows the run as of its last processing; refresh with
+    Reads the run's hit-train results file (``diagnostics.xpcs.xpcs_score``), so it
+    shows the run as of its last processing; refresh with
     ``damnit reprocess --match "XPCS score"``. The run is scored only when all
     seven ROIs, including all four plain ROIs, meet the k̄ threshold. Otherwise
     it is amber; when they do, SNR determines green, red or amber.
 
-    :raises Skip: the run is not in DAMNIT or has no ``agipd_saxs`` there yet.
+    :raises Skip: the run has no hit-train results file yet.
     """
     from damnit.context import Cell, Skip
 
@@ -359,7 +359,7 @@ def xpcs_score_cell(proposal: int, run_no: int) -> Any:
         if extractable
         else COLORS["error"]
     )
-    record = {k: v for k, v in score.items() if k not in ("kbar", "hits")}
+    record = {k: v for k, v in score.items() if k != "kbar"}
     record["snr"] = {k: v for k, v in snr.items() if k != "slices"}
     return Cell(
         json.dumps(record, default=_jsonable),

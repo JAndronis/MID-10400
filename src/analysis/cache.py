@@ -27,6 +27,7 @@ import numpy as np
 import xarray as xr
 
 from analysis import utils
+from analysis.damnit_names import AGIPD_SAXS, stored_in_file
 
 __all__ = [
     "CACHE_VERSION",
@@ -189,7 +190,9 @@ def saxs_run(
     if not refresh and (cached := _load(path, inputs, sources)) is not None:
         return cached
 
-    grid = xr.open_dataset(db[run_nr].file, group="agipd_saxs")
+    grid = xr.open_dataset(
+        db[run_nr].file, group=stored_in_file(db[run_nr].file, AGIPD_SAXS)
+    )
     pulses = np.sort(grid.pulseId.values)
     if pulses.size < n_pulses:
         raise ValueError(

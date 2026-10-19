@@ -36,12 +36,21 @@ from analysis.common.status import UNFINISHED, FrameStatus
 from analysis.common.writer import IncompleteRun
 from analysis.xpcs import extract as extract_module
 from analysis.xpcs import merge as merge_module
+from analysis.xpcs import outliers as outlier_module
 from analysis.xpcs.config import XpcsConfig
 from analysis.xpcs.hits import HitSet
 from analysis.xpcs.kernel import partners
-from analysis.xpcs.result import Prelude, ResultWriter, result_reasons
+from analysis.xpcs.outliers import BLOCK_LIMIT, OutlierMask, OutlierSink
+from analysis.xpcs.result import (
+    Prelude,
+    ResultWriter,
+    result_identity,
+    result_reasons,
+    stored_outlier,
+)
 from analysis.xpcs.rings import (
     Envelope,
+    PixelMap,
     Rings,
     build_envelope,
     build_rings,
@@ -144,7 +153,8 @@ def run_xpcs_hits(
             extract_hash,
             store_path,
             output_path,
-            pixels.operator_sha256,
+            pixels,
+            np.asarray(static_bad, dtype=bool),
             plan=plan,
             pool_factory=pool_factory,
             setup=setup,
@@ -364,6 +374,56 @@ def build_prelude(store: RingPhotonStore, hits: HitSet, cfg: XpcsConfig) -> Prel
     return Prelude(status, pairing, sequence, pattern.copy())
 
 
+def _outlier_mask(
+    cfg: XpcsConfig,
+    hits: HitSet,
+    prelude: Prelude,
+    envelope: Envelope,
+    pixels: PixelMap,
+    static_bad: np.ndarray,
+    extract_hash: str,
+    store_path: Path,
+    pool_factory: Callable[..., Any] | None,
+) -> OutlierMask:
+    """extra-speckle's ``mask_outlier`` over every usable hit train of the store.
+
+    Blocks of at most :data:`BLOCK_LIMIT` trains and at least one per worker;
+    a failed block raises rather than leave its trains out of the statistic.
+    """
+    ok = np.flatnonzero(prelude.status == FrameStatus.OK)
+    records = [
+        TrainRecord(int(hits.train_ids[i]), 1, int(i), FrameStatus.OK) for i in ok
+    ]
+    n_blocks = max(min(cfg.workers, len(records)), -(-len(records) // BLOCK_LIMIT))
+    per_block = -(-len(records) // max(n_blocks, 1))
+    sink = OutlierSink(prelude.pattern.size, envelope.size)
+    try:
+        fan_out(
+            sink,
+            build_blocks(records, max(per_block, 1)),
+            process=outlier_module.process_block,
+            n_workers=cfg.workers,
+            initializer=outlier_module.init,
+            initargs=(str(store_path), extract_hash, int(prelude.pattern.size)),
+            pool_factory=pool_factory,
+        )
+    finally:
+        outlier_module.close()
+    sums = sink.result()
+    good = ~static_bad & np.isfinite(pixels.q_nm)
+    with RingPhotonStore.open(store_path, extract_hash) as store:
+        base = store.base
+    return outlier_module.outlier_mask(
+        sums,
+        base,
+        candidate=~static_bad[envelope.pixels],
+        q_env=pixels.q_nm[envelope.pixels],
+        q_range=(float(pixels.q_nm[good].min()), float(pixels.q_nm[good].max())),
+        thresholds=cfg.outlier_thresholds,
+        q_bins=cfg.outlier_q_bins,
+    )
+
+
 def _merge(
     cfg: XpcsConfig,
     hits: HitSet,
@@ -373,7 +433,8 @@ def _merge(
     extract_hash: str,
     store_path: Path,
     output_path: Path,
-    operator_sha256: str | None,
+    pixels: PixelMap,
+    static_bad: np.ndarray,
     *,
     plan: RunPlan,
     pool_factory: Callable[..., Any] | None,
@@ -395,6 +456,33 @@ def _merge(
         with RingPhotonStore.open(store_path, extract_hash) as store:
             prelude = build_prelude(store, hits, cfg)
 
+    operator_sha256 = pixels.operator_sha256
+    outlier = None
+    static_rings = rings
+    if cfg.outlier_thresholds is not None and len(hits):
+        with phase(setup, "outlier_mask"):
+            outlier = stored_outlier(
+                output_path, result_identity(merge_hash, hits, prelude)
+            ) or _outlier_mask(
+                cfg,
+                hits,
+                prelude,
+                envelope,
+                pixels,
+                static_bad,
+                extract_hash,
+                store_path,
+                pool_factory,
+            )
+        rings = outlier.apply(rings)
+        log.info(
+            "r%d: %d outlier pixels from %d hit trains, %d of them in a ring",
+            cfg.run,
+            int(outlier.mask.sum()),
+            outlier.n_trains,
+            int((outlier.mask & (static_rings.label >= 0)).sum()),
+        )
+
     attrs = {
         "kernel": cfg.kernel.value,
         "mask_policy": cfg.mask_policy.value,
@@ -410,6 +498,8 @@ def _merge(
         merge_hash=merge_hash,
         extract_hash=extract_hash,
         attrs=attrs,
+        outlier=outlier,
+        static_label=static_rings.label,
         overwrite=cfg.overwrite,
     ) as out:
         ok_rows = np.flatnonzero(prelude.status == FrameStatus.OK)
@@ -462,6 +552,7 @@ def _merge(
             | {
                 "hit_set_sha256": hits.sha256,
                 "extract_hash": extract_hash,
+                "outlier_mask_sha256": outlier.sha256 if outlier else "",
                 "config_operational": json.dumps(
                     {
                         k: v
