@@ -11,6 +11,10 @@
 # the AGIPD output is complete, and refresh goes last so the "frames used" cells
 # (including "XPCS hits frames used") read finished files.
 #
+# Both launch and xpcs-hits pass --fresh: the companion caches (window sums, photon
+# histograms, the XPCS photon store) are moved aside with the outputs, so nothing
+# of an earlier generation is found complete and reused (user, 2026-10-19).
+#
 # launch   AGIPD, jf1 and jf2 for every run with a proc directory that DAMNIT
 #          knows, through `reprocess_safe.py start` (busy-run and lock checks; it
 #          builds the `--match` titles). Not `start all`: that lists the runs from
@@ -74,7 +78,7 @@ case $command in
     launch)
         cd "$HERE"
         EXTRA_NUM_THREADS=1 OMP_NUM_THREADS=1 "$PYTHON" reprocess_safe.py start \
-            "${runs[@]}" -d agipd -d jf1 -d jf2 "${dry_run[@]}" "${concurrent[@]}"
+            "${runs[@]}" -d agipd -d jf1 -d jf2 --fresh "${dry_run[@]}" "${concurrent[@]}"
         ;;
     status)
         cd "$HERE"
@@ -95,7 +99,7 @@ case $command in
         if ((${#only[@]})); then targets=("${only[@]}"); fi
         export EXTRA_NUM_THREADS=1 OMP_NUM_THREADS=1
         "$PYTHON" reprocess_safe.py status "${targets[@]}" -d agipd -d xpcs -j 8
-        "$PYTHON" reprocess_safe.py start "${targets[@]}" -d xpcs "${dry_run[@]}" \
+        "$PYTHON" reprocess_safe.py start "${targets[@]}" -d xpcs --fresh "${dry_run[@]}" \
             "${concurrent[@]}"
         ;;
     *)

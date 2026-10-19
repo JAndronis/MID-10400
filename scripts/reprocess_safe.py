@@ -148,6 +148,12 @@ class Detector:
             return [store] if store.exists() else []
         return []
 
+    def caches(self, run: int) -> list[Path]:
+        """`companions`, whether or not they exist now: what ``--fresh`` moves."""
+        if self.name == "xpcs":
+            return [self.config(run).store_file]
+        return self.companions(run)
+
 
 DETECTORS = {
     # The preprocessing variable reads proc and writes the files; the others
@@ -274,6 +280,15 @@ def backups_of(output: Path) -> list[Path]:
     if not output.parent.exists():
         return []
     return sorted(p for p in output.parent.iterdir() if pattern.match(p.name))
+
+
+def stamp_of(backup: Path) -> str:
+    """The ``YYYYMMDDTHHMMSSZ`` a backup was made at, from its name."""
+    return re.search(r"_before_reprocess_(\d{8}T\d{6}Z)", backup.name).group(1)
+
+
+def companion_backup(companion: Path, when: str) -> Path:
+    return backup_name(companion, when)
 
 
 def marker_of(backup: Path) -> Path:
@@ -530,6 +545,16 @@ def command_start(items, args, busy, arrays) -> dict[str, Any]:
         if output.exists():
             moves.append((output, backup_name(output, when)))
             size += output.stat().st_size
+        if args.fresh:
+            for companion in detector.caches(run):
+                if backups_of(companion):
+                    problems.append(
+                        f"{tag}: leftover backup of {companion.name}: "
+                        f"{backups_of(companion)[0].name}"
+                    )
+                if companion.exists():
+                    moves.append((companion, companion_backup(companion, when)))
+                    size += companion.stat().st_size
         if detector.name == "xpcs":
             problems += xpcs_start_problems(run, detector)
 
@@ -567,7 +592,9 @@ def command_start(items, args, busy, arrays) -> dict[str, Any]:
     shell = "module load exfel damnit/stable && " + shlex.join(damnit)
     record = {
         "moves": [[str(a), str(b)] for a, b in moves],
-        "never_moved": sorted({str(c) for run, d in items for c in d.companions(run)}),
+        "never_moved": []
+        if args.fresh
+        else sorted({str(c) for run, d in items for c in d.companions(run)}),
         "bytes": size,
         "quota": quota,
         "command": shell,
@@ -635,6 +662,13 @@ def command_cleanup(items, args, busy, arrays) -> dict[str, Any]:
             if not args.dry_run:
                 backup.unlink()
                 marker.unlink()
+            for companion in detector.caches(run):
+                old = companion_backup(companion, stamp_of(backup))
+                if old.exists():
+                    print(f"delete {old}")
+                    deleted.append(str(old))
+                    if not args.dry_run:
+                        old.unlink()
     return {"deleted": deleted, "kept": kept, "dry_run": args.dry_run}
 
 
@@ -656,6 +690,14 @@ def command_restore(items, args, busy, arrays) -> dict[str, Any]:
             if output.exists():
                 steps.append((output, backup_name(output, when, kind="failed")))
             steps.append((backups[0], output))
+            for companion in detector.caches(run):
+                old = companion_backup(companion, stamp_of(backups[0]))
+                if old.exists():
+                    if companion.exists():
+                        steps.append(
+                            (companion, backup_name(companion, when, kind="failed"))
+                        )
+                    steps.append((old, companion))
             actions.append([[str(a), str(b)] for a, b in steps])
             for source, target in steps:
                 print(f"rename {source} -> {target}")
@@ -730,6 +772,13 @@ def main() -> int:
         "--no-trigger",
         action="store_true",
         help="start: move the outputs aside but do not run damnit reprocess",
+    )
+    parser.add_argument(
+        "--fresh",
+        action="store_true",
+        help="start: also move the companion caches aside (window sums, photon "
+        "histograms, the XPCS photon store), so the pass rewrites them from proc "
+        "instead of finding them complete; cleanup and restore follow them",
     )
     parser.add_argument(
         "--root", type=Path, help="outputs under this root instead (testing)"
