@@ -18,7 +18,7 @@ from analysis.common.cpu import set_thread_env
 from analysis.common.plan import Block
 from analysis.common.status import DataCheckFailed, FrameStatus
 from analysis.xpcs.config import XpcsConfig
-from analysis.xpcs.store import FlagBase, TrainPhotons
+from analysis.xpcs.store import FlagBase, TrainPhotons, write_block_file
 
 __all__ = [
     "MAX_COUNT",
@@ -153,10 +153,10 @@ def sample_flag_base(
 
 @dataclass(slots=True)
 class ExtractResult:
-    """One block's trains, each carrying its own identity."""
+    """One block's trains, as a block file the parent merges into the store."""
 
     block_index: int
-    photons: list[TrainPhotons]
+    block_file: Path
     bits_present: int = 0
     timings: dict[str, float] = field(default_factory=dict)
 
@@ -167,6 +167,8 @@ class _State:
     envelope: np.ndarray
     base: FlagBase
     detector: Any
+    block_dir: Path
+    extract_hash: str
 
 
 _STATE: _State | None = None
@@ -176,23 +178,39 @@ def init(
     cfg: XpcsConfig,
     envelope: np.ndarray,
     base: FlagBase,
-    run_dir: str | None = None,
+    run_dir: str | None,
+    block_dir: str,
+    extract_hash: str,
 ) -> None:
     """Process initializer: open the run."""
     set_thread_env()
-    init_from_detector(cfg, envelope, base, open_detector(cfg, run_dir=run_dir))
+    init_from_detector(
+        cfg,
+        envelope,
+        base,
+        open_detector(cfg, run_dir=run_dir),
+        Path(block_dir),
+        extract_hash,
+    )
 
 
 def init_from_detector(
-    cfg: XpcsConfig, envelope: np.ndarray, base: FlagBase, detector: Any
+    cfg: XpcsConfig,
+    envelope: np.ndarray,
+    base: FlagBase,
+    detector: Any,
+    block_dir: Path,
+    extract_hash: str,
 ) -> None:
     """In-process initializer for tests and single-process runs."""
     global _STATE
-    _STATE = _State(cfg, envelope, base, detector)
+    _STATE = _State(cfg, envelope, base, detector, block_dir, extract_hash)
 
 
 def process_block(block: Block) -> ExtractResult:
-    """Read and encode one block's trains.
+    """Read and encode one block's trains and write them to a block file.
+
+    The worker never opens the store: the parent merges the file.
 
     A train whose labels or frame count disagree with the plan, or whose modules
     sit in different proc sequence files (``Kernel.ES`` chains by file), is
@@ -205,7 +223,7 @@ def process_block(block: Block) -> ExtractResult:
     from extra_data import by_id
 
     state = _STATE
-    timings = {"read_data": 0.0, "read_mask": 0.0, "encode": 0.0}
+    timings = {"read_data": 0.0, "read_mask": 0.0, "encode": 0.0, "write_block": 0.0}
     photons: list[TrainPhotons] = []
     bits_present = 0
     for train_id, expected in zip(block.train_ids, block.expected_frames, strict=True):
@@ -253,4 +271,8 @@ def process_block(block: Block) -> ExtractResult:
                 TrainPhotons.failed(train_id, FrameStatus.DATA_CHECK_FAILED, sequence)
             )
         timings["encode"] += time.perf_counter() - started
-    return ExtractResult(block.index, photons, bits_present, timings)
+    started = time.perf_counter()
+    block_file = state.block_dir / f"block_{block.index:06d}.h5"
+    write_block_file(block_file, state.extract_hash, photons)
+    timings["write_block"] = time.perf_counter() - started
+    return ExtractResult(block.index, block_file, bits_present, timings)
