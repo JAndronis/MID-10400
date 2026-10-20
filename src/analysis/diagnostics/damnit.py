@@ -326,9 +326,10 @@ def xpcs_score_cell(proposal: int, run_no: int) -> Any:
 
     Reads the run's hit-train results file (``diagnostics.xpcs.xpcs_score``), so it
     shows the run as of its last processing; refresh with
-    ``damnit reprocess --match "XPCS score"``. The run is scored only when all
-    seven ROIs, including all four plain ROIs, meet the k̄ threshold. Otherwise
-    it is amber; when they do, SNR determines green, red or amber.
+    ``damnit reprocess --match "XPCS score"``. The run is scored only when every
+    ROI of its results file, the plain ones included, meets the k̄ threshold.
+    Otherwise it is amber; when they do, SNR determines green, red or amber. The
+    ROI counts are the file's, so they follow the rings it was merged with.
 
     :raises Skip: the run has no hit-train results file yet.
     """
@@ -344,14 +345,15 @@ def xpcs_score_cell(proposal: int, run_no: int) -> Any:
     best = snr.get("best_snr")
     ok = score["n_rois_kbar_ok"]
     plain = score["n_plain_rois_kbar_ok"]
+    n_rois, n_plain = score["n_rois"], score["n_plain_rois"]
     parts = [f"{score['n_hits']} hits"]
     if ok is not None:
-        parts.append(f"k̄ ok {ok}/7 ({plain}/4 plain)")
+        parts.append(f"k̄ ok {ok}/{n_rois} ({plain}/{n_plain} plain)")
     parts.append(
         "SNR —" if best is None or not np.isfinite(best) else f"SNR {best:.1f}"
     )
     extractable = snr.get("extractable")
-    all_rois_ok = ok == 7 and plain == 4
+    all_rois_ok = ok == n_rois and plain == n_plain
     colour = (
         COLORS["warning"]
         if not all_rois_ok or extractable is None

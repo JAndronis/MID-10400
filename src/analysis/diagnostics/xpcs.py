@@ -229,9 +229,10 @@ def xpcs_score(
     """The per-run XPCS diagnostic score, over the hits in the run's results file.
 
     :returns: ``n_hits`` (the file's hit set), ``hits`` (its `Coverage` as a dict),
-        ``kbar`` (the `kbar_rois` table over the usable hits), ``n_rois_kbar_ok``
-        and ``n_plain_rois_kbar_ok`` (None without a usable hit), and ``snr``
-        (`xpcs_snr`'s summary, None without a usable hit).
+        ``n_rois`` and ``n_plain_rois`` (the file's rings, and those that touch no
+        Bragg window), ``kbar`` (the `kbar_rois` table over the usable hits),
+        ``n_rois_kbar_ok`` and ``n_plain_rois_kbar_ok`` (None without a usable
+        hit), and ``snr`` (`xpcs_snr`'s summary, None without a usable hit).
     :raises LookupError: the run has no results file.
     """
     opened = open_results(run, proposal=proposal, output_root=output_root, hits=hits)
@@ -239,10 +240,13 @@ def xpcs_score(
     usable = coverage.n_usable > 0
     kbar = kbar_rois(run, hits=opened) if usable else None
     snr = xpcs_snr(run, beta, hits=opened)["summary"] if usable else None
+    kinds = roi_kinds(roi_edges_from(opened.bounds_nm, opened.n_rings))
     return {
         "run": int(run),
         "n_hits": coverage.n_hits,
         "hits": dataclasses.asdict(coverage),
+        "n_rois": len(kinds),
+        "n_plain_rois": kinds.count("plain"),
         "kbar": kbar,
         "n_rois_kbar_ok": None if kbar is None else kbar.attrs["n_above"],
         "n_plain_rois_kbar_ok": None if kbar is None else kbar.attrs["n_plain_above"],

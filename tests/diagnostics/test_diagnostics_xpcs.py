@@ -152,6 +152,7 @@ def test_the_score_is_taken_over_the_hits_in_the_file(root):
     assert score["hits"]["by_status"]["NO_FRAMES"] == 1
     assert score["n_rois_kbar_ok"] == 4
     assert score["n_plain_rois_kbar_ok"] == 3
+    assert (score["n_rois"], score["n_plain_rois"]) == (7, 4), "the file's ES rings"
     expected = measure_run(RUN, read(10400, RUN, output_root=root))
     assert score["snr"]["n_usable"] == expected.n_usable > 0
 
