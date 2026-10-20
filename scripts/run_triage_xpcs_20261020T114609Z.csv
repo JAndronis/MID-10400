@@ -1,0 +1,6 @@
+run,n_usable,n_slices,n_extractable_slices,extractable,best_snr,best_slice,best_roi_q_A,t_needed_s,seconds,sample,cls,optics
+450,2983,10,0,,,,,inf,56.0,ferritin50_peg6k,static_droplet,XTD1:0010100000 XTD6:0010110000
+493,2989,10,0,,,,,inf,55.9,ferritin50_peg6k,static_droplet,XTD1:0010100000 XTD6:0010110000
+494,2918,10,0,,,,,inf,59.7,ferritin50_peg6k,static_droplet,XTD1:0010100000 XTD6:0010110000
+495,2939,10,0,,,,,inf,55.5,ferritin50_peg6k,static_droplet,XTD1:0010100000 XTD6:0010110000
+496,2960,10,0,,,,,inf,55.5,ferritin50_peg6k,static_droplet,XTD1:0010100000 XTD6:0010110000

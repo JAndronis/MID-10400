@@ -70,7 +70,7 @@ class OutlierMask:
         label[self.mask] = -1
         label.flags.writeable = False
         return Rings(
-            rings.edges_nm,
+            rings.bounds_nm,
             label,
             rings.n_rings,
             hashlib.sha256((rings.sha256 + self.sha256).encode()).hexdigest(),

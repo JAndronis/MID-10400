@@ -28,7 +28,7 @@ from analysis.xpcs.config import XpcsConfig  # noqa: E402
 QUAD_POS = [(-525, 625), (-550, -10), (520, -160), (542.5, 475)]
 
 #: Two rings, 77 767 and 182 594 pixels of the idealised geometry.
-TEST_EDGES_NM = (0.2, 0.3, 0.45)
+TEST_RINGS_NM = ((0.2, 0.3), (0.3, 0.45))
 
 
 @pytest.fixture(scope="session")
@@ -54,7 +54,7 @@ def saxs_cfg() -> AgipdSaxsConfig:
 def cfg(saxs_cfg) -> XpcsConfig:
     return XpcsConfig(
         saxs=saxs_cfg,
-        ring_edges_nm=TEST_EDGES_NM,
+        rings_nm=TEST_RINGS_NM,
         # The mock hits sit two ids apart; the production default is 1.
         max_partner_gap=10,
         # The kernel tests compare against rings built without it; the outlier

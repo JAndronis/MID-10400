@@ -75,7 +75,7 @@ Dense, addressed by position in the hit set (`hits/train_id`). Integers only.
 | `sums/s_on`, `s_off_cur`, `s_off_prev` | `(T, R, P)` int32 |
 | `sums/cnt`, `cnt_pair` | `(T, R)` int32 |
 | `hits/status`, `partner`, `pair_status`, `has_off`, `sequence` | `(T,)` |
-| `pattern/pulse_ids`, `rings/{edges_nm,label}` | the shared pulse pattern and the ring map used |
+| `pattern/pulse_ids`, `rings/{bounds_nm,label}` | the shared pulse pattern and the ring map used; `bounds_nm` is `(R, 2)` (schema 3, §13) |
 
 1.35 MB a train raw at R = 7, P = 155; **0.19 MB after gzip** (§7). Changed inputs (hit set, merge hash, partner table) move the
 old file to `xpcs_hits.prev.h5` and rebuild it: it is derived.
@@ -85,7 +85,7 @@ old file to `xpcs_hits.prev.h5` and rebuild it: it is derived.
 | File | Owns |
 |---|---|
 | `hits.py` | `HitSet`: sorted unique uint64 ids, `sha256`, `source` (provenance, not hashed). `HitSet.of` validates once; empty is allowed |
-| `config.py` | `XpcsConfig` (nests `AgipdSaxsConfig`; pickles by name; `extract_hash`, `merge_hash`), `Kernel`, `MaskPolicy`, `RING_EDGES_NM` |
+| `config.py` | `XpcsConfig` (nests `AgipdSaxsConfig`; pickles by name; `extract_hash`, `merge_hash`), `Kernel`, `MaskPolicy`, `RINGS_NM`, `ES_RINGS_NM` |
 | `rings.py` | `pixel_map` (the SAXS pass's `build_operator` and `ring_labels_from`, or a masks file; a file's rings are authoritative, so no static mask is applied on top), `Envelope`, `Rings` |
 | `kernel.py` | pure: `partners` → `Pairing`/`PairStatus`; `train_sums` → `TrainSums` |
 | `store.py` | `TrainPhotons`, `FlagBase`, `RingPhotonStore`, delta coding |
@@ -296,7 +296,8 @@ See §10 for what P4 settled and left open.
   old path on r0493, r0240, r0250 the run SNR is 2 to 10 % lower and the verdict unchanged: N_pix is the
   store's (3.5 to 9 % fewer pixels than the full ring) and a hit without a previous-train baseline has no
   `raw - off`, where extra-speckle paired it. `inventory` is still to move.
-  `analysis.triage.xpcs.ROI_EDGES_A` and `RING_EDGES_NM` are two lists; a test pins them equal.
+  `analysis.triage.xpcs.ROI_EDGES_A` and `ES_RINGS_NM` are two lists; a test pins them equal. The
+  pass's own rings are `RINGS_NM` since 2026-10-20 (§13).
 
 ## 10. P4, node acceptance (2026-10-18)
 
@@ -467,7 +468,7 @@ the table above is the evidence for that.
   `hits(run, proposal=, signals=signals_from(saxs, xgm, transmission))` as `photon_statistics` does,
   because inside the cluster job this run's `agipd_saxs` is not in the per-run file until the job
   ends. It builds `XpcsConfig(saxs=analysis.saxs.damnit.config_for(p, r))`, so the SAXS defaults
-  and the XPCS defaults (`max_partner_gap` 1, `ring_edges_nm`, 5 mm envelope), and `output_root`
+  and the XPCS defaults (`max_partner_gap` 1, `rings_nm`, 5 mm envelope), and `output_root`
   is the default `usr/cached_files`.
 - **A cell, not an exception, for every outcome:** green (every hit usable), amber (some hit has a
   final non-OK status, or the output is busy), red (the hit rule or the pass failed, or a hit is
@@ -629,7 +630,7 @@ outlier_mask(store, ok_trains, envelope, static_bad, q_nm, thresholds, q_bins):
 | every train of the run (`selected_trains=None`) | **differently, on purpose**: the hit trains only (the point of the pass) |
 | `remove_outer_points=False` | reproduced (nothing removed) |
 | geometry `geom=None` (motor encoders, pitfall 16), `px/py` 607.46/672.08, `sdd` 7531.5962 mm, photon energy from the run (9.000 keV) | **differently, on purpose**: `geom_latest.geom`, 7.531 m, 9.04 keV (G2: 28 151 ring pixels differ, every one explained) |
-| `q_range` 0.0225 … 0.086 Å⁻¹, seven rings | reproduced (`RING_EDGES_NM`) |
+| `q_range` 0.0225 … 0.086 Å⁻¹, seven rings | reproduced (`ES_RINGS_NM`) until 2026-10-20; since then **differently, on purpose**: twelve rings with the Bragg bands left out (§13) |
 | `mask=MASK_PATH` | reproduced (plus ASIC seams, already inside it) |
 | `mask_dynamic=True`: per-frame `image.mask` in the stats, any frame of a train in the TTCF | reproduced (`MaskPolicy.ANY_FRAME`; per frame in the outlier statistic) |
 | `calc_stats=True`: `mean_pixelcell`, `mean_intensity` | `mean_intensity` reproduced on ring pixels (`figures.mean_intensity`); `mean_pixelcell` is computed inside the outlier pass and not kept as a product |
@@ -679,3 +680,55 @@ Figures: `figures/xpcs_hits/r0493_outlier_maps.png`, `r0493_outlier_mask_vs_es.p
 in the 0.0605 Å⁻¹ raw map, and single-frame spikes in I(q) of the first frames that the RMS over 155
 frames does not catch (extra-speckle's statistic has the same blind spot). Not run: r0423 (no hit
 set, §10).
+
+## 13. Rings without the Bragg bands, β per ring, the outlier figure (2026-10-20)
+
+**Why.** extra-speckle's ROIs at 0.0605 and 0.072 Å⁻¹ (0.56–0.65 and 0.69–0.75 nm⁻¹) hold the fcc
+111 and 200 reflections, and on crystallised runs (r424) their c2 read ~1.0–1.3 against ~0.005 for
+the others: Bragg speckle, not dynamics (CLAUDE.md epistemic boundary 2 applies to XPCS too).
+
+**The bands, measured** (all under the 2026-09-13 beam centre; figures in `figures/xpcs_rois/`):
+
+| measure | 111 | 200 |
+|---|---|---|
+| pooled I(q) excess > 3 % over r0423 (local-median baseline), r0424 / r0426 / r0488 | 0.593–0.631 nm⁻¹ | 0.693–0.715 |
+| p90 over 438 runs of the fraction of hit-train pixels with outlier ratio > 1.75 (`outlier/ratio`) | 0.598–0.618 | 0.698–0.713 |
+
+0.704 / 0.608 = 1.158 against fcc's 2/√3 = 1.155. A move of the beam centre (open task 4) splits
+111 into 0.584 + 0.633; it also changes every pixel's q, so it re-merges anyway and the bands are
+to be measured again then.
+
+**The rings** (`analysis.xpcs.config.RINGS_NM`): twelve, 0.045 nm⁻¹ wide, 0.225 → 0.585, 0.640 →
+0.685, 0.725 → 0.860, i.e. 111 and 200 left out with ≥ 0.008 nm⁻¹ margin. The outer bounds are
+extra-speckle's floats (`10 * 0.0225` = 0.22499999999999998, not 0.225), so the envelope sha256 and
+every photon store are unchanged; any other outer bound would refuse every store (`StoreMismatch`)
+and need proc. Pixels per ring (static mask applied): 7k, 13k, 22k, 43k, 53k, 55k, 67k, 75k, 78k,
+79k, 67k, 52k. `triage.roi_kinds` still tags 0.05625, 0.06625 and 0.07475 Å⁻¹ "bragg" (they touch
+the wider SAXS windows `BRAGG_WINDOWS_NM`), so `xpcs.score` takes the best of the other nine.
+
+**Code.** `XpcsConfig.rings_nm: tuple[(lo, hi), ...]`, ascending and disjoint, replaces the
+contiguous `ring_edges_nm`; a gap is in no ring but inside the envelope (first lo to last hi).
+`ES_RINGS_NM` keeps extra-speckle's seven for the equivalence gates (`scripts/xpcs_hits_acceptance.py`
+sets it). Results schema 3: `rings/bounds_nm (R, 2)` replaces `rings/edges_nm`;
+`XpcsHits.bounds_nm`, `DetectorMean.ring_bounds_A`, `triage.roi_edges_from(bounds, n)` follow.
+
+**β.** `REFERENCE_BETA` holds the twelve rings' β (`ES_REFERENCE_BETA`, the 2026-10-13 table, is
+kept inside it and on its own for the photon statistics, which still bin on extra-speckle's ROIs;
+no centre is shared). Measured on r450 and r493–496 merged from their stores with the new rings
+into `scratch/xpcs_rois_20261020` (store linked, 348–494 s a run on max-exfl461 at 32 workers,
+no proc read), then `run_triage.py --phase xpcs` (`scripts/run_triage_xpcs_20261020T114609Z.json`):
+every one of the 60 fits converged; β 4.88 % at 0.02475 Å⁻¹ falling smoothly to 1.74 % at 0.08375,
+with no step where the Bragg ROIs were.
+
+**Outliers figure.** The spikes left in `XPCS outliers` "after" panel (§12.4 "single-frame spikes
+… the RMS does not catch") are **not** pixels the sums use. On r0424 all 15 pixels behind them have
+a NaN ratio: `image.mask` flags them in every frame of every hit train (6043 ring pixels, checked
+on sampled trains), so `MaskPolicy.ANY_FRAME` removes them from every train, but
+`detector_mean` reads the store's photons without flags. With them out, 0.75/1.75 and 0.8/1.3 leave
+the same spikes (r0423 1, r0424 155, r0426 468, all at the Bragg peaks on the crystallised runs),
+so the thresholds stay (user, 2026-10-20). `figure_outliers` now leaves NaN-ratio pixels out of
+both panels and counts them in the title.
+
+**Reprocess.** The merge hash moved (ring sha and schema), so every `xpcs_hits.h5` is rebuilt from
+its store: `reprocess_safe.py start RUNS -d xpcs` **without `--fresh`**. `reprocess_all.sh
+xpcs-hits` passes `--fresh`, which moves the photon stores aside and would re-extract from proc.

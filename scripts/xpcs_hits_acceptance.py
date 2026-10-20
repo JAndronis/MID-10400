@@ -64,7 +64,7 @@ import numpy as np  # noqa: E402
 from analysis.common.cpu import file_sha256  # noqa: E402
 from analysis.common.slurm import PROPOSAL_ROOT  # noqa: E402
 from analysis.saxs.config import NPIX, SHAPE, AgipdSaxsConfig  # noqa: E402
-from analysis.xpcs.config import RING_EDGES_NM, Kernel, XpcsConfig  # noqa: E402
+from analysis.xpcs.config import ES_RINGS_NM, Kernel, XpcsConfig  # noqa: E402
 from analysis.xpcs.hits import HitSet  # noqa: E402
 from analysis.xpcs.kernel import train_sums  # noqa: E402
 from analysis.xpcs.result import ES_KBAR_MIN, Averaging, XpcsHits  # noqa: E402
@@ -218,6 +218,7 @@ class Ctx:
 
     def cfg(self, root: Path, **changes: Any) -> XpcsConfig:
         changes.setdefault("n_workers", self.workers)
+        changes = {"rings_nm": ES_RINGS_NM, **changes}  # the gates compare on ES's
         return XpcsConfig(saxs=self.saxs(), output_root=str(root), **changes)
 
     def hit_set(self, ids: np.ndarray | None = None) -> HitSet:
@@ -643,7 +644,7 @@ def stage_g2(ctx: Ctx) -> dict[str, Any]:
     saxs = ctx.saxs()
     cfg = ctx.cfg(ctx.dir / "g2")
     geom = geometry_from_config(saxs)
-    edges_nm = np.asarray(RING_EDGES_NM)
+    edges_nm = np.asarray([lo for lo, _ in ES_RINGS_NM] + [ES_RINGS_NM[-1][1]])
 
     ours_label = pixel_map(cfg).label.astype(np.int16).copy()
     static_ours = static_bad_for(cfg)

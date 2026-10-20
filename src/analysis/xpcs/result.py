@@ -57,7 +57,8 @@ __all__ = [
 log = logging.getLogger(__name__)
 
 #: 2: the outlier mask (``outlier/``) and its applied labels in ``rings/label``.
-SCHEMA = 2
+#: 3: ``rings/bounds_nm`` ``(R, 2)`` replaces the contiguous ``rings/edges_nm``.
+SCHEMA = 3
 GZIP = {"compression": "gzip", "compression_opts": 1, "shuffle": True}
 
 
@@ -154,7 +155,10 @@ class ResultWriter:
         handle.create_dataset("hits/sequence", data=prelude.sequence)
         handle.create_dataset("hits/has_off", data=np.zeros(n, dtype=np.uint8))
         handle.create_dataset("pattern/pulse_ids", data=prelude.pattern)
-        handle.create_dataset("rings/edges_nm", data=np.asarray(rings.edges_nm))
+        handle.create_dataset(
+            "rings/bounds_nm",
+            data=np.asarray(rings.bounds_nm, dtype=np.float64).reshape(-1, 2),
+        )
         handle.create_dataset("rings/label", data=rings.label, **GZIP)
         handle["rings"].attrs["sha256"] = rings.sha256
 
@@ -474,7 +478,8 @@ class XpcsHits:
             self.pair_status: np.ndarray = f["hits/pair_status"][()]
             self.has_off: np.ndarray = f["hits/has_off"][()].astype(bool)
             self.pulse_ids: np.ndarray = f["pattern/pulse_ids"][()]
-            self.edges_nm: np.ndarray = f["rings/edges_nm"][()]
+            #: ``(R, 2)`` ring bounds [nm⁻¹]; ``(0, 2)`` for rings from a masks file.
+            self.bounds_nm: np.ndarray = f["rings/bounds_nm"][()]
             self.n_rings = int(f.attrs["n_rings"])
             self.n_frames = int(f.attrs["n_frames"])
             self.attrs: dict[str, Any] = {k: v for k, v in f.attrs.items()}
@@ -492,9 +497,9 @@ class XpcsHits:
     def roi_q(self) -> np.ndarray:
         """Ring centres in Å⁻¹, the unit DAMNIT's ``roi_q`` uses (ring numbers
         for rings that came from a masks file)."""
-        if self.edges_nm.size < 2:
+        if not len(self.bounds_nm):
             return np.arange(self.n_rings, dtype=np.float64)
-        return 0.5 * (self.edges_nm[:-1] + self.edges_nm[1:]) / 10.0
+        return self.bounds_nm.mean(axis=1) / 10.0
 
     @property
     def usable(self) -> np.ndarray:

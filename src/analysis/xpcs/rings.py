@@ -58,14 +58,13 @@ class Envelope:
 class Rings:
     """Each envelope pixel's ring, or −1 for none, a bad pixel or a seam."""
 
-    edges_nm: tuple[float, ...]  # empty when the rings came from a masks file
+    bounds_nm: tuple[tuple[float, float], ...]  # empty for rings from a masks file
     label: np.ndarray  # int8 (n_env,), read-only
     n_rings: int
     sha256: str
 
     def centres_nm(self) -> np.ndarray:
-        edges = np.asarray(self.edges_nm)
-        return 0.5 * (edges[:-1] + edges[1:])
+        return np.asarray(self.bounds_nm, dtype=np.float64).reshape(-1, 2).mean(axis=1)
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,11 +101,10 @@ def pixel_map(cfg: XpcsConfig, geometry: Any = None) -> PixelMap:
 
     geom = geometry if geometry is not None else geometry_from_config(cfg.saxs)
     op, ai = build_operator(geom, cfg.saxs)
-    edges = cfg.ring_edges_nm
-    pairs = tuple(zip(edges[:-1], edges[1:], strict=True))
-    label = ring_labels_from(ai, PhotonStatsConfig(saxs=cfg.saxs, rings_nm=pairs))
+    rings = tuple(cfg.rings_nm)
+    label = ring_labels_from(ai, PhotonStatsConfig(saxs=cfg.saxs, rings_nm=rings))
     q = np.asarray(ai.array_from_unit(SHAPE, "center", cfg.saxs.unit)).ravel()
-    return PixelMap(label, len(pairs), q.astype(np.float64), op.sha256)
+    return PixelMap(label, len(rings), q.astype(np.float64), op.sha256)
 
 
 def static_bad_for(cfg: XpcsConfig) -> np.ndarray:
@@ -136,9 +134,8 @@ def build_envelope(pixels: PixelMap, cfg: XpcsConfig) -> Envelope:
     if pixels.q_nm is None:
         keep = pixels.label >= 0
     else:
-        edges = cfg.ring_edges_nm
-        low = float(_radius_mm(edges[0], cfg)) - cfg.envelope_margin_mm
-        high = float(_radius_mm(edges[-1], cfg)) + cfg.envelope_margin_mm
+        low = float(_radius_mm(cfg.rings_nm[0][0], cfg)) - cfg.envelope_margin_mm
+        high = float(_radius_mm(cfg.rings_nm[-1][1], cfg)) + cfg.envelope_margin_mm
         with np.errstate(invalid="ignore"):
             radius = _radius_mm(pixels.q_nm, cfg)
         keep = (radius >= low) & (radius <= high)
@@ -161,7 +158,7 @@ def build_rings(
         raise ValueError(
             f"ring(s) {np.flatnonzero(counts == 0).tolist()} hold no good pixel"
         )
-    edges = () if cfg.ring_masks_file is not None else tuple(cfg.ring_edges_nm)
-    digest = hashlib.sha256(repr(edges).encode())
+    bounds = () if cfg.ring_masks_file is not None else tuple(cfg.rings_nm)
+    digest = hashlib.sha256(repr(bounds).encode())
     digest.update(sha256_of_array(label).encode())
-    return Rings(edges, label, pixels.n_rings, digest.hexdigest())
+    return Rings(bounds, label, pixels.n_rings, digest.hexdigest())

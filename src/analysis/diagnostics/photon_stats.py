@@ -323,7 +323,7 @@ def summary_of(ds, weights=None, n_blocks: int = N_BLOCKS):
     """`summarise` on frames already read (`read_photon_stats`)."""
     import xarray as xr
 
-    from analysis.triage.xpcs import REFERENCE_BETA
+    from analysis.triage.xpcs import ES_REFERENCE_BETA
 
     groups = roi_groups(ds)
     rings = contrast(ds, weights, n_blocks=n_blocks)
@@ -334,7 +334,7 @@ def summary_of(ds, weights=None, n_blocks: int = N_BLOCKS):
             "beta": ("roi", rois.beta.values),
             "sigma": ("roi", rois.sigma.values),
             "kbar": ("roi", rois.kbar.values),
-            "reference_beta": ("roi", [REFERENCE_BETA[q][0] for q in centres]),
+            "reference_beta": ("roi", [ES_REFERENCE_BETA[q][0] for q in centres]),
             "ring_beta": ("ring", rings.beta.values),
             "ring_sigma": ("ring", rings.sigma.values),
             "ring_kbar": ("ring", rings.kbar.values),

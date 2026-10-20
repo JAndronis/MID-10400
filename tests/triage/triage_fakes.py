@@ -203,15 +203,14 @@ def write_hit_results(
     from xpcs_fakes import build_results, make_flags, make_train
 
     from analysis.common.status import FrameStatus
-    from analysis.triage.xpcs import ROI_EDGES_A
+    from analysis.triage.xpcs import roi_edges_nm
     from analysis.xpcs.rings import Rings
 
     rng = np.random.default_rng(seed)
     n_env, n_rings = 400, len(densities)
     label = rng.integers(0, n_rings, n_env).astype(np.int8)
     label.flags.writeable = False
-    edges = tuple(10.0 * np.asarray(ROI_EDGES_A))
-    rings = Rings(edges, label, n_rings, "rings")
+    rings = Rings(tuple(map(tuple, roi_edges_nm())), label, n_rings, "rings")
     per_pixel = np.asarray(densities)[label]
     failed = {t: FrameStatus(c) for t, c in (failed or {}).items()}
     ids = [

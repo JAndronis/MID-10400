@@ -8,7 +8,8 @@ import pytest
 
 from analysis.common.config import ConfigStateMismatch
 from analysis.xpcs.config import (
-    RING_EDGES_NM,
+    ES_RINGS_NM,
+    RINGS_NM,
     XPCS_OPERATIONAL_FIELDS,
     Kernel,
     MaskPolicy,
@@ -18,12 +19,19 @@ from analysis.xpcs.config import (
 ENVELOPE, RINGS = "e" * 64, "r" * 64
 
 
-def test_the_ring_edges_are_the_triage_rois():
+def test_the_es_rings_are_the_triage_rois():
     from analysis.triage.xpcs import roi_edges_nm
 
-    pairs = roi_edges_nm()
-    assert list(RING_EDGES_NM[:-1]) == list(pairs[:, 0])
-    assert list(RING_EDGES_NM[1:]) == list(pairs[:, 1])
+    assert [list(ring) for ring in ES_RINGS_NM] == roi_edges_nm().tolist()
+
+
+def test_the_rings_keep_the_es_envelope_and_leave_out_the_bragg_bands():
+    """The same outer floats keep every photon store's envelope; 111 and 200 are out."""
+    assert RINGS_NM[0][0] == ES_RINGS_NM[0][0]
+    assert RINGS_NM[-1][1] == ES_RINGS_NM[-1][1]
+    for band in ((0.593, 0.631), (0.693, 0.715)):
+        assert not any(lo < band[1] and hi > band[0] for lo, hi in RINGS_NM)
+    assert {round(hi - lo, 9) for lo, hi in RINGS_NM} == {0.045}
 
 
 def test_the_default_partner_is_the_previous_train_only(saxs_cfg):
@@ -53,8 +61,10 @@ def test_an_unpickled_config_is_validated(cfg):
 @pytest.mark.parametrize(
     "change, message",
     [
-        ({"ring_edges_nm": (0.3,)}, "ring_edges_nm"),
-        ({"ring_edges_nm": (0.3, 0.2)}, "ring_edges_nm"),
+        ({"rings_nm": ()}, "rings_nm"),
+        ({"rings_nm": ((0.3, 0.2),)}, "rings_nm"),
+        ({"rings_nm": ((0.2, 0.3), (0.25, 0.4))}, "rings_nm"),
+        ({"rings_nm": ((0.2, 0.3, 0.4),)}, "rings_nm"),
         ({"max_partner_gap": 0}, "max_partner_gap"),
         ({"envelope_margin_mm": -1.0}, "envelope_margin_mm"),
         ({"trains_per_block": 0}, "trains_per_block"),
@@ -103,10 +113,10 @@ def test_how_sums_are_made_moves_the_merge_hash_and_never_the_extract_hash(
     assert other.merge_hash(ENVELOPE, RINGS) != cfg.merge_hash(ENVELOPE, RINGS)
 
 
-def test_ring_edges_and_the_static_mask_reach_the_merge_hash_only_through_the_rings(
+def test_ring_bounds_and_the_static_mask_reach_the_merge_hash_only_through_the_rings(
     cfg, with_config
 ):
-    other = with_config(ring_edges_nm=(0.2, 0.25, 0.45))
+    other = with_config(rings_nm=((0.2, 0.25), (0.3, 0.45)))
     assert other.extract_hash(ENVELOPE) == cfg.extract_hash(ENVELOPE)
     assert other.merge_hash(ENVELOPE, RINGS) == cfg.merge_hash(ENVELOPE, RINGS)
     assert cfg.merge_hash(ENVELOPE, "x" * 64) != cfg.merge_hash(ENVELOPE, RINGS)

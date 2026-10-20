@@ -21,15 +21,28 @@ def static_bad():
     return bad
 
 
-def test_rings_are_the_half_open_intervals_between_the_edges(cfg, pixels):
+def test_rings_are_their_half_open_intervals(cfg, pixels):
     q = pixels.q_nm
-    for ring, (lo, hi) in enumerate(
-        zip(cfg.ring_edges_nm, cfg.ring_edges_nm[1:], strict=False)
-    ):
+    for ring, (lo, hi) in enumerate(cfg.rings_nm):
         assert (pixels.label == ring).sum() == ((q >= lo) & (q < hi)).sum()
-    assert pixels.n_rings == len(cfg.ring_edges_nm) - 1
-    outside = (q < cfg.ring_edges_nm[0]) | (q >= cfg.ring_edges_nm[-1])
+    assert pixels.n_rings == len(cfg.rings_nm)
+    outside = (q < cfg.rings_nm[0][0]) | (q >= cfg.rings_nm[-1][1])
     assert (pixels.label[outside] == -1).all()
+
+
+def test_a_gap_between_rings_is_in_no_ring_but_in_the_envelope(
+    cfg, with_config, geom, pixels
+):
+    gapped = with_config(rings_nm=((0.2, 0.25), (0.3, 0.45)))
+    gap_pixels = pixel_map(gapped, geom)
+    q = gap_pixels.q_nm
+    gap = (q >= 0.25) & (q < 0.3)
+    assert gap.any()
+    assert (gap_pixels.label[gap] == -1).all()
+    assert (gap_pixels.label[(q >= 0.3) & (q < 0.45)] == 1).all()
+    assert (
+        build_envelope(gap_pixels, gapped).sha256 == build_envelope(pixels, cfg).sha256
+    ), "the envelope depends on the outer bounds only"
 
 
 def test_the_envelope_holds_every_ring_pixel_and_a_margin_of_the_annulus(
@@ -116,7 +129,7 @@ def test_rings_can_come_from_a_masks_file(cfg, with_config, tmp_path):
         int(masks[0].sum()),
         int(masks[1].sum()),
     ]
-    assert rings.edges_nm == ()
+    assert rings.bounds_nm == ()
 
 
 def test_overlapping_ring_masks_are_refused(with_config, tmp_path):

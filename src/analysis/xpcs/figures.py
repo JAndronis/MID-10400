@@ -324,7 +324,7 @@ class DetectorMean:
     ring: np.ndarray  # int8 (n_good,)
     q_A: np.ndarray  # Å⁻¹ at the pixel centre
     chi_deg: np.ndarray
-    ring_edges_A: np.ndarray  # (R + 1,), empty for rings from a masks file
+    ring_bounds_A: np.ndarray  # (R, 2), (0, 2) for rings from a masks file
     geometry: Any
     beam_center: tuple[float, float] | None
     run: str
@@ -407,7 +407,6 @@ def detector_mean(
             keep = cols >= 0
             total[rows[keep], cols[keep]] += frames.data[keep]
     pixel = envelope[good]
-    edges = hits.edges_nm / 10.0
     centre = (
         (cfg.saxs.beam_center_px, cfg.saxs.beam_center_py)
         if cfg.saxs.beam_center_px is not None
@@ -421,7 +420,7 @@ def detector_mean(
         ring=label[good].astype(np.int8),
         q_A=q_all[pixel],
         chi_deg=chi_all[pixel],
-        ring_edges_A=edges,
+        ring_bounds_A=hits.bounds_nm / 10.0,
         geometry=geom,
         beam_center=centre,
         run=_run_label(hits),
@@ -643,22 +642,24 @@ def figure_q_rings(det: DetectorMean, *, remove_outliers: bool = True) -> Figure
     return fig
 
 
-def _saxs_axes(ax, saxs: xr.DataArray, edges_A, title, threshold=None) -> None:
+def _saxs_axes(ax, saxs: xr.DataArray, bounds_A, title, threshold=None) -> None:
     """``extra_speckle.saxs.plot.plot`` for an ``(frame, q)`` series."""
     cmap = colormaps["jet"]
     frames = saxs["frame"].values
     norm = Normalize(vmin=float(frames.min()), vmax=float(frames.max()))
     for frame in frames:
         ax.plot(saxs["q"].values, saxs.sel(frame=frame).values, color=cmap(norm(frame)))
-    edges = np.asarray(edges_A)
-    if edges.size > 2:
-        for i in range(edges.size - 1):
-            ax.axvspan(
-                edges[i], edges[i + 1], facecolor=cmap(i / float(edges.size)), alpha=0.5
-            )
-    elif edges.size == 2:
+    bounds = np.asarray(bounds_A).reshape(-1, 2)
+    if len(bounds) > 1:
+        for i, (lo, hi) in enumerate(bounds):
+            ax.axvspan(lo, hi, facecolor=cmap(i / float(len(bounds) + 1)), alpha=0.5)
+    elif len(bounds) == 1:
         ax.vlines(
-            edges, np.nanmin(saxs.values), np.nanmax(saxs.values), ls="--", color="gray"
+            bounds[0],
+            np.nanmin(saxs.values),
+            np.nanmax(saxs.values),
+            ls="--",
+            color="gray",
         )
     if threshold is not None and threshold > 0:
         ax.axhline(y=threshold, ls="--", color="gray")
@@ -693,7 +694,10 @@ def figure_outliers(
 
     When the results file carries the pass's applied mask (``det.outlier``),
     that mask and its statistic (over every usable hit train) are what is
-    shown, and ``thresholds`` and ``dq_A`` only bin the curves.
+    shown, and ``thresholds`` and ``dq_A`` only bin the curves. Its NaN ratios
+    are the pixels ``image.mask`` flags in every frame of every hit train:
+    ``MaskPolicy.ANY_FRAME`` keeps them out of every sum, so neither panel shows
+    them (the store's photons carry no flags, and they were r0424's spikes).
     """
     if det.outlier is not None:
         ratio, removed = det.outlier_ratio, det.outlier
@@ -707,12 +711,15 @@ def figure_outliers(
         removed = (ratio < thresholds[0]) | (ratio > thresholds[1])
         n_trains, source = det.n_trains, "not applied, recomputed"
     lower, higher = thresholds
+    correlated = (
+        np.isfinite(ratio) if det.outlier is not None else np.ones_like(removed)
+    )
     fig = Figure(figsize=(16, 6))
     ax = fig.subplots(1, 3)
-    before = q_curves(det, dq_A=dq_A, pixels=np.ones(removed.size, bool))
-    after = q_curves(det, dq_A=dq_A, pixels=~removed)
-    _saxs_axes(ax[0], before, det.ring_edges_A, "before outlier removal")
-    _saxs_axes(ax[1], after, det.ring_edges_A, "after outlier removal")
+    before = q_curves(det, dq_A=dq_A, pixels=correlated)
+    after = q_curves(det, dq_A=dq_A, pixels=correlated & ~removed)
+    _saxs_axes(ax[0], before, det.ring_bounds_A, "before outlier removal")
+    _saxs_axes(ax[1], after, det.ring_bounds_A, "after outlier removal")
     ax[2].hist(ratio[np.isfinite(ratio)], bins=np.logspace(-1, 3, 1000))
     ax[2].vlines(x=thresholds, ymin=1, ymax=10**5, ls="--", color="gray")
     ax[2].set_yscale("log")
@@ -720,7 +727,8 @@ def figure_outliers(
     ax[2].set_title("Distribution of std_of_mean and outlier threshold")
     fig.suptitle(
         f"run {det.run}: {int(removed.sum())} of {ratio.size} ring pixels outside "
-        f"({lower}, {higher}), from {n_trains} hit trains ({source})",
+        f"({lower}, {higher}), from {n_trains} hit trains ({source}); "
+        f"{int((~correlated).sum())} flagged in every train not shown",
         fontsize=9,
     )
     fig.tight_layout()
@@ -746,7 +754,7 @@ def figure_beamcenter(det: DetectorMean, *, dq_A: float = Q_BIN_A) -> Figure:
     right, sinusoidal in the cone number when it is off. The title carries the
     old merit, ``mean over q of var over cones of log I``.
     """
-    q_bounds = (float(det.ring_edges_A[0]), float(det.ring_edges_A[-1]))
+    q_bounds = (float(det.ring_bounds_A[0, 0]), float(det.ring_bounds_A[-1, 1]))
     cones = cone_curves(det, q_bounds, dq_A=5 * dq_A)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)
@@ -787,8 +795,8 @@ def figure_beamcenter(det: DetectorMean, *, dq_A: float = Q_BIN_A) -> Figure:
             deviation,
             "o-",
             color=_jet(r, int(det.ring.max()) + 1),
-            label=_ring_label(0.5 * (det.ring_edges_A[r] + det.ring_edges_A[r + 1]))
-            if det.ring_edges_A.size > r + 1
+            label=_ring_label(det.ring_bounds_A[r].mean())
+            if len(det.ring_bounds_A) > r
             else f"ring {r}",
         )
     ax[1].axhline(0, color="k", lw=0.5)
@@ -1218,7 +1226,7 @@ def figure_saxs(
     _saxs_axes(
         ax,
         saxs,
-        hits.edges_nm / 10.0,
+        hits.bounds_nm / 10.0,
         f"I(q) per pulseId ({saxs.attrs['resolution']})",
         threshold,
     )

@@ -23,7 +23,10 @@ def make_rings(rng, n_env=300, n_rings=3, outside=0.25) -> Rings:
     label = rng.integers(0, n_rings, n_env).astype(np.int8)
     label[rng.random(n_env) < outside] = -1
     label.flags.writeable = False
-    return Rings(tuple(np.linspace(0.2, 0.5, n_rings + 1)), label, n_rings, "rings")
+    edges = np.linspace(0.2, 0.5, n_rings + 1).tolist()
+    return Rings(
+        tuple(zip(edges[:-1], edges[1:], strict=True)), label, n_rings, "rings"
+    )
 
 
 def make_dense(rng, n_frames, n_env, density=0.1) -> np.ndarray:

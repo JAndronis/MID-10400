@@ -19,8 +19,8 @@ from analysis.diagnostics.xpcs import (
     xpcs_snr,
 )
 from analysis.triage.xpcs import (
+    ES_REFERENCE_BETA,
     OFF_SUBTRACTION,
-    REFERENCE_BETA,
     REFERENCE_BETA_RUNS,
     measure_beta,
     measure_run,
@@ -88,7 +88,7 @@ def test_snr_with_a_beta_from_a_report(root, tmp_path):
 def test_the_default_beta_is_the_reference_table(root):
     out = xpcs_snr(RUN, output_root=root)
     rois = out["rois"]
-    for q, (value, _, _) in REFERENCE_BETA.items():
+    for q, (value, _, _) in ES_REFERENCE_BETA.items():  # the fake has ES rings
         row = rois[np.isclose(rois.roi_q_A, q, atol=1e-6)]
         assert row.beta.item() == value
         assert row.beta_n_eligible.item() == len(REFERENCE_BETA_RUNS)

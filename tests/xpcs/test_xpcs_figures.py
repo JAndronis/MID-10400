@@ -310,7 +310,7 @@ def synthetic_detector(rng, n=400, frames=3):
         ring=(np.arange(n) * 3 // n).astype(np.int8),
         q_A=q,
         chi_deg=np.linspace(-179, 179, n),
-        ring_edges_A=np.array([0.02, 0.04, 0.06, 0.09]),
+        ring_bounds_A=np.array([[0.02, 0.04], [0.04, 0.06], [0.06, 0.09]]),
         geometry=None,
         beam_center=None,
         run="7",
@@ -341,6 +341,31 @@ def test_the_outlier_statistic_flags_a_hot_and_a_dead_pixel_only():
     flagged = np.flatnonzero((ratio < 0.75) | (ratio > 1.75))
     assert {100, 1500} <= set(flagged.tolist())
     assert flagged.size <= 4, "Poisson noise on 4 trains x 3 frames stays inside"
+
+
+def test_the_outlier_figure_leaves_out_the_pixels_flagged_in_every_train():
+    """A NaN ratio is a pixel the pass never correlates: neither panel shows it."""
+    from dataclasses import replace
+
+    det = synthetic_detector(np.random.default_rng(2), n=2000)
+    det.total[:, 700] *= 50
+    ratio = np.ones(det.pixel.size, np.float32)
+    ratio[700] = np.nan
+    applied = replace(
+        det,
+        outlier=np.zeros(det.pixel.size, bool),
+        outlier_ratio=ratio,
+        outlier_thresholds=(0.75, 1.75),
+        outlier_trains=4,
+    )
+    fig = F.figure_outliers(applied, dq_A=0.005)
+    bin_of_700 = int(
+        np.argmin(np.abs(F.q_curves(det, dq_A=0.005)["q"].values - det.q_A[700]))
+    )
+    for panel in fig.axes[:2]:
+        peak = max(line.get_ydata()[bin_of_700] for line in panel.lines)
+        assert peak < 2 * np.median(det.per_frame()), "the hot pixel is not drawn"
+    assert "1 flagged in every train not shown" in fig._suptitle.get_text()
 
 
 def test_the_cone_curves_split_the_detector_into_equal_azimuthal_sectors():

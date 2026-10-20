@@ -26,7 +26,8 @@ from analysis.saxs.config import N_MODULES, AgipdSaxsConfig
 __all__ = [
     "DEFAULT_XPCS_ROOT",
     "MERGE_SCHEMA",
-    "RING_EDGES_NM",
+    "ES_RINGS_NM",
+    "RINGS_NM",
     "STORE_SCHEMA",
     "XPCS_OPERATIONAL_FIELDS",
     "Kernel",
@@ -40,10 +41,26 @@ _PROPOSAL_ROOT = "/gpfs/exfel/exp/MID/202601/p010400"
 #: to tape, and the photon store is the hit trains' only 2D record afterwards.
 DEFAULT_XPCS_ROOT = f"{_PROPOSAL_ROOT}/usr/cached_files"
 
-#: The XPCS ROI edges [nm⁻¹], as the DAMNIT context hands them to extra-speckle
-#: (Å⁻¹ 0.0225 … 0.086). Seven contiguous rings.
-RING_EDGES_NM: tuple[float, ...] = tuple(
-    10 * edge for edge in (0.0225, 0.035, 0.045, 0.056, 0.065, 0.069, 0.075, 0.086)
+
+def _contiguous_nm(edges_A: tuple[float, ...]) -> tuple[tuple[float, float], ...]:
+    nm = [10 * edge for edge in edges_A]
+    return tuple(zip(nm[:-1], nm[1:], strict=True))
+
+
+#: extra-speckle's seven contiguous ROIs (Å⁻¹ 0.0225 … 0.086) as the old DAMNIT
+#: context handed them to it, in nm⁻¹: what the equivalence gate compares on.
+ES_RINGS_NM = _contiguous_nm((0.0225, 0.035, 0.045, 0.056, 0.065, 0.069, 0.075, 0.086))
+
+#: The XPCS rings [nm⁻¹], 0.045 wide, with the fcc 111 (0.585–0.640) and 200
+#: (0.685–0.725) bands left out: their Bragg speckle gave ES's 0.0605 and 0.072 Å⁻¹
+#: ROIs a contrast of ~1. Bands measured 2026-10-20 as the excess over r0423 on
+#: r0424/0426/0488 (0.593–0.631, 0.693–0.715) and the outlier-ratio tail over 438
+#: runs (0.598–0.618, 0.698–0.713), under the 2026-09-13 beam centre. The outer
+#: bounds are ES's, built the same way, so the envelope and every store stay valid.
+RINGS_NM: tuple[tuple[float, float], ...] = (
+    _contiguous_nm((0.0225, 0.027, 0.0315, 0.036, 0.0405, 0.045, 0.0495, 0.054, 0.0585))
+    + _contiguous_nm((0.064, 0.0685))
+    + _contiguous_nm((0.0725, 0.077, 0.0815, 0.086))
 )
 
 #: Bump when what either file holds changes.
@@ -99,7 +116,9 @@ class XpcsConfig:
     """
 
     saxs: AgipdSaxsConfig
-    ring_edges_nm: tuple[float, ...] = RING_EDGES_NM
+    #: ``(lo, hi)`` per ring [nm⁻¹], ascending and disjoint; gaps between rings
+    #: are left out. The envelope spans the first ``lo`` to the last ``hi``.
+    rings_nm: tuple[tuple[float, float], ...] = RINGS_NM
     #: ``(R, 16, 512, 128)`` bool ring masks (e.g. extra-speckle's), instead of
     #: rings from the geometry. No dilation: the envelope is their union, and the
     #: static mask is not applied on top of them.
@@ -138,13 +157,16 @@ class XpcsConfig:
                 f"is {self.saxs.min_modules}: a missing module reads as zero photons "
                 "with no flag, which would pass as a quiet part of the detector"
             )
-        edges = tuple(self.ring_edges_nm)
-        if len(edges) < 2 or any(
-            b <= a for a, b in zip(edges, edges[1:], strict=False)
+        flat = [float(x) for ring in self.rings_nm for x in ring]
+        if (
+            not self.rings_nm
+            or any(len(ring) != 2 for ring in self.rings_nm)
+            or any(b <= a for a, b in zip(flat[::2], flat[1::2], strict=True))
+            or any(b < a for a, b in zip(flat[1:-1:2], flat[2::2], strict=True))
         ):
             raise ValueError(
-                f"ring_edges_nm must be strictly increasing with at least two "
-                f"values, got {edges}"
+                "rings_nm must be (lo, hi) pairs with lo < hi, ascending and "
+                f"disjoint, got {self.rings_nm}"
             )
         if not isinstance(self.kernel, Kernel):
             raise TypeError(f"kernel must be a Kernel, got {self.kernel!r}")
@@ -252,7 +274,7 @@ class XpcsConfig:
     def merge_hash(self, envelope_sha256: str, rings_sha256: str) -> str:
         """What changes a stored sum: the extract hash plus how it is combined.
 
-        ``rings_sha256`` covers the ring edges, the ring masks file and the
+        ``rings_sha256`` covers the ring bounds, the ring masks file and the
         static mask, which all act through the label array. The outlier mask
         enters through its settings: it is a function of the store, the hit set
         and the rings, so a complete run can be answered without recomputing it.

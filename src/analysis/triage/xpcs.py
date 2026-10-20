@@ -49,6 +49,7 @@ __all__ = [
     "MIN_SLICE_TRAINS",
     "N_BLOCKS",
     "OFF_SUBTRACTION",
+    "ES_REFERENCE_BETA",
     "REFERENCE_BETA",
     "REFERENCE_BETA_RUNS",
     "ROI_EDGES_A",
@@ -110,12 +111,14 @@ NPIX_FRAMES = 10
 #: 2026-10-13: "a fitted contrast that is different to each run will be a pitfall").
 #: Late PEG 6K droplet of 12 May; their τ → 0 intercepts fix β for every run.
 REFERENCE_BETA_RUNS = (450, 493, 494, 495, 496)
-#: β per ROI centre [Å⁻¹] as (median, p16, p84) of the fitted intercept A over
-#: `REFERENCE_BETA_RUNS`. Measured 2026-10-13 with this module's `measure_run` and
-#: `fit_decay` (scripts/run_triage_xpcs_20261013T152014Z.json, job 25288023): 4.8 %
-#: at 0.029 Å⁻¹ falling to 1.9 % at 0.0805, A/σ_A 19–68 per run. `reference_beta`
-#: re-measures it; the triage script checks the two agree when the runs are in its set.
-REFERENCE_BETA: dict[float, tuple[float, float, float]] = {
+#: β per extra-speckle ROI centre [Å⁻¹] (`ROI_EDGES_A`) as (median, p16, p84) of
+#: the fitted intercept A over `REFERENCE_BETA_RUNS`. Measured 2026-10-13 with this
+#: module's `measure_run` and `fit_decay` (job 25288023,
+#: scripts/run_triage_xpcs_20261013T152014Z.json): 4.8 % at 0.029 Å⁻¹ falling to
+#: 1.9 % at 0.0805, A/σ_A 19–68 per run. The XPCS pass used these ROIs until
+#: 2026-10-20; the photon statistics (`analysis.diagnostics.photon_stats`) still
+#: bin on them.
+ES_REFERENCE_BETA: dict[float, tuple[float, float, float]] = {
     0.02875: (0.047803, 0.047412, 0.048816),
     0.04: (0.039039, 0.038549, 0.039383),
     0.0505: (0.029474, 0.029348, 0.029969),
@@ -123,6 +126,30 @@ REFERENCE_BETA: dict[float, tuple[float, float, float]] = {
     0.067: (0.019076, 0.018810, 0.019468),
     0.072: (0.019117, 0.018546, 0.021378),
     0.0805: (0.018556, 0.017375, 0.018862),
+}
+#: β per ROI centre [Å⁻¹] as (median, p16, p84) of the fitted intercept A over
+#: `REFERENCE_BETA_RUNS`, for the pass's rings (`analysis.xpcs.config.RINGS_NM`).
+#: Measured 2026-10-20 with this module's `measure_run` and `fit_decay` on the five
+#: runs merged from their photon stores with those rings (scripts/
+#: run_triage_xpcs_20261020T114609Z.json, `reference_beta_reproduced`; every fit
+#: converged): 4.9 % at 0.025 Å⁻¹ falling to 1.7 % at 0.084. It also carries
+#: `ES_REFERENCE_BETA`, whose centres differ from these by more than `ROI_MATCH_A`,
+#: so a lookup by centre gives each ring set its own β. `reference_beta` re-measures
+#: it; the triage script checks the two agree when the runs are in its set.
+REFERENCE_BETA: dict[float, tuple[float, float, float]] = {
+    **ES_REFERENCE_BETA,
+    0.02475: (0.048842, 0.048317, 0.050663),
+    0.02925: (0.048951, 0.048686, 0.050053),
+    0.03375: (0.045297, 0.044749, 0.045758),
+    0.03825: (0.040283, 0.039870, 0.040961),
+    0.04275: (0.037710, 0.036988, 0.037940),
+    0.04725: (0.033020, 0.032943, 0.034061),
+    0.05175: (0.028717, 0.028545, 0.029118),
+    0.05625: (0.023983, 0.023675, 0.024710),
+    0.06625: (0.019220, 0.018817, 0.019772),
+    0.07475: (0.017947, 0.017438, 0.018615),
+    0.07925: (0.018553, 0.016734, 0.018980),
+    0.08375: (0.017423, 0.016043, 0.018863),
 }
 #: Two ROI centres within this [Å⁻¹] are the same ROI (DAMNIT stores float centres).
 ROI_MATCH_A = 1e-6
@@ -519,18 +546,18 @@ def measure_run(
     pixels = hits.pixels(diag.train_ids)
     npix = np.median(pixels, axis=0) if pixels.size else np.full(hits.n_rings, np.nan)
     return _reduce(
-        run, diag.roi_q_A, roi_edges_from(hits.edges_nm, hits.n_rings), diag.sums,
+        run, diag.roi_q_A, roi_edges_from(hits.bounds_nm, hits.n_rings), diag.sums,
         diag.counts, kbar_t, diag.train_ids, npix, hits.n_frames, hits.lags().size,
         1.0 / hits.period_s, span, n_blocks,
     )  # fmt: skip
 
 
-def roi_edges_from(edges_nm: np.ndarray, n_rings: int) -> np.ndarray:
-    """(R, 2) ROI edges in nm⁻¹ from a results file's ring edges."""
-    e = np.asarray(edges_nm, dtype=np.float64)
-    if e.size != n_rings + 1:
+def roi_edges_from(bounds_nm: np.ndarray, n_rings: int) -> np.ndarray:
+    """(R, 2) ROI edges in nm⁻¹ from a results file's ring bounds."""
+    b = np.asarray(bounds_nm, dtype=np.float64).reshape(-1, 2)
+    if len(b) != n_rings:
         return np.full((n_rings, 2), np.nan)  # rings from a masks file: no q edges
-    return np.c_[e[:-1], e[1:]]
+    return b
 
 
 def measure_run_legacy(

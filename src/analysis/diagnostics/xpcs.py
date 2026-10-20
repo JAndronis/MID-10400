@@ -205,7 +205,7 @@ def kbar_rois(
         if n_trains
         else np.full(opened.n_rings, np.nan)
     )
-    kinds = roi_kinds(roi_edges_from(opened.edges_nm, opened.n_rings))
+    kinds = roi_kinds(roi_edges_from(opened.bounds_nm, opened.n_rings))
     table = pd.DataFrame({"roi_q_A": opened.roi_q, "kind": kinds, "kbar": values})
     table["above"] = table.kbar >= kbar_min
     table.attrs.update(
