@@ -19,6 +19,7 @@ import hashlib
 import json
 import logging
 import os
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import Enum
@@ -31,6 +32,7 @@ import xarray as xr
 
 from analysis.common.complete import Completeness
 from analysis.common.plan import Block
+from analysis.common.readback import UnreadableOutput, sync, unreadable
 from analysis.common.status import UNFINISHED, FrameStatus
 from analysis.xpcs.config import DEFAULT_XPCS_ROOT
 from analysis.xpcs.hits import HitSet
@@ -236,6 +238,11 @@ class ResultWriter:
         }
 
     def finalise(self, provenance: dict[str, Any]) -> None:
+        """Record provenance, read the file back from disk, then mark it finalised.
+
+        :raises UnreadableOutput: a dataset did not read back (a full quota on
+            2026-10-20); the file is removed rather than finalised.
+        """
         group = self._f["provenance"]
         for key, value in provenance.items():
             group.attrs[key] = (
@@ -244,8 +251,27 @@ class ResultWriter:
                 else json.dumps(value, default=str)
             )
         group.attrs["status_summary"] = json.dumps(self.status_summary())
+        path = Path(self._f.filename)
+        self._f.close()
+        started = time.perf_counter()
+        try:
+            sync(path)
+            failures = unreadable(path)
+        except OSError as error:
+            failures = [f"fsync: {error!r}"]
+        if failures:
+            # Its rows say OK, so a resume would only finalise it again: a rerun
+            # must rebuild it from the store instead.
+            path.unlink()
+            raise UnreadableOutput(
+                f"{path} did not read back and was removed; a rerun rebuilds it "
+                f"from the photon store: {'; '.join(failures)}"
+            )
+        log.info("%s read back in %.1f s", path, time.perf_counter() - started)
+        self._f = h5py.File(path, "r+")
         self._f.attrs["finalised"] = 1
         self._f.flush()
+        sync(path)
 
     def close(self) -> None:
         self._f.close()

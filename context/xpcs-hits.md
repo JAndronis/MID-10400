@@ -165,6 +165,18 @@ Behaviour, each pinned by `tests/xpcs/test_xpcs_run.py` unless noted:
   count) are final and counted; `WORKER_ERROR` and `NOT_PROCESSED` are retried. Unfinished
   trains after extraction raise `IncompleteRun` unless `allow_incomplete`.
 - A held lock raises `OutputBusy`; both files are locked for the whole pass.
+- **`finalised` is set only on a file that reads back** (2026-10-20). `ResultWriter.finalise`
+  writes the provenance, closes the file, `fsync`s it and reads every dataset in full from a
+  fresh handle (`analysis.common.readback`); only then does it reopen it and set `finalised`. A
+  file that fails is removed and the pass raises `UnreadableOutput`: its rows all say `OK`, so a
+  resume would only try to finalise it again, and a rerun rebuilds it from the store. Why: the
+  `usr` quota filled during that day's reprocess, and r0452, r0453, r0460 and r0469 were
+  finalised with `sums/s_on`, `s_off_cur` and `s_off_prev` raising `filter returned failure
+  during read`; `result_reasons` and `reprocess_safe.py`'s completeness check read attributes and
+  statuses only, so both called them complete. Cost on r0424 (3000 hit trains, 0.87 GB on disk,
+  6.9 GB decompressed): 12.2 s of a 341 s pass (3.6 %), merged from its store into scratch on
+  max-exfl461 at 32 workers, sums identical to the production file; reading that production file
+  back on its own takes 11.9 s.
 - 1 vs 3 workers, blocks of 4 vs 1: store and results have the same `h5_digest`.
 
 ## 6. The reader

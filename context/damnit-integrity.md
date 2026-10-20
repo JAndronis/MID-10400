@@ -313,10 +313,14 @@ load exfel damnit/stable && damnit reprocess --in usr/Shared/amore --match … <
 
 `--no-trigger` renames only. **The AGIPD window sums are never moved.**
 
-**`check`.** Requires exactly one backup, no job and no lock. It then needs `is_complete` on the
-new output, every dataset of it read back (and of the window sums for AGIPD), and the backup's
-frame count and trains, unless `--accept-count-change`. It writes `<backup>.check.json` with the
-verdict and the new output's (inode, mtime, size).
+**`check`.** Requires a new output, no job and no lock. It then needs `is_complete` on the
+new output, every dataset of it read back (and of its companions: the window sums for AGIPD, the
+photon store for XPCS), and, with exactly one backup, the backup's frame count and trains, unless
+`--accept-count-change`; it writes `<backup>.check.json` with the verdict and the new output's
+(inode, mtime, size). With no backup (deleted by `cleanup`, or a run DAMNIT processed on its own)
+it still runs the completeness check and the full read, and notes that no frame count was
+compared; more than one backup is a failure, after the reads. Until 2026-10-20 a run without a
+backup returned before reading anything, so a check after `cleanup` read nothing.
 
 **`cleanup`** deletes a backup only if its check passed and the new output is still the file that
 was checked.
