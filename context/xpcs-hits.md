@@ -726,8 +726,11 @@ a NaN ratio: `image.mask` flags them in every frame of every hit train (6043 rin
 on sampled trains), so `MaskPolicy.ANY_FRAME` removes them from every train, but
 `detector_mean` reads the store's photons without flags. With them out, 0.75/1.75 and 0.8/1.3 leave
 the same spikes (r0423 1, r0424 155, r0426 468, all at the Bragg peaks on the crystallised runs),
-so the thresholds stay (user, 2026-10-20). `figure_outliers` now leaves NaN-ratio pixels out of
-both panels and counts them in the title.
+so the thresholds stay (user, 2026-10-20). `figure_outliers` now leaves out of both panels the
+pixels `detector_mean` finds flagged in some frame of every train it reads
+(`DetectorMean.always_flagged`) and counts them in the title. A NaN ratio alone is not that: an
+empty q bin gives 0/0, and the first version, keyed on NaN, drew nothing on r1 (no beam) and
+raised. Reading the flags makes the store figures slower (r1 `xpcs.outliers` 11 → 28 s, r450 65 s).
 
 **Reprocess.** The merge hash moved (ring sha and schema), so every `xpcs_hits.h5` is rebuilt from
 its store: `reprocess_safe.py start RUNS -d xpcs` **without `--fresh`**. `reprocess_all.sh

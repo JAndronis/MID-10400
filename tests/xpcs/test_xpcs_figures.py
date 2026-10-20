@@ -344,21 +344,14 @@ def test_the_outlier_statistic_flags_a_hot_and_a_dead_pixel_only():
 
 
 def test_the_outlier_figure_leaves_out_the_pixels_flagged_in_every_train():
-    """A NaN ratio is a pixel the pass never correlates: neither panel shows it."""
+    """The pass never correlates such a pixel: neither panel shows it."""
     from dataclasses import replace
 
     det = synthetic_detector(np.random.default_rng(2), n=2000)
     det.total[:, 700] *= 50
-    ratio = np.ones(det.pixel.size, np.float32)
-    ratio[700] = np.nan
-    applied = replace(
-        det,
-        outlier=np.zeros(det.pixel.size, bool),
-        outlier_ratio=ratio,
-        outlier_thresholds=(0.75, 1.75),
-        outlier_trains=4,
-    )
-    fig = F.figure_outliers(applied, dq_A=0.005)
+    always = np.zeros(det.pixel.size, bool)
+    always[700] = True
+    fig = F.figure_outliers(replace(det, always_flagged=always), dq_A=0.005)
     bin_of_700 = int(
         np.argmin(np.abs(F.q_curves(det, dq_A=0.005)["q"].values - det.q_A[700]))
     )
@@ -366,6 +359,25 @@ def test_the_outlier_figure_leaves_out_the_pixels_flagged_in_every_train():
         peak = max(line.get_ydata()[bin_of_700] for line in panel.lines)
         assert peak < 2 * np.median(det.per_frame()), "the hot pixel is not drawn"
     assert "1 flagged in every train not shown" in fig._suptitle.get_text()
+
+
+def test_an_empty_q_bin_is_drawn_although_its_ratio_is_nan():
+    """No photons in a bin is 0/0, not a flagged pixel (r1, no beam)."""
+    from dataclasses import replace
+
+    det = synthetic_detector(np.random.default_rng(3), n=400)
+    det.total[:] = 0
+    det.total[:, ::7] = 1
+    applied = replace(
+        det,
+        always_flagged=np.zeros(det.pixel.size, bool),
+        outlier=np.zeros(det.pixel.size, bool),
+        outlier_ratio=np.full(det.pixel.size, np.nan, np.float32),
+        outlier_thresholds=(0.75, 1.75),
+        outlier_trains=4,
+    )
+    fig = F.figure_outliers(applied, dq_A=0.005)
+    assert "0 flagged in every train not shown" in fig._suptitle.get_text()
 
 
 def test_the_cone_curves_split_the_detector_into_equal_azimuthal_sectors():
@@ -400,6 +412,21 @@ def test_the_detector_mean_is_the_photons_of_the_ring_pixels_of_the_store(stored
             expected += int(got.count[label[got.pixel] >= 0].sum())
     assert det.total.sum() == expected
     assert (det.ring >= 0).all() and det.pixel.size == int((label >= 0).sum())
+
+
+def test_the_detector_mean_knows_the_pixels_flagged_in_every_train(stored):
+    hits, cfg, pipe = stored
+    det = F.detector_mean(hits, cfg, geometry=pipe.geom)
+    import h5py
+
+    with h5py.File(hits.path, "r") as f:
+        good = np.flatnonzero(f["rings/label"][()] >= 0)
+    with RingPhotonStore.open(cfg.store_file) as store:
+        n_env = store.envelope().size
+        every = np.logical_and.reduce(
+            [store.get(t).flagged_any(n_env)[good] for t in det.train_ids]
+        )
+    np.testing.assert_array_equal(det.always_flagged, every)
 
 
 def test_the_detector_mean_takes_evenly_spread_trains(stored):

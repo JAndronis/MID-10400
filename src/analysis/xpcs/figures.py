@@ -328,6 +328,9 @@ class DetectorMean:
     geometry: Any
     beam_center: tuple[float, float] | None
     run: str
+    #: Flagged in some frame of every train read: ``MaskPolicy.ANY_FRAME`` keeps
+    #: such a pixel out of every one of those trains' sums. ``None``: not known.
+    always_flagged: np.ndarray | None = None
     #: The pass's applied outlier mask and its statistic, per pixel above
     #: (``None``: the results file has none). The pixels include the outliers.
     outlier: np.ndarray | None = None
@@ -397,10 +400,14 @@ def detector_mean(
         to_good = np.full(envelope.size, -1, np.int64)
         to_good[good] = np.arange(good.size)
         total = np.zeros((hits.n_frames, good.size), np.float32)
+        always_flagged = np.ones(good.size, bool)
+        n_read = 0
         for train in usable:
             photons = store.get(int(train))
             if photons.n_frames != hits.n_frames:
                 continue
+            n_read += 1
+            always_flagged &= photons.flagged_any(envelope.size)[good]
             frames = photons.frames(envelope.size)
             rows = np.repeat(np.arange(hits.n_frames), np.diff(frames.indptr))
             cols = to_good[frames.indices]
@@ -424,6 +431,7 @@ def detector_mean(
         geometry=geom,
         beam_center=centre,
         run=_run_label(hits),
+        always_flagged=always_flagged if n_read else np.zeros(good.size, bool),
         outlier=None if applied is None else applied[0].mask[good],
         outlier_ratio=None if applied is None else applied[0].ratio[good],
         outlier_thresholds=None if applied is None else applied[0].thresholds,
@@ -694,10 +702,10 @@ def figure_outliers(
 
     When the results file carries the pass's applied mask (``det.outlier``),
     that mask and its statistic (over every usable hit train) are what is
-    shown, and ``thresholds`` and ``dq_A`` only bin the curves. Its NaN ratios
-    are the pixels ``image.mask`` flags in every frame of every hit train:
-    ``MaskPolicy.ANY_FRAME`` keeps them out of every sum, so neither panel shows
-    them (the store's photons carry no flags, and they were r0424's spikes).
+    shown, and ``thresholds`` and ``dq_A`` only bin the curves. Neither panel
+    shows ``det.always_flagged``: ``MaskPolicy.ANY_FRAME`` keeps those pixels out
+    of every sum, while the store's photons carry no flags (they were r0424's
+    spikes). A NaN ratio is not the same thing: an empty q bin gives 0/0.
     """
     if det.outlier is not None:
         ratio, removed = det.outlier_ratio, det.outlier
@@ -712,7 +720,9 @@ def figure_outliers(
         n_trains, source = det.n_trains, "not applied, recomputed"
     lower, higher = thresholds
     correlated = (
-        np.isfinite(ratio) if det.outlier is not None else np.ones_like(removed)
+        ~det.always_flagged
+        if det.always_flagged is not None
+        else np.ones(removed.size, bool)
     )
     fig = Figure(figsize=(16, 6))
     ax = fig.subplots(1, 3)
