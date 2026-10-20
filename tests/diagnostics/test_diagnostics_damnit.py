@@ -185,14 +185,14 @@ def test_photon_statistics_skip_without_a_file(tmp_path):
         ((12, 9), 12, 9, True, 10.04, "good"),
         ((12, 9), 12, 9, False, 1.7, "error"),
         ((12, 9), 12, 9, None, float("nan"), "warning"),
-        ((12, 9), 11, 9, True, 10.04, "warning"),
+        ((12, 9), 11, 9, True, 10.04, "good"),  # a Bragg-adjacent ROI below k̄
         ((12, 9), 12, 8, False, 1.7, "warning"),
         ((12, 9), None, None, True, 10.04, "warning"),
         ((7, 4), 7, 4, True, 10.04, "good"),
     ],
 )
 def test_the_xpcs_score_cell(monkeypatch, rois, ok, plain, extractable, best, expected):
-    """The counts are the results file's rings, whatever their number."""
+    """The counts are the results file's rings; only the plain ones must pass."""
     from analysis.diagnostics.damnit import xpcs_score_cell
 
     score = {

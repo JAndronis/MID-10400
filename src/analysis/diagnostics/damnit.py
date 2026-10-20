@@ -327,7 +327,8 @@ def xpcs_score_cell(proposal: int, run_no: int) -> Any:
     Reads the run's hit-train results file (``diagnostics.xpcs.xpcs_score``), so it
     shows the run as of its last processing; refresh with
     ``damnit reprocess --match "XPCS score"``. The run is scored only when every
-    ROI of its results file, the plain ones included, meets the k̄ threshold.
+    plain ROI of its results file meets the k̄ threshold (the SNR is taken over
+    the plain ROIs only, so a Bragg-adjacent ROI below it does not matter).
     Otherwise it is amber; when they do, SNR determines green, red or amber. The
     ROI counts are the file's, so they follow the rings it was merged with.
 
@@ -353,10 +354,10 @@ def xpcs_score_cell(proposal: int, run_no: int) -> Any:
         "SNR —" if best is None or not np.isfinite(best) else f"SNR {best:.1f}"
     )
     extractable = snr.get("extractable")
-    all_rois_ok = ok == n_rois and plain == n_plain
+    plain_ok = plain is not None and plain == n_plain
     colour = (
         COLORS["warning"]
-        if not all_rois_ok or extractable is None
+        if not plain_ok or extractable is None
         else COLORS["good"]
         if extractable
         else COLORS["error"]
