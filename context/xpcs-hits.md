@@ -704,7 +704,9 @@ extra-speckle's floats (`10 * 0.0225` = 0.22499999999999998, not 0.225), so the 
 every photon store are unchanged; any other outer bound would refuse every store (`StoreMismatch`)
 and need proc. Pixels per ring (static mask applied): 7k, 13k, 22k, 43k, 53k, 55k, 67k, 75k, 78k,
 79k, 67k, 52k. `triage.roi_kinds` still tags 0.05625, 0.06625 and 0.07475 Å⁻¹ "bragg" (they touch
-the wider SAXS windows `BRAGG_WINDOWS_NM`), so `xpcs.score` takes the best of the other nine.
+the wider SAXS windows `BRAGG_WINDOWS_NM`), so `xpcs.score` takes the best of the other nine. The score cell's ROI counts come from the results file (`n_rois`, `n_plain_rois`; commit
+`50a1939`), e.g. r0424 "k̄ ok 10/12 (7/9 plain)", amber: every ring must meet k̄ ≥ 3e-3, and the two
+outermost miss it there; r450 "12/12 (9/9 plain) · SNR 68.6".
 
 **Code.** `XpcsConfig.rings_nm: tuple[(lo, hi), ...]`, ascending and disjoint, replaces the
 contiguous `ring_edges_nm`; a gap is in no ring but inside the envelope (first lo to last hi).
