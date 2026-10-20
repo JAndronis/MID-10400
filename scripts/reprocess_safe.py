@@ -81,8 +81,6 @@ PROPOSAL = 10400
 DAMNIT_DIR = Path("/gpfs/exfel/exp/MID/202601/p010400/usr/Shared/amore")
 #: Space to leave free beyond the new outputs, as a fraction of their size.
 QUOTA_MARGIN = 0.2
-#: Bytes read at a time when test-reading a dataset.
-READ_BYTES = 1 << 28
 
 
 @dataclass(frozen=True)
@@ -372,35 +370,10 @@ def free_bytes(directory: Path) -> tuple[int, str]:
 
 # ── reading ───────────────────────────────────────────────────────────────────
 def test_read(path: Path) -> list[str]:
-    """Read every dataset of ``path`` in full; one entry per one that fails.
+    """Read every dataset of ``path`` in full; one entry per one that fails."""
+    from analysis.common.readback import unreadable
 
-    ``visititems`` stops at the first callback returning anything but ``None``,
-    so failures are collected, never returned.
-    """
-    import h5py
-
-    failures: list[str] = []
-
-    def read(name: str, obj: Any) -> None:
-        if not isinstance(obj, h5py.Dataset):
-            return
-        try:
-            if obj.ndim == 0 or obj.shape[0] == 0:
-                obj[()]
-                return
-            row = max(1, obj.dtype.itemsize * int(obj.size // obj.shape[0]))
-            step = max(1, READ_BYTES // row)
-            for start in range(0, obj.shape[0], step):
-                obj[start : start + step]
-        except Exception as error:  # noqa: BLE001 - every failure is reported
-            failures.append(f"{name}: {error!r}")
-
-    try:
-        with h5py.File(path, "r") as handle:
-            handle.visititems(read)
-    except Exception as error:  # noqa: BLE001
-        failures.append(f"opening: {error!r}")
-    return failures
+    return unreadable(path)
 
 
 def frames_of(path: Path) -> dict[str, Any]:
@@ -450,23 +423,30 @@ def check_one(
 ) -> dict[str, Any]:
     output = detector.output(run)
     backups = backups_of(output)
-    reasons: list[str] = []
     record: dict[str, Any] = {"run": run, "detector": detector.name}
-    if len(backups) != 1:
-        reasons.append(f"{len(backups)} backups, expected exactly one")
+    reasons: list[str] = []
     if run in busy:
         reasons.append("a DAMNIT job for the run is queued or running")
     if output.with_name(f"{output.name}.lock").exists():
         reasons.append("the output is locked")
     if not output.exists():
         reasons.append("no new output")
+    # A missing backup only means there is no old frame count to compare: the
+    # new output is still read in full.
+    notes = [] if backups else ["no backup: the frame count is not compared"]
     if reasons:
-        return record | {"verdict": "fail", "reasons": reasons}
+        return record | {"verdict": "fail", "reasons": reasons, "notes": notes}
+    if len(backups) > 1:
+        reasons.append(f"{len(backups)} backups, expected exactly one")
 
-    backup = backups[0]
     reasons += [f"not complete: {r}" for r in detector.complete(run, output).reasons]
     for path in (output, *detector.companions(run)):
         reasons += [f"{path.name}: {failure}" for failure in test_read(path)]
+    if len(backups) != 1:
+        verdict = "pass" if not reasons else "fail"
+        return record | {"verdict": verdict, "reasons": reasons, "notes": notes}
+
+    backup = backups[0]
     try:
         old, new = frames_of(backup), frames_of(output)
     except (OSError, KeyError) as error:
@@ -663,7 +643,8 @@ def command_check(items, args, busy, arrays) -> dict[str, Any]:
     results = run_each(items, check_one, args.jobs, busy, args.accept_count_change)
     for r in results:
         reasons = "; ".join(r["reasons"])
-        print(f"r{r['run']:04d} {r['detector']:5s} {r['verdict']}: {reasons}")
+        notes = f" [{'; '.join(r['notes'])}]" if r.get("notes") else ""
+        print(f"r{r['run']:04d} {r['detector']:5s} {r['verdict']}: {reasons}{notes}")
     return {"arrays": arrays, "results": results}
 
 

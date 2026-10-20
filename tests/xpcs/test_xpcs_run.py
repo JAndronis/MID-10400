@@ -446,3 +446,38 @@ def test_block_files_a_crashed_parent_left_are_merged_not_extracted_again(
     assert not folder.exists()
     _, status = rows(path)
     assert (status == FrameStatus.OK).all()
+
+
+def corrupt_chunk(dataset, coord):
+    """Overwrite one stored chunk of ``dataset`` on disk, past HDF5's back."""
+    dataset.file.flush()
+    info = dataset.id.get_chunk_info_by_coord(coord)
+    with open(dataset.file.filename, "r+b") as raw:
+        raw.seek(info.byte_offset)
+        raw.write(b"\xff" * info.size)
+
+
+def test_a_results_file_that_does_not_read_back_is_removed_not_finalised(
+    pipeline, monkeypatch
+):
+    from analysis.common.readback import UnreadableOutput
+    from analysis.xpcs.result import ResultWriter
+
+    real = ResultWriter.finalise
+
+    def after_a_full_disk(self, provenance):
+        corrupt_chunk(self._f["sums/s_on"], (0, 0, 0))
+        return real(self, provenance)
+
+    monkeypatch.setattr(ResultWriter, "finalise", after_a_full_disk)
+    with pytest.raises(UnreadableOutput, match="sums/s_on"):
+        pipeline.run(GOOD)
+    cfg = pipeline.cfg()
+    assert not cfg.output_file.exists()
+    assert not list(cfg.output_file.parent.glob("*.lock"))
+
+    monkeypatch.setattr(ResultWriter, "finalise", real)
+    path = pipeline.run(GOOD)
+    with h5py.File(path, "r") as f:
+        assert f.attrs["finalised"] == 1
+        assert f["sums/s_on"][()].any()
