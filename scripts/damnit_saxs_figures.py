@@ -154,6 +154,21 @@ AT_BOUND = 0.01
 # breaks where trains are further apart than this (runs follow each other ~75 s apart)
 VOLUME_MEDIAN_TRAINS = 51
 VOLUME_GAP_S = 5.0
+# droplets in the V/V0 figure only, in the DROPLETS format: the run triage's other
+# ferritin series (inventory of 2026-10-21), SSHEX mesh scans before r240 (labels from
+# DAMNIT, unchecked), and the static s402 (attenuator 0.6, no flux correction, which a
+# volume does not need). Left out: s088, s093, s129, s134, s140 and s144, whose D^2 fit
+# finds no break (V/V0 0.55-1.6 at the fitted t*, or t* at the end of the data), so
+# t/t* means nothing for them
+VOLUME_ONLY_DROPLETS = [
+    ("s070", "ferritin50-peg6k", range(70, 88), {}, 5.0),
+    ("s168", "ferritin50-peg6k", range(168, 186), {}, 5.0),
+    ("s186", "ferritin50-peg6k", range(186, 204), {}, 5.0),
+    ("s204", "ferritin50-peg6k", range(204, 222), {}, 5.0),
+    ("s222", "ferritin50-peg6k", range(222, 240), {}, 5.0),
+    ("s402", "ferritin50", range(402, 409), {}, 0.0),
+]
+VOLUME_ONLY_MESH = {d[0] for d in VOLUME_ONLY_DROPLETS} - {"s402"}
 KNOWN_Q = [0.2 * (1.0 / 0.2) ** (i / 199) for i in range(200)]
 # blocks the matching passes over, (run, first trainId) -> why. Found 2026-10-08 as the
 # only blocks in any curves.nc whose mean I over q 0.3-0.4 is under a tenth of the
@@ -676,12 +691,40 @@ def compare_all():
     return written
 
 
+def run_fluxes(runs, db):
+    """Per run, the median over its trains of the XGM pulse energy (DAMNIT
+    ``xgm_intensity``, the mean over every pulse of a train) times the attenuators'
+    ``total_transmission``, in uJ per pulse. Runs without either are left out."""
+    import numpy as np
+
+    fluxes = {}
+    for run_nr in runs:
+        try:
+            xgm = db[run_nr]["xgm_intensity"].read()
+            att = db[run_nr]["total_transmission"].read()
+        except KeyError:
+            continue
+        flux = float(np.nanmedian((xgm * att).values))  # trainIds aligned by xarray
+        if np.isfinite(flux):
+            fluxes[run_nr] = flux
+    return fluxes
+
+
+def flux_label(fluxes):
+    "The legend's flux: one value, or the range when the runs differ by over 10 %."
+    low, high = min(fluxes.values()), max(fluxes.values())
+    if high <= 1.1 * low:
+        return f"{sorted(fluxes.values())[len(fluxes) // 2]:.3g}"
+    return f"{low:.3g}-{high:.3g}"
+
+
 def volume_timelines(sample):
     """V/V0 against t/t* of every droplet of `sample`, static and mesh droplets in
     panels of their own, from the SAXS notebook's timeline (`cache.droplet_timeline` of
     the droplet's kept runs; V0 its first train). Each train faint, with a running
     median over VOLUME_MEDIAN_TRAINS on top; the line breaks where trains are more
-    than VOLUME_GAP_S apart (between runs). Returns the files written."""
+    than VOLUME_GAP_S apart (between runs). The legend gives each droplet's flux,
+    XGM times total transmission (`run_fluxes`). Returns the files written."""
     import damnit
     import matplotlib
 
@@ -694,10 +737,12 @@ def volume_timelines(sample):
 
     plt.style.use("science")
     db = damnit.Damnit(10400)
-    droplets = [d for d in DROPLETS if d[1] == sample]
-    kinds = [
-        m for m in (False, True) if any((d[0] in MESH_DROPLETS) == m for d in droplets)
-    ]
+    mesh = MESH_DROPLETS | VOLUME_ONLY_MESH
+    droplets = sorted(
+        (d for d in DROPLETS + VOLUME_ONLY_DROPLETS if d[1] == sample),
+        key=lambda d: d[2][0],
+    )
+    kinds = [m for m in (False, True) if any((d[0] in mesh) == m for d in droplets)]
     if not kinds:
         return []
     fig, axs = plt.subplots(
@@ -710,12 +755,19 @@ def volume_timelines(sample):
     )
     record = []
     for ax, kind in zip(axs[0], kinds, strict=True):
-        group = [d for d in droplets if (d[0] in MESH_DROPLETS) == kind]
-        for droplet, colour in zip(group, DROPLET_COLOURS, strict=False):
+        group = [d for d in droplets if (d[0] in mesh) == kind]
+        # more droplets than the palette has colours: viridis in run order
+        colours = (
+            DROPLET_COLOURS
+            if len(group) <= len(DROPLET_COLOURS)
+            else plt.get_cmap("viridis")(np.linspace(0, 0.95, len(group)))
+        )
+        for droplet, colour in zip(group, colours, strict=False):
             runs = kept_runs(droplet)
             tl = cache.droplet_timeline(runs, db)
             t_star = tl.attrs["t_star_s"]
             v0 = float(tl.volume_mm3[0])
+            fluxes = run_fluxes(runs, db)
             v = tl.volume_mm3 / v0
             smooth = v.rolling(
                 trainId=VOLUME_MEDIAN_TRAINS, center=True, min_periods=1
@@ -731,7 +783,8 @@ def volume_timelines(sample):
                 np.insert(smooth.values, gap, np.nan),
                 color=colour,
                 lw=0.9,
-                label=f"{droplet[0]} r{runs[0]}-{runs[-1]}, $t^*$ = {t_star:.0f} s",
+                label=f"{droplet[0]} r{runs[0]}-{runs[-1]}, $t^*$ = {t_star:.0f} s, "
+                f"$F$ = {flux_label(fluxes)} $\\mu$J",
             )
             record.append(
                 {
@@ -751,6 +804,7 @@ def volume_timelines(sample):
                         3,
                     ),
                     "t_over_tstar_max": round(float(tl.elapsed_s.max() / t_star), 2),
+                    "flux_uJ_per_run": {str(r): round(f, 4) for r, f in fluxes.items()},
                 }
             )
         ax.axvline(1.0, color="0.5", lw=0.6, ls=":")
