@@ -54,6 +54,7 @@ __all__ = [
     "RepRateMismatch",
     "ResultWriter",
     "XpcsHits",
+    "lag_frames",
     "pooled_g2",
     "read",
     "result_reasons",
@@ -912,8 +913,7 @@ class XpcsHits:
     # ── g2 ───────────────────────────────────────────────────────────────────
     def lags(self, skip_last: int = SKIP_LAST_LAGS) -> np.ndarray:
         """Lags (in frames) g2 is evaluated at: extra-speckle's ``1 … P − 1 − skip``."""
-        skip = skip_last if self.n_frames - skip_last >= 20 else 0
-        return np.arange(1, self.n_frames - skip)
+        return lag_frames(self.n_frames, skip_last)
 
     def g2(
         self,
@@ -1076,6 +1076,12 @@ def _c2_error(on, den_on, off, den_off, n_blocks):
         )
     sigma[~np.isfinite(value)] = np.nan
     return value, sigma
+
+
+def lag_frames(n_frames: int, skip_last: int = SKIP_LAST_LAGS) -> np.ndarray:
+    """Lags (in frames) g2 uses, ``1 … P − 1 − skip``; skip if ``P ≥ 20 + skip``."""
+    skip = skip_last if n_frames - skip_last >= 20 else 0
+    return np.arange(1, n_frames - skip)
 
 
 def pooled_g2(

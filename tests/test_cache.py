@@ -787,3 +787,78 @@ def test_xpcs_is_cached_per_averaging_and_rebuilt_on_new_results(xpcs, count_bui
 
     cache.xpcs_run(1, xpcs["db"], refresh=True, **xpcs["kw"])
     assert len(count_builds) == 4
+
+
+# ── per-train g2 terms and pool_g2 ───────────────────────────────────────────
+G2_VARS = ["g2", "sigma_g2", "g2_paired", "baseline", "c2", "sigma"]
+
+
+@pytest.mark.parametrize("binned", [True, False])
+def test_pooling_every_train_is_the_stored_g2(xpcs, binned):
+    ds = cache.xpcs_run(1, xpcs["db"], binned=binned, **xpcs["kw"])
+    pooled = cache.pool_g2(ds, binned=binned)
+    for name in G2_VARS:
+        np.testing.assert_array_equal(pooled[name].values, ds[name].values)
+    np.testing.assert_array_equal(pooled.tau, ds.tau)
+    assert pooled.attrs["n_trains"] == ds.attrs["n_trains"]
+
+
+@pytest.mark.parametrize("binned", [True, False])
+def test_pooling_a_subset_is_the_readers_g2_of_those_trains(xpcs, binned):
+    ds = cache.xpcs_run(1, xpcs["db"], **xpcs["kw"])
+    subset = xpcs["hit_ids"][[0, 2, 3, 5]]  # includes the failed train
+    got = cache.pool_g2(ds, subset, binned=binned)
+    want = XpcsHits(xpcs["path"]).g2(trains=subset, binned=binned)
+    for name in G2_VARS:
+        np.testing.assert_array_equal(got[name].values, want[name].values)
+    assert got.attrs == want.attrs
+
+
+def test_terms_are_labelled_by_train_and_nan_where_absent(xpcs):
+    ds = cache.xpcs_run(1, xpcs["db"], **xpcs["kw"])
+    hits = XpcsHits(xpcs["path"])
+    terms = ["train_g2_num", "train_g2_den", "train_baseline_num", "train_baseline_den"]
+    assert ds.train_g2_num.dims == ("trainId", "roi_q", "lag_frame")
+    np.testing.assert_array_equal(ds.lag_frame, np.arange(1, hits.n_frames))
+    np.testing.assert_allclose(ds.lag_tau, ds.lag_frame * hits.period_s)
+
+    failed = ds.sel(trainId=xpcs["failed"])
+    assert all(np.isnan(failed[name]).all() for name in terms)
+
+    paired = [t for t in hits.train_ids[hits.usable & hits.has_off]]
+    unpaired = [t for t in hits.train_ids[hits.usable & ~hits.has_off]]
+    assert paired and unpaired, "the fixture should exercise both cases"
+    for tid in unpaired:
+        one = ds.sel(trainId=tid)
+        assert np.isfinite(one.train_g2_num).all()
+        assert np.isnan(one.train_baseline_num).all()
+        assert np.isnan(one.train_baseline_den).all()
+    for tid in [*paired, *unpaired]:
+        sums = hits.pooled_sums(trains=[tid])
+        one = ds.sel(trainId=tid)
+        np.testing.assert_array_equal(one.train_g2_num, sums.on[0])
+        np.testing.assert_array_equal(one.train_g2_den, sums.den_on[0])
+        if tid in paired:
+            np.testing.assert_array_equal(one.train_baseline_num, sums.off[0])
+            np.testing.assert_array_equal(one.train_baseline_den, sums.den_off[0])
+
+
+def test_pool_g2_refuses_an_unknown_train_and_an_es_dataset(xpcs):
+    ds = cache.xpcs_run(1, xpcs["db"], **xpcs["kw"])
+    with pytest.raises(ValueError, match="not in the hit set"):
+        cache.pool_g2(ds, [int(xpcs["hit_ids"][0]) + 10**6])
+    es = cache.xpcs_run(1, xpcs["db"], averaging="es", **xpcs["kw"])
+    assert "train_g2_num" not in es
+    with pytest.raises(ValueError, match="pooled"):
+        cache.pool_g2(es)
+
+
+def test_the_terms_survive_the_cache_file(xpcs):
+    first = cache.xpcs_run(1, xpcs["db"], **xpcs["kw"])
+    again = cache.xpcs_run(1, xpcs["db"], **xpcs["kw"])
+    for name in ("train_g2_num", "train_baseline_den"):
+        np.testing.assert_array_equal(again[name].values, first[name].values)
+    for name in G2_VARS:
+        np.testing.assert_array_equal(
+            cache.pool_g2(again)[name].values, first[name].values
+        )
