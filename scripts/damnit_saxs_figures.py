@@ -1,4 +1,4 @@
-"""Make the SAXS figures of every droplet after r338 from notebooks/damnit_saxs.ipynb.
+"""Make the SAXS figures of every droplet after r240 from notebooks/damnit_saxs.ipynb.
 
 For each droplet the notebook is exported to a plain Python script with that droplet's
 parameters filled in, saved as
@@ -13,12 +13,22 @@ droplet, all on the same axes and the same t/t* colour scale, read from the drop
 ``curves.nc``. Normalised (to the mean over q 0.80-0.95) and per flux*path versions.
 Beside them, per condition, its droplets side by side at matched t/t*
 (``saxs_matched_tstar_<sample>_norm.png``, a panel per t/t*, a line per droplet), with
-the blocks they used in one JSON.
+the blocks they used in one JSON. The mesh droplets get figures of their own
+(``saxs_<sample>_mesh_norm.png``, ``saxs_matched_tstar_<sample>_mesh_norm.png``), never
+mixed with the static ones.
 
-The droplets are the run triage's series after r338 (inventory of 2026-10-01), static
-droplets only. Left out: the silica references (r382-385, r389), r463 (exploded),
-the buffer r464-466 itself (it is the background) and r402-408 (attenuator 0.6, for
-which the notebook has no flux correction).
+The droplets are the run triage's series after r240 (inventory of 2026-10-21). Left
+out: the silica references (r288, r382-385, r389), r463 (exploded), the buffer r464-466
+itself (it is the background), and r289 (attenuator 0.041), r307 (0.0047) and r402-408
+(0.6), for which the notebook has no flux correction.
+
+The mesh droplets (s240, s258, s289, s308; SSHEX fly scans, attenuator 0.1006) are run
+with the notebook's MESH_SCAN, so a mesh run's curves average only the trains that hit
+the droplet (`analysis.triage.classify.hits`, class "on"). Their figures carry caveats
+the static ones do not: a hit can cross the droplet off-centre while the scale assumes
+the full chord; the q_min rule (0.156 a_x) was measured on static droplets; and like
+s338-s400 they predate the r433 -> r443 stray-light change, while the buffer r464 is
+after it.
 
 The notebook's plot style renders text with LaTeX, and the system TeX on the Maxwell
 nodes lacks ``type1cm.sty``: load a complete one first, or uncached labels fail. Run
@@ -52,6 +62,19 @@ SHARED_PYTHON = Path(
 # id, sample, runs (what the droplet's V0 and t* come from), runs left out and why,
 # PEG w/v % at the start
 DROPLETS = [
+    ("s240", "ferritin50-peg6k", range(240, 258), {}, 5.0),
+    ("s258", "ferritin50-peg6k", range(258, 276), {}, 5.0),
+    (
+        "s289",
+        "ferritin50-peg6k",
+        range(289, 308),
+        {
+            289: "attenuator 0.041, no flux correction",
+            307: "attenuator 0.0047, no flux correction",
+        },
+        5.0,
+    ),
+    ("s308", "ferritin50", range(308, 338), {}, 0.0),
     (
         "s338",
         "ferritin50",
@@ -83,6 +106,9 @@ DROPLETS = [
     ("s477", "ferritin50-peg6k", range(477, 487), {}, 5.0),
     ("s487", "ferritin50-peg6k", range(487, 497), {}, 5.0),
 ]
+# probed by SSHEX mesh scans (s308's last two runs, r336-337, are static; the notebook
+# keeps every train of a static run)
+MESH_DROPLETS = {"s240", "s258", "s289", "s308"}
 # figure titles; they are set in LaTeX, where an unescaped % starts a comment
 CONDITIONS = {
     "ferritin50": "ferritin 50 mg/ml, no PEG",
@@ -200,6 +226,7 @@ def run_one(droplet):
         "PLOT_RUNS": None,
         "FERRITIN_MG_PER_ML": 50.0,
         "PEG_PERCENT_WV": peg,
+        "MESH_SCAN": droplet_id in MESH_DROPLETS,
         "FIGURES_ROOT": str(FIGURES),
     }
     script = out / f"damnit_saxs_{droplet_id}.py"
@@ -221,19 +248,35 @@ def run_one(droplet):
         "runs": kept_runs(droplet),
         "excluded": {str(r): why for r, why in excluded.items()},
         "peg_percent_wv": peg,
+        "mesh_scan": droplet_id in MESH_DROPLETS,
         "status": "ok" if result.returncode == 0 and fresh else "FAILED",
         "seconds": round(time.perf_counter() - started, 1),
     }
 
 
-def load_curves(sample=None):
-    "(droplet id, sample, curves.nc) of every droplet made so far, or of `sample`'s."
+def groups():
+    "The (sample, mesh) pairs that get overviews of their own, in CONDITIONS order."
+    present = {(d[1], d[0] in MESH_DROPLETS) for d in DROPLETS}
+    return [(s, m) for s in CONDITIONS for m in (False, True) if (s, m) in present]
+
+
+def group_suffix(mesh):
+    return "_mesh" if mesh else ""
+
+
+def group_title(sample, mesh):
+    return CONDITIONS[sample] + (", mesh scans (hit trains)" if mesh else "")
+
+
+def load_curves(sample, mesh):
+    "(droplet id, curves.nc) of every droplet of `sample` and `mesh` made so far."
     import xarray as xr
 
     return [
-        (droplet[0], droplet[1], xr.load_dataset(folder(droplet) / "curves.nc"))
+        (droplet[0], xr.load_dataset(folder(droplet) / "curves.nc"))
         for droplet in DROPLETS
-        if (sample is None or droplet[1] == sample)
+        if droplet[1] == sample
+        and (droplet[0] in MESH_DROPLETS) == mesh
         and (folder(droplet) / "curves.nc").exists()
     ]
 
@@ -248,9 +291,9 @@ def q_axis(ax):
     ax.xaxis.set_minor_formatter(NullFormatter())
 
 
-def overview(sample):
-    """One figure per normalisation: a panel per droplet of `sample`, shared axes and
-    t/t* colour scale. Returns the files written."""
+def overview(sample, mesh):
+    """One figure per normalisation: a panel per droplet of `sample` (mesh or static),
+    shared axes and t/t* colour scale. Returns the files written."""
     import matplotlib
 
     matplotlib.use("Agg")
@@ -259,7 +302,7 @@ def overview(sample):
     import scienceplots  # noqa: F401  (registers the notebook's "science" style)
 
     plt.style.use("science")
-    data = [(droplet_id, ds) for droplet_id, _, ds in load_curves(sample)]
+    data = load_curves(sample, mesh)
     if not data:
         return []
     norm = matplotlib.colors.Normalize(
@@ -317,8 +360,8 @@ def overview(sample):
             label="$t/t^*$",
             shrink=0.9,
         )
-        fig.suptitle(CONDITIONS[sample])
-        name = f"saxs_{sample}_norm.png" if normalise else f"saxs_{sample}.png"
+        fig.suptitle(group_title(sample, mesh))
+        name = f"saxs_{sample}{group_suffix(mesh)}{'_norm' if normalise else ''}.png"
         (FIGURES / "overview").mkdir(parents=True, exist_ok=True)
         fig.savefig(FIGURES / "overview" / name, dpi=200, bbox_inches="tight")
         plt.close(fig)
@@ -361,10 +404,11 @@ def match_block(ds, target):
     return k, entry
 
 
-def matched(sample):
-    """`sample`'s droplets side by side at matched t/t*: a panel per MATCH_T, a line
-    per droplet in its own colour, normalised to the mean over q 0.80-0.95. Returns
-    the file written and, per panel and droplet, the block shown or why none."""
+def matched(sample, mesh):
+    """`sample`'s droplets (mesh or static) side by side at matched t/t*: a panel per
+    MATCH_T, a line per droplet in its own colour, normalised to the mean over q
+    0.80-0.95. Returns the file written and, per panel and droplet, the block shown or
+    why none."""
     import matplotlib
 
     matplotlib.use("Agg")
@@ -372,9 +416,14 @@ def matched(sample):
     import scienceplots  # noqa: F401  (registers the notebook's "science" style)
 
     plt.style.use("science")
-    data = [(droplet_id, ds) for droplet_id, _, ds in load_curves(sample)]
+    data = load_curves(sample, mesh)
     if not data:
         return None, []
+    if len(data) > len(DROPLET_COLOURS):
+        raise ValueError(
+            f"{len(data)} droplets in {group_title(sample, mesh)!r}, "
+            f"only {len(DROPLET_COLOURS)} colours"
+        )
     ncols = 3
     nrows = math.ceil(len(MATCH_T) / ncols)
     fig, axs = plt.subplots(
@@ -391,7 +440,7 @@ def matched(sample):
         concentrations = []
         for (droplet_id, ds), colour in zip(data, DROPLET_COLOURS, strict=False):
             k, entry = match_block(ds, target)
-            record.append({"sample": sample} | entry)
+            record.append({"sample": sample, "mesh_scan": mesh} | entry)
             if k is None:
                 continue
             iq = ds.intensity[k]
@@ -424,23 +473,23 @@ def matched(sample):
         frameon=False,
     )
     fig.suptitle(
-        f"{CONDITIONS[sample]} at matched $t/t^*$ (nearest block within "
+        f"{group_title(sample, mesh)} at matched $t/t^*$ (nearest block within "
         f"$\\pm${MATCH_TOLERANCE:g}; ferritin range per panel)"
     )
     out = FIGURES / "overview"
     out.mkdir(parents=True, exist_ok=True)
-    name = f"saxs_matched_tstar_{sample}_norm.png"
+    name = f"saxs_matched_tstar_{sample}{group_suffix(mesh)}_norm.png"
     fig.savefig(out / name, dpi=200, bbox_inches="tight")
     plt.close(fig)
     return name, record
 
 
 def matched_all():
-    "matched() for every condition, and the blocks they showed as one JSON."
+    "matched() for every condition, mesh and static apart; their blocks in one JSON."
     written = []
     record = []
-    for sample in CONDITIONS:
-        name, blocks = matched(sample)
+    for sample, mesh in groups():
+        name, blocks = matched(sample, mesh)
         if name:
             written.append(name)
             record += blocks
@@ -502,8 +551,8 @@ def main(argv=None):
         index.write_text(
             json.dumps(sorted(merged.values(), key=lambda r: r["id"]), indent=1)
         )
-    for sample in CONDITIONS:
-        for name in overview(sample):
+    for sample, mesh in groups():
+        for name in overview(sample, mesh):
             print(f"overview: figures/overview/{name}", flush=True)
     for name in matched_all():
         print(f"matched t/t*: figures/overview/{name}", flush=True)
