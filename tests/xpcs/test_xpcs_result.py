@@ -8,6 +8,7 @@ import h5py
 import numpy as np
 import pytest
 from xpcs_fakes import (
+    InlinePool,
     build_results,
     es_chain,
     load_extra_speckle_module,
@@ -22,6 +23,7 @@ from analysis.xpcs.config import Kernel
 from analysis.xpcs.kernel import PairStatus, train_sums
 from analysis.xpcs.result import (
     BASE_CLOCK_HZ,
+    CHUNK,
     Averaging,
     NonUniformPattern,
     RepRateMismatch,
@@ -515,3 +517,75 @@ def test_read_finds_a_runs_file_under_the_output_root(results, tmp_path):
     again = read(10400, 423, output_root=tmp_path / "root", rep_rate_mhz=2.26)
     assert again.train_ids.tolist() == results.train_ids.tolist()
     assert again.rep_rate_mhz == 2.26
+
+
+def assert_same_datasets(a, b, **tolerance):
+    assert set(a.data_vars) == set(b.data_vars) and a.attrs == b.attrs
+    for name in a.data_vars:
+        if tolerance:
+            np.testing.assert_allclose(a[name].values, b[name].values, **tolerance)
+        else:
+            np.testing.assert_array_equal(a[name].values, b[name].values)
+        for coord in a[name].coords:
+            np.testing.assert_array_equal(a[coord].values, b[coord].values)
+
+
+@pytest.mark.parametrize("binned", [True, False])
+def test_g2_and_ttcf_from_precomputed_sums_are_those_read_on_their_own(
+    long_world, binned
+):
+    hits, _, _ = long_world
+    sums = hits.pooled_sums()
+    assert_same_datasets(hits.g2(binned=binned, sums=sums), hits.g2(binned=binned))
+    assert_same_datasets(hits.ttcf(sums=sums), hits.ttcf())
+
+
+def test_precomputed_sums_are_refused_with_trains_or_for_extra_speckles_average(
+    results,
+):
+    sums = results.pooled_sums()
+    some = results.train_ids[:2]
+    with pytest.raises(ValueError, match="not both"):
+        results.g2(trains=some, sums=sums)
+    with pytest.raises(ValueError, match="not both"):
+        results.ttcf(trains=some, sums=sums)
+    with pytest.raises(ValueError, match="pooled"):
+        results.g2(Averaging.ES, sums=sums)
+    with pytest.raises(ValueError, match="pooled"):
+        results.ttcf(Averaging.ES, sums=sums)
+
+
+@pytest.fixture
+def many_rows(tmp_path):
+    """More than two read chunks of rows, so a pool gets several slabs."""
+    rng = np.random.default_rng(8)
+    rings = make_rings(rng, 120, 2)
+    photons = [
+        make_train(t, make_dense(rng, 12, 120, 0.2), make_flags(rng, 12, 120))
+        for t in range(1000, 1000 + 2 * CHUNK + 5)
+    ]
+    return build_results(tmp_path / "many.h5", photons, rings)
+
+
+def test_sums_read_by_a_pool_of_slabs_pool_to_the_serial_ones(many_rows):
+    pools = []
+
+    def factory(n_workers):
+        pools.append(n_workers)
+        return InlinePool(n_workers)
+
+    serial = many_rows.pooled_sums()
+    parallel = many_rows.pooled_sums(n_workers=3, pool_factory=factory)
+    assert pools == [3]
+    for name in ("rows", "has_off", "on", "den_on", "off", "den_off"):
+        np.testing.assert_array_equal(getattr(parallel, name), getattr(serial, name))
+    for name in ("raw_num", "pair_num", "off_num"):  # integer counts: exact
+        np.testing.assert_array_equal(getattr(parallel, name), getattr(serial, name))
+    for name in ("raw_den", "pair_den", "off_den"):
+        np.testing.assert_allclose(
+            getattr(parallel, name), getattr(serial, name), rtol=1e-12
+        )
+    assert_same_datasets(many_rows.g2(sums=parallel), many_rows.g2(sums=serial))
+    assert_same_datasets(
+        many_rows.ttcf(sums=parallel), many_rows.ttcf(sums=serial), rtol=1e-12
+    )

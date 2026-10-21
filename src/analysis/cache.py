@@ -527,6 +527,7 @@ def xpcs_run(
     raw=None,
     cache_dir=DEFAULT_CACHE_DIR,
     refresh: bool = False,
+    n_workers: int | None = None,
 ) -> xr.Dataset:
     """XPCS g2 and two-time maps of one run's hit trains with their scaling, cached.
 
@@ -550,12 +551,15 @@ def xpcs_run(
     carry the results file's ``schema``, ``merge_hash``, ``hits_sha256`` and
     ``hits_source``, the ``coverage`` text and ``period_s``. The keyword arguments are
     part of the cache key, and the file's size and mtime are a source, so a rewritten
-    results file rebuilds the cache.
+    results file rebuilds the cache. `n_workers` is not: it is the processes that
+    read the pooled sums (once, for both g2 and the maps), ``None`` for the physical
+    cores up to 16, and changes no value beyond the float grouping of the maps' sums.
 
     :raises FileNotFoundError: no results file.
     :raises IncompleteRun: a hit train is still unfinished.
     :raises ValueError: `averaging` is unknown, or no hit train is usable.
     """
+    from analysis.common.cpu import physical_cores
     from analysis.common.status import UNFINISHED
     from analysis.common.writer import IncompleteRun
     from analysis.xpcs.damnit import result_file
@@ -601,8 +605,15 @@ def xpcs_run(
         return cached
 
     mode = Averaging(averaging)
-    g2 = hits.g2(mode, binned=binned)
-    ttcf = hits.ttcf(mode)
+    if mode is Averaging.POOLED:
+        if n_workers is None:
+            n_workers = min(physical_cores() or 1, 16)
+        sums = hits.pooled_sums(n_workers=n_workers)
+        g2 = hits.g2(mode, binned=binned, sums=sums)
+        ttcf = hits.ttcf(mode, sums=sums)
+    else:
+        g2 = hits.g2(mode, binned=binned)
+        ttcf = hits.ttcf(mode)
     ds = xr.merge(
         [g2, ttcf.rename({v: f"ttcf_{v}" for v in ttcf.data_vars})],
         join="outer",
