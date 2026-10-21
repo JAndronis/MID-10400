@@ -130,6 +130,67 @@ def _pulse_mean(grid: xr.Dataset) -> tuple[xr.DataArray, xr.DataArray]:
     return xr.concat(means, "trainId"), xr.concat(counts, "trainId")
 
 
+def _composition(
+    ferritin_mg_per_ml_initial: float,
+    peg_percent_wv_initial: float,
+    nacl_mM_initial: float,
+    n_fe: float,
+) -> dict:
+    """The `droplet_scaling` composition arguments, one canonical type each."""
+    return {
+        "ferritin_mg_per_ml_initial": float(ferritin_mg_per_ml_initial),
+        "peg_percent_wv_initial": float(peg_percent_wv_initial),
+        "nacl_mM_initial": float(nacl_mM_initial),
+        "n_fe": float(n_fe),
+    }
+
+
+def _add_droplet(
+    ds: xr.Dataset,
+    tids,
+    run_nr: int,
+    db,
+    raw,
+    proposal: int,
+    n_pulses: int,
+    v0_run: int,
+    composition: dict,
+) -> dict:
+    """Add ``time``, the `droplet_scaling` fields and ``droplet_*`` to `ds`.
+
+    Everything is reindexed onto `tids` by label. `raw` is opened when None. Returns
+    the attributes that describe them: ``v0_mm3`` and ``droplet_pixel_size_um``.
+    """
+    if raw is None:
+        raw = utils.ex.open_run(proposal, run_nr, data="raw")
+    scaling = utils.droplet_scaling(
+        run_nr,
+        db,
+        proposal=proposal,
+        n_pulses=n_pulses,
+        v0_run=v0_run,
+        raw=raw,
+        **composition,
+    )
+    fit = xr.open_dataset(db[run_nr].file, group="droplet_fit")
+    ds["time"] = _train_times(raw).reindex(trainId=tids)
+    for name in scaling.data_vars:
+        ds[name] = scaling[name].reindex(trainId=tids)
+    ds["scale"].attrs["description"] = "1/(flux*path_mm); stored, not applied"
+    for name in ("volume", "radius", "center", "phi"):
+        if name in fit:
+            var = fit[name].reindex(trainId=tids)
+            ds[f"droplet_{name}"] = (
+                var.rename({"dim": "axis"}) if "dim" in var.dims else var
+            )
+    return {
+        "v0_mm3": scaling.attrs["v0_mm3"],
+        "droplet_pixel_size_um": fit.attrs.get(
+            "pixel_size_um", utils.DROPLET_PX_MM * 1e3
+        ),
+    }
+
+
 def saxs_run(
     run_nr: int,
     db,
@@ -171,12 +232,9 @@ def saxs_run(
     # one canonical type per input, so 0 and 0.0 name the same cache file
     run_nr, n_pulses, proposal = int(run_nr), int(n_pulses), int(proposal)
     v0_run = run_nr if v0_run is None else int(v0_run)
-    composition = {
-        "ferritin_mg_per_ml_initial": float(ferritin_mg_per_ml_initial),
-        "peg_percent_wv_initial": float(peg_percent_wv_initial),
-        "nacl_mM_initial": float(nacl_mM_initial),
-        "n_fe": float(n_fe),
-    }
+    composition = _composition(
+        ferritin_mg_per_ml_initial, peg_percent_wv_initial, nacl_mM_initial, n_fe
+    )
     inputs = {
         "kind": "saxs_run",
         "proposal": proposal,
@@ -202,19 +260,6 @@ def saxs_run(
     intensity, n_with_frames = _pulse_mean(grid.sel(pulseId=pulses[:n_pulses]))
     tids = intensity.trainId
 
-    if raw is None:
-        raw = utils.ex.open_run(proposal, run_nr, data="raw")
-    scaling = utils.droplet_scaling(
-        run_nr,
-        db,
-        proposal=proposal,
-        n_pulses=n_pulses,
-        v0_run=v0_run,
-        raw=raw,
-        **composition,
-    )
-    fit = xr.open_dataset(db[run_nr].file, group="droplet_fit")
-
     ds = xr.Dataset(
         {
             "intensity": intensity.assign_attrs(
@@ -225,24 +270,16 @@ def saxs_run(
                 )
             ),
             "n_pulses_with_frames": n_with_frames.astype(np.int16),
-            "time": _train_times(raw).reindex(trainId=tids),
         }
     )
-    for name in scaling.data_vars:
-        ds[name] = scaling[name].reindex(trainId=tids)
-    ds["scale"].attrs["description"] = "1/(flux*path_mm); stored, not applied"
-    for name in ("volume", "radius", "center", "phi"):
-        if name in fit:
-            var = fit[name].reindex(trainId=tids)
-            ds[f"droplet_{name}"] = (
-                var.rename({"dim": "axis"}) if "dim" in var.dims else var
-            )
+    droplet = _add_droplet(
+        ds, tids, run_nr, db, raw, proposal, n_pulses, v0_run, composition
+    )
     ds.attrs.update(
         _attrs(inputs, sources, "per-train SAXS inputs; see analysis.cache.saxs_run"),
         run=run_nr,
         v0_run=v0_run,
-        v0_mm3=scaling.attrs["v0_mm3"],
-        droplet_pixel_size_um=fit.attrs.get("pixel_size_um", utils.DROPLET_PX_MM * 1e3),
+        **droplet,
     )
     _write(ds, path)
     return ds
@@ -395,12 +432,9 @@ def waxs_run(
     v0_run = run_nr if v0_run is None else int(v0_run)
     if method not in METHODS:
         raise ValueError(f"method must be one of {METHODS}, got {method!r}")
-    composition = {
-        "ferritin_mg_per_ml_initial": float(ferritin_mg_per_ml_initial),
-        "peg_percent_wv_initial": float(peg_percent_wv_initial),
-        "nacl_mM_initial": float(nacl_mM_initial),
-        "n_fe": float(n_fe),
-    }
+    composition = _composition(
+        ferritin_mg_per_ml_initial, peg_percent_wv_initial, nacl_mM_initial, n_fe
+    )
     inputs = {
         "kind": "waxs_run",
         "proposal": proposal,
@@ -427,21 +461,9 @@ def waxs_run(
         counts.append(n_cells)
     unit = require_same_units(*units) if combine else None
 
-    if raw is None:
-        raw = utils.ex.open_run(proposal, run_nr, data="raw")
-    scaling = utils.droplet_scaling(
-        run_nr,
-        db,
-        proposal=proposal,
-        n_pulses=n_pulses,
-        v0_run=v0_run,
-        raw=raw,
-        **composition,
-    )
-    fit = xr.open_dataset(db[run_nr].file, group="droplet_fit")
     tids = means[0].trainId
 
-    ds = xr.Dataset({"time": _train_times(raw).reindex(trainId=tids)})
+    ds = xr.Dataset()
     attrs = {}
     if combine:
         # the run-mean curves exactly as DAMNIT's combined column takes them
@@ -469,21 +491,14 @@ def waxs_run(
             ds[f"n_cells_with_frames_jf{i}"] = c.astype(np.int16)
         attrs = {"units_jf1": units[0], "units_jf2": units[1]}
 
-    for name in scaling.data_vars:
-        ds[name] = scaling[name].reindex(trainId=tids)
-    ds["scale"].attrs["description"] = "1/(flux*path_mm); stored, not applied"
-    for name in ("volume", "radius", "center", "phi"):
-        if name in fit:
-            var = fit[name].reindex(trainId=tids)
-            ds[f"droplet_{name}"] = (
-                var.rename({"dim": "axis"}) if "dim" in var.dims else var
-            )
+    droplet = _add_droplet(
+        ds, tids, run_nr, db, raw, proposal, n_pulses, v0_run, composition
+    )
     ds.attrs.update(
         _attrs(inputs, sources, "per-train WAXS inputs; see analysis.cache.waxs_run"),
         run=run_nr,
         v0_run=v0_run,
-        v0_mm3=scaling.attrs["v0_mm3"],
-        droplet_pixel_size_um=fit.attrs.get("pixel_size_um", utils.DROPLET_PX_MM * 1e3),
+        **droplet,
         **attrs,
     )
     _write(ds, path)
