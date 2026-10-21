@@ -20,7 +20,7 @@ import json
 import logging
 import os
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -31,6 +31,7 @@ import numpy as np
 import xarray as xr
 
 from analysis.common.complete import Completeness
+from analysis.common.cpu import default_pool
 from analysis.common.plan import Block
 from analysis.common.readback import UnreadableOutput, sync, unreadable
 from analysis.common.status import UNFINISHED, FrameStatus
@@ -487,6 +488,28 @@ def _diagonal_sums(matrix: np.ndarray, lags: np.ndarray, both: bool = False):
     )
 
 
+def _pooled_slab(path: Path, rows: np.ndarray) -> PooledSums:
+    """A pool worker's share: the pooled sums of contiguous ``rows``."""
+    return XpcsHits(path)._sums_of(rows)
+
+
+def _merge(slabs: list[PooledSums]) -> PooledSums:
+    """Slabs in row order as one: maps summed in that order, lag terms stacked."""
+    first = slabs[0]
+    maps = {
+        name: getattr(first, name).copy()
+        for name in ("raw_num", "raw_den", "pair_num", "pair_den", "off_num", "off_den")
+    }
+    for slab in slabs[1:]:
+        for name, total in maps.items():
+            total += getattr(slab, name)
+    stacked = {
+        name: np.concatenate([getattr(slab, name) for slab in slabs])
+        for name in ("rows", "has_off", "on", "den_on", "off", "den_off")
+    }
+    return PooledSums(**maps, **stacked)
+
+
 def _check_sums(averaging: Averaging, trains, sums: PooledSums | None) -> None:
     if sums is None:
         return
@@ -655,9 +678,31 @@ class XpcsHits:
                 )
 
     # ── pooled maps ──────────────────────────────────────────────────────────
-    def pooled_sums(self, trains: np.ndarray | None = None) -> PooledSums:
-        """Everything the pooled ``g2`` and ``ttcf`` need, in one read of the sums."""
-        return self._sums_of(self._rows(trains))
+    def pooled_sums(
+        self,
+        trains: np.ndarray | None = None,
+        n_workers: int = 1,
+        pool_factory: Callable[..., Any] | None = None,
+    ) -> PooledSums:
+        """Everything the pooled ``g2`` and ``ttcf`` need, in one read of the sums.
+
+        With ``n_workers > 1`` contiguous slabs of rows go to a pool and are
+        merged in row order: the lag terms are the serial ones, the summed maps
+        differ from them by float grouping only.
+
+        :param pool_factory: builds the executor (spawned processes by default);
+            the tests inject an inline one.
+        """
+        rows = self._rows(trains)
+        n_chunks = -(-rows.size // CHUNK)
+        if n_workers <= 1 or n_chunks <= 1:
+            return self._sums_of(rows)
+        size = -(-n_chunks // n_workers) * CHUNK
+        slabs = [rows[start : start + size] for start in range(0, rows.size, size)]
+        factory = pool_factory or default_pool
+        with factory(len(slabs)) as pool:
+            futures = [pool.submit(_pooled_slab, self.path, slab) for slab in slabs]
+            return _merge([future.result() for future in futures])
 
     def _sums_of(self, rows: np.ndarray) -> PooledSums:
         shape = (self.n_rings, self.n_frames, self.n_frames)

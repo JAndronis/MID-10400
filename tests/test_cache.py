@@ -697,6 +697,15 @@ def test_g2_and_the_two_time_maps_are_the_readers_own(xpcs, averaging):
     assert ds.attrs["coverage"] == str(hits.coverage())
 
 
+def test_the_worker_count_is_not_part_of_the_cache_key(xpcs):
+    cache.xpcs_run(1, xpcs["db"], n_workers=1, **xpcs["kw"])
+    (written,) = xpcs["dir"].glob("*.nc")
+    stamp = written.stat().st_mtime_ns
+    cache.xpcs_run(1, xpcs["db"], n_workers=4, **xpcs["kw"])
+    assert list(xpcs["dir"].glob("*.nc")) == [written]
+    assert written.stat().st_mtime_ns == stamp
+
+
 def test_the_pooled_lag_axis_is_stored(xpcs):
     ds = cache.xpcs_run(1, xpcs["db"], **xpcs["kw"])
 
