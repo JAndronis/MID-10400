@@ -4,9 +4,10 @@ Only what the sources hold is stored, reduced by averaging or summing over frame
 nothing else. The pulse-averaged I(q) is DAMNIT's ``agipd_saxs`` grid, neither scaled
 nor background subtracted; the droplet scale factors, the droplet fit and the D^2-law
 fit sit beside it as variables and attributes and are never applied; the 2D detector
-sums are photon counts per pixel with no mask beyond the frame's own. Subtraction,
-normalisation and every other operation belong in the notebook or script that loads
-the cache.
+sums are photon counts per pixel with no mask beyond the frame's own; the XPCS g2 and
+two-time maps are the hit-train results file's own pooled estimates, with every hit
+train listed beside them. Subtraction, normalisation and every other operation
+belong in the notebook or script that loads the cache.
 
 A cache file is rebuilt when its inputs, the DAMNIT files it was read from or
 `CACHE_VERSION` change, and on ``refresh=True``. Files are written under a temporary
@@ -36,6 +37,7 @@ __all__ = [
     "droplet_timeline",
     "saxs_run",
     "waxs_run",
+    "xpcs_run",
 ]
 
 DEFAULT_CACHE_DIR = Path("/gpfs/exfel/exp/MID/202601/p010400/scratch/saxs_cache")
@@ -503,6 +505,149 @@ def waxs_run(
     )
     _write(ds, path)
     return ds if combine else _split(ds)
+
+
+XPCS_AVERAGINGS = ("pooled", "es")
+
+
+def xpcs_run(
+    run_nr: int,
+    db,
+    *,
+    averaging: str = "pooled",
+    binned: bool = True,
+    v0_run: int | None = None,
+    n_pulses: int = 155,
+    ferritin_mg_per_ml_initial: float = 50.0,
+    peg_percent_wv_initial: float = 5.0,
+    nacl_mM_initial: float = 150.0,
+    n_fe: float = 1800.0,
+    proposal: int = 10400,
+    results_file=None,
+    raw=None,
+    cache_dir=DEFAULT_CACHE_DIR,
+    refresh: bool = False,
+) -> xr.Dataset:
+    """XPCS g2 and two-time maps of one run's hit trains with their scaling, cached.
+
+    Reads the hit-train results file (`analysis.xpcs.result.XpcsHits`), whose pooled
+    two-time maps need every hit's ``(rings, P, P)`` cube, so a notebook loads this
+    instead. Three families of variables share the ``roi_q`` axis:
+
+    ``g2``, ``sigma_g2``, ``g2_paired``, ``baseline``, ``c2``, ``sigma``, (roi_q, tau)
+        `XpcsHits.g2` with its ``lag`` coordinate on ``tau``. With ``averaging="es"``
+        only ``g2``, and a ring extra-speckle's noisy-ring rule leaves out is NaN.
+    ``ttcf_raw``, ``ttcf_off``, ``ttcf_c2`` (``ttcf_raw_paired`` pooled) over
+    (roi_q, frame_1, frame_2)
+        `XpcsHits.ttcf`, prefixed because its ``c2`` is not g2's.
+    per hit train, labelled by trainId, every hit including the unusable ones
+        ``status`` (`FrameStatus`), ``pair_status``, ``partner`` (trainId, 0 none),
+        ``has_off``, ``kbar`` over (trainId, frame, roi_q), NaN for a train without
+        sums, ``time``, the `analysis.utils.droplet_scaling` fields and ``droplet_*``
+        as in `saxs_run`, stored, never applied.
+
+    ``ring_bounds_nm`` holds the ring edges when the file has them. The attributes
+    carry the results file's ``schema``, ``merge_hash``, ``hits_sha256`` and
+    ``hits_source``, the ``coverage`` text and ``period_s``. The keyword arguments are
+    part of the cache key, and the file's size and mtime are a source, so a rewritten
+    results file rebuilds the cache.
+
+    :raises FileNotFoundError: no results file.
+    :raises IncompleteRun: a hit train is still unfinished.
+    :raises ValueError: `averaging` is unknown, or no hit train is usable.
+    """
+    from analysis.common.status import UNFINISHED
+    from analysis.common.writer import IncompleteRun
+    from analysis.xpcs.damnit import result_file
+    from analysis.xpcs.result import Averaging, XpcsHits
+
+    if averaging not in XPCS_AVERAGINGS:
+        raise ValueError(
+            f"averaging must be one of {XPCS_AVERAGINGS}, got {averaging!r}"
+        )
+    run_nr, n_pulses, proposal = int(run_nr), int(n_pulses), int(proposal)
+    v0_run = run_nr if v0_run is None else int(v0_run)
+    results_file = Path(
+        result_file(proposal, run_nr) if results_file is None else results_file
+    )
+    if not results_file.exists():
+        raise FileNotFoundError(f"no XPCS results for r{run_nr} at {results_file}")
+    hits = XpcsHits(results_file)
+    if not hits.train_ids.size:
+        raise ValueError(f"r{run_nr}: the results file has no hit train")
+    unfinished = np.isin(hits.status, [int(code) for code in UNFINISHED])
+    if unfinished.any():
+        raise IncompleteRun(f"{int(unfinished.sum())} hit trains are unfinished")
+    if not hits.usable.any():
+        raise ValueError(f"r{run_nr}: no usable hit train ({hits.coverage()})")
+
+    composition = _composition(
+        ferritin_mg_per_ml_initial, peg_percent_wv_initial, nacl_mM_initial, n_fe
+    )
+    inputs = {
+        "kind": "xpcs_run",
+        "proposal": proposal,
+        "run": run_nr,
+        "v0_run": v0_run,
+        "n_pulses": n_pulses,
+        "averaging": averaging,
+        "binned": bool(binned),
+        **composition,
+    }
+    sources = [_source(results_file)]
+    sources += [_source(db[r].file) for r in sorted({run_nr, v0_run})]
+    path = _cache_path(cache_dir, f"xpcs_r{run_nr:04d}_{averaging}", inputs)
+    if not refresh and (cached := _load(path, inputs, sources)) is not None:
+        return cached
+
+    mode = Averaging(averaging)
+    g2 = hits.g2(mode, binned=binned)
+    ttcf = hits.ttcf(mode)
+    ds = xr.merge(
+        [g2, ttcf.rename({v: f"ttcf_{v}" for v in ttcf.data_vars})],
+        join="outer",
+        combine_attrs="drop",
+    )
+
+    tids = hits.train_ids
+    by_train = {
+        "status": hits.status.astype(np.uint8),
+        "pair_status": hits.pair_status.astype(np.uint8),
+        "partner": hits.partner_ids,
+        "has_off": hits.has_off,
+    }
+    for name, values in by_train.items():
+        ds[name] = xr.DataArray(
+            values, dims="trainId", coords={"trainId": tids}, name=name
+        )
+    ds["kbar"] = hits.kbar().reindex(trainId=tids)
+    if len(hits.bounds_nm):
+        ds["ring_bounds_nm"] = (("roi_q", "edge"), hits.bounds_nm)
+    droplet = _add_droplet(
+        ds, tids, run_nr, db, raw, proposal, n_pulses, v0_run, composition
+    )
+
+    identity = {
+        k: (v.item() if isinstance(v, np.generic) else str(v))
+        for k in ("schema", "merge_hash", "hits_sha256", "hits_source")
+        if (v := hits.attrs.get(k)) is not None
+    }
+    ds.attrs.update(
+        _attrs(inputs, sources, "XPCS hit-train results; see analysis.cache.xpcs_run"),
+        run=run_nr,
+        v0_run=v0_run,
+        averaging=averaging,
+        binned=int(g2.attrs.get("binned", 0)),
+        n_trains=ttcf.attrs["n_trains"],
+        n_with_baseline=ttcf.attrs["n_with_baseline"],
+        coverage=str(hits.coverage()),
+        results_file=str(results_file),
+        **({"period_s": g2.attrs["period_s"]} if "period_s" in g2.attrs else {}),
+        **identity,
+        **droplet,
+    )
+    _write(ds, path)
+    return ds
 
 
 def droplet_timeline(
