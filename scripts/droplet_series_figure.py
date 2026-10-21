@@ -8,7 +8,8 @@ Nothing here subtracts or scales. The curves are the droplet's ``curves.nc``, wh
 ``notebooks/damnit_saxs.ipynb`` writes (via ``scripts/damnit_saxs_figures.py``): each
 the buffer-subtracted I(q) per flux*path of N_AVG consecutive complete trains, with
 the buffer matched at the same t/t*. Make or refresh it there first. This script
-picks the curves nearest the requested t/t*, normalises them the way the notebook's
+picks the curves nearest the requested t/t* (by default the six points of the
+CoSAXS figure, COSAXS_TAU), normalises them the way the notebook's
 NORMALISE does (mean over q 0.80-0.95) and cuts each below its own q_min.
 
 Panel (a) is `analysis.cache.droplet_timeline` over the droplet's runs, as the
@@ -40,18 +41,21 @@ CAMERA_ROI = np.s_[80:230, 200:400]
 # the notebook's NORMALISE window and plotted q range (damnit_saxs.ipynb)
 NORM_Q = (0.80, 0.95)
 Q_RANGE = (0.2, 1.0)
+# The six points of the CoSAXS figure (JPCL manuscript, Fig. 1a: 50 mg/ml ferritin,
+# 3 w/v % PEG 6000), read off the plot at t = 276, 550, 711, 984, 1158 and 1401 s and
+# divided by its t* = 1100 s ("a turning point at 1100 s", main.tex), t = 0 at
+# injection.
+COSAXS_TAU = (0.25, 0.50, 0.65, 0.89, 1.05, 1.27)
 
 
-def pick_curves(curves, taus, n):
-    """Indices of the curves nearest `taus`, or `n` spread over t/t*, in time order."""
+def pick_curves(curves, taus):
+    """Index of the curve nearest each of `taus`, printing how far each one is."""
     tau = curves.t_over_tstar.values
-    if taus is None:
-        taus = np.linspace(tau.min(), tau.max(), n)
-    picked = sorted(
-        {int(np.argmin(np.abs(tau - t))) for t in taus}, key=lambda i: tau[i]
-    )
-    if len(picked) < len(taus):
-        print(f"note: {len(taus) - len(picked)} requested t/t* shared a nearest curve")
+    picked = [int(np.argmin(np.abs(tau - t))) for t in taus]
+    for target, i in zip(taus, picked, strict=True):
+        print(f"t/t* {target:.2f}: curve at {tau[i]:.3f} (run {int(curves.run[i])})")
+    if len(set(picked)) < len(picked):
+        print("note: some requested t/t* share a nearest curve")
     return picked
 
 
@@ -141,8 +145,13 @@ def draw(tl, curves, picked, images, offset, destination):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("droplet", help="series id from damnit_saxs_figures, e.g. s443")
-    parser.add_argument("--tau", type=float, nargs="+", help="t/t* of the markers")
-    parser.add_argument("--n-markers", type=int, default=6, help="if --tau is absent")
+    parser.add_argument(
+        "--tau",
+        type=float,
+        nargs="+",
+        default=COSAXS_TAU,
+        help="t/t* of the markers; default the CoSAXS figure's points",
+    )
     parser.add_argument("--n-insets", type=int, default=4, help="CAM5 insets, first N")
     parser.add_argument("--offset", type=float, default=10.0, help="factor per curve")
     args = parser.parse_args(argv)
@@ -175,7 +184,7 @@ def main(argv=None):
             f"curves' ({curves.attrs['t_star_s']:.1f} s): remake curves.nc"
         )
 
-    picked = pick_curves(curves, args.tau, args.n_markers)
+    picked = pick_curves(curves, args.tau)
     images = [
         camera_frame(int(curves.run[i]), int(curves.first_trainId[i]))
         for i in picked[: args.n_insets]
@@ -186,11 +195,12 @@ def main(argv=None):
         {
             "run": int(curves.run[i]),
             "first_trainId": int(curves.first_trainId[i]),
+            "requested_t_over_tstar": target,
             "t_over_tstar": float(curves.t_over_tstar[i]),
             "q_min": float(curves.q_min[i]),
             "inset": k < args.n_insets,
         }
-        for k, i in enumerate(picked)
+        for k, (target, i) in enumerate(zip(args.tau, picked, strict=True))
     ]
     destination.with_suffix(".json").write_text(
         json.dumps(
