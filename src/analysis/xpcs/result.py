@@ -48,6 +48,7 @@ __all__ = [
     "Averaging",
     "Coverage",
     "NonUniformPattern",
+    "PooledSums",
     "Prelude",
     "RepRateMismatch",
     "ResultWriter",
@@ -446,6 +447,55 @@ class Coverage:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class PooledSums:
+    """What one read of the sums yields for the pooled g2 and two-time maps.
+
+    ``rows`` are the usable rows read, ascending, and ``has_off`` theirs. The
+    ``*_num`` / ``*_den`` maps are ``(R, P, P)``: ``raw`` over every row, ``pair``
+    and ``off`` over the rows with a baseline (``off`` not yet symmetrised). The
+    lag terms ``on, den_on, off, den_off`` are per row, ``(n, R, P − 1)``
+    over the lags ``1 … P − 1``; the baseline ones sum both diagonals and are zero
+    for a row without a baseline.
+    """
+
+    rows: np.ndarray
+    has_off: np.ndarray
+    raw_num: np.ndarray
+    raw_den: np.ndarray
+    pair_num: np.ndarray
+    pair_den: np.ndarray
+    off_num: np.ndarray
+    off_den: np.ndarray
+    on: np.ndarray
+    den_on: np.ndarray
+    off: np.ndarray
+    den_off: np.ndarray
+
+
+def _diagonal_sums(matrix: np.ndarray, lags: np.ndarray, both: bool = False):
+    """Sum of each ``lags`` diagonal over the last axis pair (and of ``−lag``)."""
+    if lags.size == 0:
+        return np.zeros((*matrix.shape[:-2], 0))
+    return np.stack(
+        [
+            np.diagonal(matrix, k, -2, -1).sum(-1)
+            + (np.diagonal(matrix, -k, -2, -1).sum(-1) if both else 0)
+            for k in lags
+        ],
+        axis=-1,
+    )
+
+
+def _check_sums(averaging: Averaging, trains, sums: PooledSums | None) -> None:
+    if sums is None:
+        return
+    if averaging is not Averaging.POOLED:
+        raise ValueError("precomputed sums are pooled ones; ES reads its own")
+    if trains is not None:
+        raise ValueError("pass trains or precomputed sums, not both")
+
+
 def _safe_divide(numerator: np.ndarray, denominator: np.ndarray) -> np.ndarray:
     """``numerator / denominator``, NaN where there is nothing behind the ratio."""
     out = np.full(np.shape(numerator), np.nan)
@@ -605,11 +655,57 @@ class XpcsHits:
                 )
 
     # ── pooled maps ──────────────────────────────────────────────────────────
+    def pooled_sums(self, trains: np.ndarray | None = None) -> PooledSums:
+        """Everything the pooled ``g2`` and ``ttcf`` need, in one read of the sums."""
+        return self._sums_of(self._rows(trains))
+
+    def _sums_of(self, rows: np.ndarray) -> PooledSums:
+        shape = (self.n_rings, self.n_frames, self.n_frames)
+        raw_num, raw_den, pair_num, pair_den, off_num, off_den = (
+            np.zeros(shape) for _ in range(6)
+        )
+        lags = np.arange(1, self.n_frames)
+        per_row = (rows.size, self.n_rings, lags.size)
+        on, den_on_terms, off_terms, den_off_terms = (
+            np.zeros(per_row) for _ in range(4)
+        )
+        for part, c in self._chunks(rows):
+            at = np.searchsorted(rows, part)
+            den_on = _outer(c["s_on"], c["s_on"], c["cnt"])
+            den_off = _outer(c["s_off_cur"], c["s_off_prev"], c["cnt_pair"])
+            raw_num += c["on"].sum(0)
+            raw_den += den_on.sum(0)
+            base = self.has_off[part]
+            if base.any():
+                pair_num += c["on"][base].sum(0)
+                pair_den += den_on[base].sum(0)
+                off_num += c["off"][base].sum(0)
+                off_den += den_off[base].sum(0)
+            on[at] = _diagonal_sums(c["on"], lags)
+            den_on_terms[at] = _diagonal_sums(den_on, lags)
+            off_terms[at] = _diagonal_sums(c["off"], lags, both=True)
+            den_off_terms[at] = _diagonal_sums(den_off, lags, both=True)
+        return PooledSums(
+            rows=rows,
+            has_off=self.has_off[rows],
+            raw_num=raw_num,
+            raw_den=raw_den,
+            pair_num=pair_num,
+            pair_den=pair_den,
+            off_num=off_num,
+            off_den=off_den,
+            on=on,
+            den_on=den_on_terms,
+            off=off_terms,
+            den_off=den_off_terms,
+        )
+
     def ttcf(
         self,
         averaging: Averaging = Averaging.POOLED,
         trains: np.ndarray | None = None,
         kbar_min: float | None = ES_KBAR_MIN,
+        sums: PooledSums | None = None,
     ) -> xr.Dataset:
         """The two-time maps ``raw``, ``off`` and ``c2 = raw − off``.
 
@@ -623,34 +719,24 @@ class XpcsHits:
         entries with k-bar under ``kbar_min`` set to NaN, then the mean over
         trains. ``kbar_min`` is extra-speckle's unsourced default; ``None``
         disables the filter.
+
+        :param sums: ``pooled_sums()`` already made, so ``g2`` and ``ttcf`` share
+            one read; pooled only, and not together with ``trains``.
         """
+        _check_sums(averaging, trains, sums)
         if averaging is Averaging.ES:
             return self._ttcf_es(trains, kbar_min)
-        n_frames, n_rings = self.n_frames, self.n_rings
-        shape = (n_rings, n_frames, n_frames)
-        raw_num, raw_den, pair_num, pair_den, off_num, off_den = (
-            np.zeros(shape) for _ in range(6)
-        )
-        rows = self._rows(trains)
-        for part, c in self._chunks(rows):
-            den_on = _outer(c["s_on"], c["s_on"], c["cnt"])
-            raw_num += c["on"].sum(0)
-            raw_den += den_on.sum(0)
-            base = self.has_off[part]
-            if base.any():
-                den_off = _outer(c["s_off_cur"], c["s_off_prev"], c["cnt_pair"])
-                pair_num += c["on"][base].sum(0)
-                pair_den += den_on[base].sum(0)
-                off_num += c["off"][base].sum(0)
-                off_den += den_off[base].sum(0)
-        raw = _safe_divide(raw_num, raw_den)
-        paired = _safe_divide(pair_num, pair_den)
+        if sums is None:
+            sums = self.pooled_sums(trains)
+        raw = _safe_divide(sums.raw_num, sums.raw_den)
+        paired = _safe_divide(sums.pair_num, sums.pair_den)
         off = _safe_divide(
-            off_num + off_num.swapaxes(-1, -2), off_den + off_den.swapaxes(-1, -2)
+            sums.off_num + sums.off_num.swapaxes(-1, -2),
+            sums.off_den + sums.off_den.swapaxes(-1, -2),
         )
         return self._map_dataset(
             {"raw": raw, "raw_paired": paired, "off": off, "c2": paired - off},
-            rows,
+            sums.rows,
             Averaging.POOLED,
         )
 
@@ -783,37 +869,6 @@ class XpcsHits:
         skip = skip_last if self.n_frames - skip_last >= 20 else 0
         return np.arange(1, self.n_frames - skip)
 
-    def _lag_terms(self, trains, lags: np.ndarray):
-        """Per-train numerators and denominators of g2 and of the baseline per lag.
-
-        :returns: rows, then ``(n, R, L)`` arrays ``on, den_on`` for every usable
-            row and ``off, den_off`` for rows with a baseline (zeros elsewhere),
-            and which rows those are.
-        """
-        rows = self._rows(trains)
-        shape = (rows.size, self.n_rings, lags.size)
-        on, den_on, off, den_off = (np.zeros(shape) for _ in range(4))
-
-        def diagonals(matrix: np.ndarray, both: bool = False) -> np.ndarray:
-            return np.stack(
-                [
-                    np.diagonal(matrix, k, -2, -1).sum(-1)
-                    + (np.diagonal(matrix, -k, -2, -1).sum(-1) if both else 0)
-                    for k in lags
-                ],
-                axis=-1,
-            )
-
-        for part, c in self._chunks(rows):
-            at = np.searchsorted(rows, part)
-            on[at] = diagonals(c["on"])
-            den_on[at] = diagonals(_outer(c["s_on"], c["s_on"], c["cnt"]))
-            off[at] = diagonals(c["off"], both=True)
-            den_off[at] = diagonals(
-                _outer(c["s_off_cur"], c["s_off_prev"], c["cnt_pair"]), both=True
-            )
-        return rows, on, den_on, off, den_off, self.has_off[rows]
-
     def g2(
         self,
         averaging: Averaging = Averaging.POOLED,
@@ -823,6 +878,7 @@ class XpcsHits:
         n_blocks: int = N_BLOCKS,
         kbar_min: float | None = ES_KBAR_MIN,
         nan_thresh: float | None = ES_NAN_THRESH,
+        sums: PooledSums | None = None,
     ) -> xr.Dataset:
         """g2 against lag time, with a jackknife error.
 
@@ -841,9 +897,11 @@ class XpcsHits:
         every ring); ``roi_q`` then lists the rings kept.
 
         :param skip_last: lags dropped from the end, as extra-speckle does.
+        :param sums: ``pooled_sums()`` already made, as for ``ttcf``.
         :raises NonUniformPattern: the pulses are not evenly spaced.
         :raises RepRateMismatch: the pulse pattern disagrees with ``rep_rate_mhz``.
         """
+        _check_sums(averaging, trains, sums)
         lags = self.lags(skip_last)
         if lags.size == 0:
             return self._empty_g2(averaging)
@@ -851,7 +909,12 @@ class XpcsHits:
         if averaging is Averaging.ES:
             return self._g2_es(trains, lags, period, binned, kbar_min, nan_thresh)
 
-        rows, on, den_on, off, den_off, has_off = self._lag_terms(trains, lags)
+        if sums is None:
+            sums = self.pooled_sums(trains)
+        rows, has_off = sums.rows, sums.has_off
+        on, den_on, off, den_off = (
+            a[..., lags - 1] for a in (sums.on, sums.den_on, sums.off, sums.den_off)
+        )
         groups = (
             _lag_bins(lags) if binned else [np.array([i]) for i in range(lags.size)]
         )

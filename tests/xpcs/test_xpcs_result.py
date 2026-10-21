@@ -515,3 +515,39 @@ def test_read_finds_a_runs_file_under_the_output_root(results, tmp_path):
     again = read(10400, 423, output_root=tmp_path / "root", rep_rate_mhz=2.26)
     assert again.train_ids.tolist() == results.train_ids.tolist()
     assert again.rep_rate_mhz == 2.26
+
+
+def assert_same_datasets(a, b, **tolerance):
+    assert set(a.data_vars) == set(b.data_vars) and a.attrs == b.attrs
+    for name in a.data_vars:
+        if tolerance:
+            np.testing.assert_allclose(a[name].values, b[name].values, **tolerance)
+        else:
+            np.testing.assert_array_equal(a[name].values, b[name].values)
+        for coord in a[name].coords:
+            np.testing.assert_array_equal(a[coord].values, b[coord].values)
+
+
+@pytest.mark.parametrize("binned", [True, False])
+def test_g2_and_ttcf_from_precomputed_sums_are_those_read_on_their_own(
+    long_world, binned
+):
+    hits, _, _ = long_world
+    sums = hits.pooled_sums()
+    assert_same_datasets(hits.g2(binned=binned, sums=sums), hits.g2(binned=binned))
+    assert_same_datasets(hits.ttcf(sums=sums), hits.ttcf())
+
+
+def test_precomputed_sums_are_refused_with_trains_or_for_extra_speckles_average(
+    results,
+):
+    sums = results.pooled_sums()
+    some = results.train_ids[:2]
+    with pytest.raises(ValueError, match="not both"):
+        results.g2(trains=some, sums=sums)
+    with pytest.raises(ValueError, match="not both"):
+        results.ttcf(trains=some, sums=sums)
+    with pytest.raises(ValueError, match="pooled"):
+        results.g2(Averaging.ES, sums=sums)
+    with pytest.raises(ValueError, match="pooled"):
+        results.ttcf(Averaging.ES, sums=sums)
