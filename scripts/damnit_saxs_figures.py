@@ -149,6 +149,11 @@ XPCS_STRETCH_BOUNDS = (0.2, 2.0)
 # a fitted parameter this close to a bound, as a fraction of the bound interval (log Γ,
 # α, b), marks the ring unresolved: the bound, not the data, set it
 AT_BOUND = 0.01
+# the V/V0 figure: the running median over this many trains (5 s at 10 Hz) is drawn over
+# the per-train volumes, whose fit jumps as a mesh scan moves the droplet; and its line
+# breaks where trains are further apart than this (runs follow each other ~75 s apart)
+VOLUME_MEDIAN_TRAINS = 51
+VOLUME_GAP_S = 5.0
 KNOWN_Q = [0.2 * (1.0 / 0.2) ** (i / 199) for i in range(200)]
 # blocks the matching passes over, (run, first trainId) -> why. Found 2026-10-08 as the
 # only blocks in any curves.nc whose mean I over q 0.3-0.4 is under a tenth of the
@@ -669,6 +674,100 @@ def compare_all():
         )
         written.append(name)
     return written
+
+
+def volume_timelines(sample):
+    """V/V0 against t/t* of every droplet of `sample`, static and mesh droplets in
+    panels of their own, from the SAXS notebook's timeline (`cache.droplet_timeline` of
+    the droplet's kept runs; V0 its first train). Each train faint, with a running
+    median over VOLUME_MEDIAN_TRAINS on top; the line breaks where trains are more
+    than VOLUME_GAP_S apart (between runs). Returns the files written."""
+    import damnit
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import scienceplots  # noqa: F401  (registers the notebook's "science" style)
+
+    from analysis import cache
+
+    plt.style.use("science")
+    db = damnit.Damnit(10400)
+    droplets = [d for d in DROPLETS if d[1] == sample]
+    kinds = [
+        m for m in (False, True) if any((d[0] in MESH_DROPLETS) == m for d in droplets)
+    ]
+    if not kinds:
+        return []
+    fig, axs = plt.subplots(
+        1,
+        len(kinds),
+        figsize=(5.0 * len(kinds), 4.0),
+        sharex=True,
+        sharey=True,
+        squeeze=False,
+    )
+    record = []
+    for ax, kind in zip(axs[0], kinds, strict=True):
+        group = [d for d in droplets if (d[0] in MESH_DROPLETS) == kind]
+        for droplet, colour in zip(group, DROPLET_COLOURS, strict=False):
+            runs = kept_runs(droplet)
+            tl = cache.droplet_timeline(runs, db)
+            t_star = tl.attrs["t_star_s"]
+            v0 = float(tl.volume_mm3[0])
+            v = tl.volume_mm3 / v0
+            smooth = v.rolling(
+                trainId=VOLUME_MEDIAN_TRAINS, center=True, min_periods=1
+            ).median()
+            # a NaN after every gap breaks the line there
+            gap = np.flatnonzero(np.diff(tl.elapsed_s.values) > VOLUME_GAP_S) + 1
+            tau = np.insert((tl.elapsed_s / t_star).values, gap, np.nan)
+            ax.plot(
+                tau, np.insert(v.values, gap, np.nan), color=colour, lw=0.4, alpha=0.25
+            )
+            ax.plot(
+                tau,
+                np.insert(smooth.values, gap, np.nan),
+                color=colour,
+                lw=0.9,
+                label=f"{droplet[0]} r{runs[0]}-{runs[-1]}, $t^*$ = {t_star:.0f} s",
+            )
+            record.append(
+                {
+                    "id": droplet[0],
+                    "mesh_scan": kind,
+                    "runs": runs,
+                    "v0_mm3": round(v0, 4),
+                    "t_star_s": round(t_star, 1),
+                    "t_star_source": tl.attrs["t_star_source"],
+                    "t_star_fit_err_s": round(tl.attrs["t_star_fit_err_s"], 1),
+                    "v_over_v0_at_t_star": round(
+                        float(
+                            (tl.volume_mm3 / v0).where(
+                                tl.elapsed_s <= t_star, drop=True
+                            )[-1]
+                        ),
+                        3,
+                    ),
+                    "t_over_tstar_max": round(float(tl.elapsed_s.max() / t_star), 2),
+                }
+            )
+        ax.axvline(1.0, color="0.5", lw=0.6, ls=":")
+        ax.set_xlabel("$t/t^*$")
+        ax.set_title("mesh scans" if kind else "static", fontsize=9)
+        ax.legend(fontsize=6, frameon=False)
+    axs[0, 0].set_xlim(0, None)
+    axs[0, 0].set_ylim(0, 1.05)
+    axs[0, 0].set_ylabel("$V/V_0$")
+    fig.suptitle(CONDITIONS[sample])
+    out = FIGURES / "overview"
+    out.mkdir(parents=True, exist_ok=True)
+    names = [f"volume_{sample}.png", f"volume_{sample}.json"]
+    fig.savefig(out / names[0], dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    (out / names[1]).write_text(json.dumps(record, indent=1))
+    return names
 
 
 def xpcs_windows(droplet, db):
@@ -1366,6 +1465,12 @@ def main(argv=None):
         default="fixed",
         help="the XPCS fit's β: fixed at REFERENCE_BETA, or free in [0, its p84]",
     )
+    parser.add_argument(
+        "--volumes",
+        metavar="SAMPLE",
+        choices=tuple(CONDITIONS),
+        help="only make V/V0 against t/t* for every droplet of SAMPLE",
+    )
     args = parser.parse_args(argv)
     unknown = set(args.ids) - {d[0] for d in DROPLETS}
     if unknown:
@@ -1381,6 +1486,10 @@ def main(argv=None):
         parser.error(
             "LaTeX without type1cm.sty on PATH; run `module load texlive/2022` first"
         )
+    if args.volumes:
+        for name in volume_timelines(args.volumes):
+            print(f"volumes: figures/overview/{name}", flush=True)
+        return 0
     if args.xpcs:
         for name in compare_xpcs_all(args.refresh_xpcs, args.xpcs_beta):
             print(f"xpcs mesh vs static: figures/overview/{name}", flush=True)
