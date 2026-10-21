@@ -37,6 +37,12 @@ Per droplet:
 ``xpcs_windows.nc``
     the pooled g2 (c2, sigma, g2, baseline) and two-time c2 of every window
 
+With ``--matched``, each condition's droplets side by side at the SAXS script's
+matched t/t* instead (MATCH_T ± MATCH_TOLERANCE, mesh and static apart, saved per
+droplet as ``xpcs_windows_matched.nc``), into ``figures/overview/``:
+``xpcs_matched_tstar_<sample>[_mesh]_{g2,gamma,params}.png`` and
+``xpcs_matched_tstar_fits.json``.
+
 Run with the shared environment and a complete TeX (the "science" style sets text in
 LaTeX):
 
@@ -45,6 +51,7 @@ LaTeX):
     $PY scripts/damnit_xpcs_figures.py              # every droplet
     $PY scripts/damnit_xpcs_figures.py s443 s394    # some droplets
     $PY scripts/damnit_xpcs_figures.py --refresh    # pool the windows again
+    $PY scripts/damnit_xpcs_figures.py --matched    # droplets at matched t/t*
 """
 
 import argparse
@@ -61,14 +68,20 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from damnit_saxs_figures import (  # noqa: E402
     CONDITIONS,
+    DROPLET_COLOURS,
     DROPLETS,
     FIGURES,
+    MATCH_T,
+    MATCH_TOLERANCE,
     MESH_DROPLETS,
     REPO,
     XPCS_GAMMA_BOUNDS,
     XPCS_STRETCH_BOUNDS,
     fit_window,
     folder,
+    group_suffix,
+    group_title,
+    groups,
     kept_runs,
 )
 
@@ -78,6 +91,8 @@ PROPOSAL = 10400
 WINDOW_WIDTH = 0.25
 # what xpcs_windows.nc holds; a change to the pooling or the file's layout bumps it
 WINDOWS_SCHEMA = 1
+# the rings of the matched comparison's g2 figure, as the mesh-vs-static one's
+MATCHED_RINGS = (0, 3, 7, 11)
 # q colours: plasma without its yellow end, too faint on white
 Q_CMAP_RANGE = (0.0, 0.85)
 
@@ -202,12 +217,14 @@ def pooled_ttc(paths, run_of_train, chosen, n_frames):
     return paired - off
 
 
-def pool_windows(droplet, db):
+def pool_windows(droplet, db, matched=False):
     """`droplet`'s windows, pooled: per WINDOW_WIDTH bin of t/t* with a usable hit
-    train, (record, pooled g2, two-time c2). A window whose runs differ in pulses per
-    train is pooled over the frames they share: the lag terms and the two-time sums
-    of those frames are the same pulses in every run, so truncating them is exact.
-    Returns the windows and the droplet's info."""
+    train, (record, pooled g2, two-time c2). With `matched`, the windows are instead
+    MATCH_T ± MATCH_TOLERANCE, the SAXS matched comparison's, without the two-time
+    maps (None). A window whose runs differ in pulses per train is pooled over the
+    frames they share: the lag terms and the two-time sums of those frames are the
+    same pulses in every run, so truncating them is exact. Returns the windows and
+    the droplet's info."""
     import numpy as np
     import xarray as xr
 
@@ -216,9 +233,15 @@ def pool_windows(droplet, db):
     parts, t, conc, run_of_train, paths, info = load_droplet(droplet, db)
     t_values = t.values
     all_trains = run_of_train.trainId.values
-    edges = np.arange(0, math.ceil(t_values.max() / WINDOW_WIDTH) + 1) * WINDOW_WIDTH
+    if matched:
+        bounds = [
+            (t - MATCH_TOLERANCE, t + MATCH_TOLERANCE, {"t_target": t}) for t in MATCH_T
+        ]
+    else:
+        lows = np.arange(math.ceil(t_values.max() / WINDOW_WIDTH)) * WINDOW_WIDTH
+        bounds = [(lo, lo + WINDOW_WIDTH, {}) for lo in lows]
     out = []
-    for lo, hi in zip(edges[:-1], edges[1:], strict=True):
+    for lo, hi, label in bounds:
         chosen = all_trains[(t_values >= lo) & (t_values < hi)]
         if chosen.size == 0:
             continue
@@ -234,7 +257,7 @@ def pool_windows(droplet, db):
             "trainId",
             combine_attrs="override",
         )
-        record = {
+        record = label | {
             "t_range": [round(float(lo), 3), round(float(hi), 3)],
             "n_trains": int(chosen.size),
             "t_over_tstar_mean": round(float(t.sel(trainId=chosen).mean()), 3),
@@ -243,15 +266,16 @@ def pool_windows(droplet, db):
             "frames_per_train": n_lags + 1,
         }
         g2 = pool_g2(pool, chosen)[["c2", "sigma", "g2", "baseline"]]
-        ttc = pooled_ttc(paths, run_of_train, chosen, n_lags + 1)
+        ttc = None if matched else pooled_ttc(paths, run_of_train, chosen, n_lags + 1)
         out.append((record, g2, ttc))
         print(f"  t/t* {lo:.2f}-{hi:.2f}: {chosen.size} trains pooled", flush=True)
     return out, info
 
 
-def saved_windows(droplet, db, refresh=False):
-    """`pool_windows` of `droplet`, from ``xpcs_windows.nc`` in its folder when that
-    exists, else pooled and saved there (``refresh`` pools again). Windows differ in
+def saved_windows(droplet, db, refresh=False, matched=False):
+    """`pool_windows` of `droplet`, from ``xpcs_windows.nc`` in its folder
+    (``xpcs_windows_matched.nc`` for the `matched` windows) when that exists, else
+    pooled and saved there (``refresh`` pools again). Windows differ in
     lags and frames where their runs' patterns differ (s370), so the file pads them
     with NaN: ``c2``, ``sigma``, ``g2``, ``baseline`` over (window, roi_q, lag) with
     their ``tau`` over (window, lag), ``ttc`` (float32) over (window, roi_q, frame_1,
@@ -274,9 +298,11 @@ def saved_windows(droplet, db, refresh=False):
         "peg_percent_wv": droplet[4],
         "cache_version": cache.CACHE_VERSION,
     }
+    if matched:
+        inputs |= {"match_t": list(MATCH_T), "match_tolerance": MATCH_TOLERANCE}
     sources = [cache._source(result_file(PROPOSAL, r)) for r in runs]
     sources += [cache._source(db[r].file) for r in runs]
-    path = outdir(droplet) / "xpcs_windows.nc"
+    path = outdir(droplet) / f"xpcs_windows{'_matched' if matched else ''}.nc"
     if path.exists() and not refresh:
         with xr.open_dataset(path, engine="h5netcdf") as ds:
             # every attribute read inside the block (CLAUDE.md pitfall 13)
@@ -305,13 +331,19 @@ def saved_windows(droplet, db, refresh=False):
                 },
                 coords={"roi_q": ds.roi_q.values, "tau": w.tau.values[lags]},
             )
-            ttc = w.ttc.values[:, :frames, :frames].astype(np.float64)
+            ttc = (
+                w.ttc.values[:, :frames, :frames].astype(np.float64)
+                if "ttc" in w
+                else None
+            )
             windows.append((record, g2, ttc))
         return windows, info
 
-    windows, info = pool_windows(droplet, db)
+    windows, info = pool_windows(droplet, db, matched)
+    if not windows:  # no hit train near any target: nothing to save
+        return windows, info
+    outdir(droplet).mkdir(parents=True, exist_ok=True)
     n_lag = max(g2.sizes["tau"] for _, g2, _ in windows)
-    n_frame = max(ttc.shape[-1] for _, _, ttc in windows)
     n_rings = windows[0][1].sizes["roi_q"]
 
     def padded(values, shape):
@@ -337,21 +369,23 @@ def saved_windows(droplet, db, refresh=False):
                 ("window", "lag"),
                 np.stack([padded(g2.tau.values, (n_lag,)) for _, g2, _ in windows]),
             ),
-            "ttc": (
-                ("window", "roi_q", "frame_1", "frame_2"),
-                np.stack(
-                    [
-                        padded(ttc.astype(np.float32), (n_rings, n_frame, n_frame))
-                        for _, _, ttc in windows
-                    ]
-                ),
-            ),
         },
         coords={
             "roi_q": windows[0][1].roi_q.values,
             "t_lo": ("window", [r["t_range"][0] for r, _, _ in windows]),
         },
     )
+    if not matched:
+        n_frame = max(ttc.shape[-1] for _, _, ttc in windows)
+        ds["ttc"] = (
+            ("window", "roi_q", "frame_1", "frame_2"),
+            np.stack(
+                [
+                    padded(ttc.astype(np.float32), (n_rings, n_frame, n_frame))
+                    for _, _, ttc in windows
+                ]
+            ),
+        )
     ds.attrs = {
         "inputs": json.dumps(inputs, sort_keys=True),
         "sources": json.dumps(sources, sort_keys=True),
@@ -806,6 +840,291 @@ def run_one(droplet, db, refresh=False):
     }
 
 
+def matched(sample, mesh, db, refresh=False):
+    """`sample`'s droplets (mesh or static) side by side at matched t/t*, as the SAXS
+    script's ``saxs_matched_tstar_*``: per MATCH_T every usable hit train within
+    MATCH_TOLERANCE pooled (`saved_windows(matched=True)`), each ring fitted by
+    `fit_window` (β fixed), a line per droplet in its DROPLET_COLOURS colour. Three
+    figures into ``figures/overview/``: (c2 − b)/β_ref against τ at MATCHED_RINGS, a
+    panel per (ring, t/t*); Γ(q), a panel per t/t*; and against t/t* the slope n of
+    Γ ∝ qⁿ, D = Γ/q², the mean α and c2(τ₀)/β_ref at the lowest ring. Returns the
+    files written and the windows' records."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import scienceplots  # noqa: F401  (registers the notebook's "science" style)
+    from matplotlib.ticker import FixedLocator, FuncFormatter, NullFormatter
+
+    plt.style.use("science")
+    droplets = [
+        d for d in DROPLETS if d[1] == sample and (d[0] in MESH_DROPLETS) == mesh
+    ]
+    if not droplets:
+        return [], []
+    if len(droplets) > len(DROPLET_COLOURS):
+        raise ValueError(
+            f"{len(droplets)} droplets in {group_title(sample, mesh)!r}, "
+            f"only {len(DROPLET_COLOURS)} colours"
+        )
+    data = []
+    record = []
+    for droplet in droplets:
+        pooled, _ = saved_windows(droplet, db, refresh, matched=True)
+        windows = {w[0]["t_target"]: w for w in fit_windows(pooled)}
+        data.append((droplet, windows))
+        for target in MATCH_T:
+            entry = {"sample": sample, "mesh_scan": mesh, "id": droplet[0]}
+            if target in windows:
+                entry |= windows[target][0]
+            else:
+                entry |= {
+                    "t_target": target,
+                    "skipped": f"no hit train within {MATCH_TOLERANCE}",
+                }
+            record.append(entry)
+        print(f"matched {sample}: {droplet[0]} fitted", flush=True)
+    colours = {d[0]: c for (d, _), c in zip(data, DROPLET_COLOURS, strict=False)}
+    labels = {d[0]: f"{d[0]}: r{kept_runs(d)[0]}-{kept_runs(d)[-1]}" for d, _ in data}
+    stem = f"xpcs_matched_tstar_{sample}{group_suffix(mesh)}"
+    out = FIGURES / "overview"
+    out.mkdir(parents=True, exist_ok=True)
+    names = []
+    suptitle = (
+        f"{group_title(sample, mesh)}: XPCS at matched $t/t^*$ (hit trains within "
+        f"$\\pm${MATCH_TOLERANCE:g} pooled; ferritin range per panel)"
+    )
+    unresolved = (
+        r"KWW fit, $\beta$ fixed at $\beta_\mathrm{ref}$; faint points, dashed fit, "
+        "open markers: not resolved"
+    )
+
+    def title(target):
+        conc = [w[target][0]["ferritin_mg_per_ml"] for _, w in data if target in w]
+        text = f"$t/t^* = {target:g}$"
+        if conc:
+            low, high = (f"{f(conc):.0f}" for f in (min, max))
+            text += f", {low} mg/ml" if low == high else f", {low}-{high} mg/ml"
+        return text
+
+    def legend(fig, x=0.91):
+        fig.legend(
+            [plt.Line2D([], [], color=colours[d], marker="o") for d in colours],
+            [labels[d] for d in colours],
+            loc="center left",
+            bbox_to_anchor=(x, 0.5),
+            frameon=False,
+            fontsize=8,
+        )
+
+    def save(fig, name):
+        fig.savefig(out / name, dpi=200, bbox_inches="tight")
+        plt.close(fig)
+        names.append(name)
+
+    # (c2 - b)/β_ref at four rings, a panel per (ring, t/t*)
+    q_nm = next(iter(next(w for _, w in data if w).values()))[2].q_nm
+    fig, axs = plt.subplots(
+        len(MATCHED_RINGS),
+        len(MATCH_T),
+        figsize=(2.6 * len(MATCH_T), 2.2 * len(MATCHED_RINGS) + 0.8),
+        sharex=True,
+        sharey=True,
+        squeeze=False,
+    )
+    for j, target in enumerate(MATCH_T):
+        for droplet, windows in data:
+            if target not in windows:
+                continue
+            _, g2, fit, _ = windows[target]
+            tau_fine = np.geomspace(g2.tau.values.min(), g2.tau.values.max(), 100)
+            for i, r in enumerate(MATCHED_RINGS):
+                if not np.isfinite(fit.gamma[r]):
+                    continue
+                ok = fit.resolved[r]
+                colour = colours[droplet[0]]
+                axs[i, j].errorbar(
+                    g2.tau,
+                    (g2.c2.values[r] - fit.base[r]) / fit.beta[r],
+                    g2.sigma.values[r] / fit.beta[r],
+                    color=colour,
+                    marker="o",
+                    ms=1.5,
+                    lw=0,
+                    elinewidth=0.4,
+                    alpha=1.0 if ok else 0.3,
+                )
+                axs[i, j].plot(
+                    tau_fine,
+                    np.exp(-2 * (fit.gamma[r] * tau_fine) ** fit.stretch[r]),
+                    color=colour,
+                    lw=0.8,
+                    ls="-" if ok else "--",
+                )
+        axs[0, j].set_title(title(target), fontsize=7)
+    for i, r in enumerate(MATCHED_RINGS):
+        axs[i, 0].set_ylabel(
+            rf"$(c_2-b)/\beta_\mathrm{{ref}}$, $q$ = {q_nm[r]:.3f} nm$^{{-1}}$",
+            fontsize=7,
+        )
+        for ax in axs[i]:
+            ax.axhline(0, color="0.6", lw=0.5)
+            ax.set_ylim(-0.3, 1.3)
+    for ax in axs[-1]:
+        ax.set_xscale("log")
+        ax.set_xlabel(r"$\tau$ (s)")
+    legend(fig)
+    fig.suptitle(f"{suptitle}\n{unresolved}", fontsize=9)
+    save(fig, f"{stem}_g2.png")
+
+    # Γ(q), a panel per t/t*
+    ncols = 3
+    nrows = math.ceil(len(MATCH_T) / ncols)
+    fig, axs = plt.subplots(
+        nrows,
+        ncols,
+        figsize=(3.6 * ncols + 0.4, 3.2 * nrows + 0.8),
+        sharex=True,
+        sharey=True,
+        squeeze=False,
+    )
+    for ax, target in zip(axs.flat, MATCH_T, strict=False):
+        anchor = None
+        for droplet, windows in data:
+            if target not in windows:
+                continue
+            fit = windows[target][2]
+            ok = fit.resolved
+            colour = colours[droplet[0]]
+            for mask, face in ((ok, colour), (~ok, "none")):
+                ax.errorbar(
+                    fit.q_nm[mask],
+                    fit.gamma[mask],
+                    fit.err_gamma[mask],
+                    color=colour,
+                    mfc=face,
+                    marker="o",
+                    ms=3,
+                    lw=0,
+                    elinewidth=0.6,
+                )
+            if ok.any() and anchor is None:
+                k = np.flatnonzero(ok)[ok.sum() // 2]
+                anchor = (fit.q_nm[k], fit.gamma[k])
+        if anchor is not None:
+            qq = np.geomspace(0.22, 0.9, 20)
+            for power, style in ((2, "--"), (1, ":")):
+                ax.plot(
+                    qq,
+                    anchor[1] * (qq / anchor[0]) ** power,
+                    color="0.5",
+                    ls=style,
+                    lw=0.8,
+                )
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        ax.set_xlim(0.22, 0.9)
+        ax.set_ylim(1e3, 3e7)
+        ax.xaxis.set_major_locator(FixedLocator([0.3, 0.5, 0.8]))
+        ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}"))
+        ax.xaxis.set_minor_formatter(NullFormatter())
+        ax.set_title(title(target), fontsize=8)
+    for ax in axs.flat[len(MATCH_T) :]:
+        ax.set_visible(False)
+    for ax in axs[-1]:
+        ax.set_xlabel(r"$q$ (nm$^{-1}$)")
+    for ax in axs[:, 0]:
+        ax.set_ylabel(r"$\Gamma$ (s$^{-1}$)")
+    legend(fig)
+    fig.suptitle(
+        f"{suptitle}\n{unresolved}; dashed $\\propto q^2$ (diffusion), "
+        r"dotted $\propto q$ (shear)",
+        fontsize=9,
+    )
+    save(fig, f"{stem}_gamma.png")
+
+    # fit parameters against t/t*
+    fig, axs = plt.subplots(1, 4, figsize=(15, 3.6))
+    for droplet, windows in data:
+        rows = [windows[t][0] for t in MATCH_T if t in windows]
+        if not rows:
+            continue
+        t = np.array([r["t_over_tstar_mean"] for r in rows])
+        style = {
+            "color": colours[droplet[0]],
+            "marker": "o",
+            "ms": 3,
+            "lw": 0.8,
+            "capsize": 2,
+        }
+        for ax, key, err in (
+            (axs[0], "exponent_n", "exponent_err"),
+            (axs[1], "D_um2_per_s", "D_err_um2_per_s"),
+            (axs[2], "stretch_mean", "stretch_mean_err"),
+        ):
+            ax.errorbar(
+                t,
+                [r.get(key, np.nan) for r in rows],
+                [r.get(err, np.nan) for r in rows],
+                **style,
+            )
+        axs[3].errorbar(
+            t,
+            [r["visible"][0] for r in rows],
+            [r["err_visible"][0] for r in rows],
+            **style,
+        )
+    axs[0].axhline(2, color="0.5", ls="--", lw=0.8)
+    axs[0].axhline(1, color="0.5", ls=":", lw=0.8)
+    axs[0].set_ylabel(r"$n$ in $\Gamma \propto q^n$")
+    axs[1].set_ylabel(r"$D = \Gamma/q^2$ ($\mu$m$^2$/s)")
+    axs[1].set_yscale("log")
+    axs[2].axhline(1, color="0.5", lw=0.6)
+    axs[2].set_ylabel(r"mean KWW $\alpha$")
+    axs[3].axhline(1, color="0.5", lw=0.6)
+    axs[3].set_ylabel(
+        rf"$c_2(\tau_0)/\beta_\mathrm{{ref}}$, $q$ = {q_nm[0]:.3f} nm$^{{-1}}$"
+    )
+    for ax in axs:
+        ax.set_xlabel("$t/t^*$")
+    legend(fig, x=0.99)
+    fig.suptitle(
+        f"{suptitle}\n$n$, $D$ and mean $\\alpha$ over the resolved rings", fontsize=9
+    )
+    fig.tight_layout()
+    save(fig, f"{stem}_params.png")
+    return names, record
+
+
+def matched_all(db, refresh=False):
+    "matched() for every condition, mesh and static apart; the fits in one JSON."
+    written = []
+    record = []
+    for sample, mesh in groups():
+        names, entries = matched(sample, mesh, db, refresh)
+        written += names
+        record += entries
+    if written:
+        name = "xpcs_matched_tstar_fits.json"
+        (FIGURES / "overview" / name).write_text(
+            json.dumps(
+                {
+                    "t_targets": list(MATCH_T),
+                    "tolerance": MATCH_TOLERANCE,
+                    "pooling": "every usable hit train within the tolerance: "
+                    "analysis.cache.pool_g2 over the lags the window's runs share",
+                    "model": "damnit_saxs_figures.fit_window, beta fixed at "
+                    "REFERENCE_BETA; b recovered from the fit's curve",
+                    "windows": record,
+                },
+                indent=1,
+            )
+        )
+        written.append(name)
+    return written
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("ids", nargs="*", help="droplet ids (default: all)")
@@ -813,6 +1132,11 @@ def main(argv=None):
         "--refresh",
         action="store_true",
         help="pool the windows again instead of reading xpcs_windows.nc",
+    )
+    parser.add_argument(
+        "--matched",
+        action="store_true",
+        help="only the comparison of each condition's droplets at matched t/t*",
     )
     args = parser.parse_args(argv)
     unknown = set(args.ids) - {d[0] for d in DROPLETS}
@@ -832,6 +1156,10 @@ def main(argv=None):
     import damnit
 
     db = damnit.Damnit(PROPOSAL)
+    if args.matched:
+        for name in matched_all(db, args.refresh):
+            print(f"matched t/t*: figures/overview/{name}", flush=True)
+        return 0
     results, failed = [], []
     for droplet in DROPLETS:
         if args.ids and droplet[0] not in args.ids:
