@@ -589,8 +589,10 @@ class XpcsHits:
             wanted = wanted & np.isin(self.train_ids, trains)
         return np.flatnonzero(wanted)
 
-    def _chunks(self, rows: np.ndarray) -> Iterator[tuple[np.ndarray, dict[str, Any]]]:
-        """The sums of ``rows``, a few at a time, as float64."""
+    def _chunks(
+        self, rows: np.ndarray, names: tuple[str, ...] = SUM_NAMES
+    ) -> Iterator[tuple[np.ndarray, dict[str, Any]]]:
+        """The sums ``names`` of ``rows``, a few rows at a time, as float64."""
         with h5py.File(self.path, "r") as f:
             for start in range(0, rows.size, CHUNK):
                 part = rows[start : start + CHUNK]
@@ -598,7 +600,7 @@ class XpcsHits:
                     part,
                     {
                         name: f[f"sums/{name}"][part.tolist()].astype(np.float64)
-                        for name in SUM_NAMES
+                        for name in names
                     },
                 )
 
@@ -727,7 +729,7 @@ class XpcsHits:
         """Mean photons per pixel per frame and ring, ``(trainId, frame, roi_q)``."""
         rows = self._rows(trains)
         out = np.full((rows.size, self.n_frames, self.n_rings), np.nan)
-        for part, c in self._chunks(rows):
+        for part, c in self._chunks(rows, ("s_on", "cnt")):
             at = np.searchsorted(rows, part)
             out[at] = _safe_divide(c["s_on"], c["cnt"][..., None]).swapaxes(1, 2)
         return xr.DataArray(
