@@ -35,6 +35,7 @@ __all__ = [
     "DEFAULT_CACHE_DIR",
     "detector_sums",
     "droplet_timeline",
+    "pool_g2",
     "saxs_run",
     "waxs_run",
     "xpcs_run",
@@ -510,6 +511,112 @@ def waxs_run(
 XPCS_AVERAGINGS = ("pooled", "es")
 
 
+def _train_terms(hits, sums) -> dict[str, np.ndarray]:
+    """The pooled sums' per-row lag terms placed on the hit trains, NaN where absent.
+
+    ``sums.rows`` are positions in ``hits.train_ids`` (CLAUDE.md pitfall 4: the
+    terms follow the train, not the row order of the sums).
+    """
+    shape = (hits.train_ids.size, *sums.on.shape[1:])
+    out = {
+        name: np.full(shape, np.nan)
+        for name in (
+            "train_g2_num",
+            "train_g2_den",
+            "train_baseline_num",
+            "train_baseline_den",
+        )
+    }
+    out["train_g2_num"][sums.rows] = sums.on
+    out["train_g2_den"][sums.rows] = sums.den_on
+    base = sums.rows[sums.has_off]
+    out["train_baseline_num"][base] = sums.off[sums.has_off]
+    out["train_baseline_den"][base] = sums.den_off[sums.has_off]
+    return out
+
+
+def pool_g2(
+    ds: xr.Dataset,
+    trains=None,
+    *,
+    binned: bool = True,
+    skip_last: int | None = None,
+    n_blocks: int | None = None,
+) -> xr.Dataset:
+    """Pooled g2 of a selection of hit trains from an `xpcs_run` dataset.
+
+    Gives `XpcsHits.g2(trains=...)` exactly for the same trains (same function,
+    `analysis.xpcs.result.pooled_g2`): the lag terms of the usable selected trains
+    are summed and divided, with the jackknife over ``n_blocks`` contiguous blocks
+    of them in trainId order. ``trains=None`` takes every usable hit train, which is
+    the dataset's own ``g2``, ``sigma_g2``, ``g2_paired``, ``baseline``, ``c2``,
+    ``sigma``. Pool a selection (by time, droplet volume, ``kbar``, ...) with this;
+    do not average ``train_g2_num / train_g2_den`` over trains, which is the mean of
+    noisy per-train ratios, not the ratio of sums (CLAUDE.md pitfall 8). The
+    two-time maps of a subset come from ``XpcsHits.ttcf(trains=...)``.
+
+    :param trains: trainIds, by label; unusable ones are skipped as the reader does.
+    :param skip_last: lags dropped from the end; ``None`` for the reader's default.
+    :param n_blocks: jackknife blocks; ``None`` for the reader's default.
+    :raises ValueError: `ds` has no per-train terms (an ``averaging="es"`` cache, or
+        one written before them), or a trainId is not a hit train.
+    """
+    from analysis.common.status import FrameStatus
+    from analysis.xpcs.result import (
+        N_BLOCKS,
+        SKIP_LAST_LAGS,
+        lag_frames,
+        pooled_g2,
+    )
+
+    skip_last = SKIP_LAST_LAGS if skip_last is None else skip_last
+    n_blocks = N_BLOCKS if n_blocks is None else n_blocks
+    if "train_g2_num" not in ds:
+        raise ValueError(
+            "no per-train lag terms in this dataset: they exist only for "
+            "xpcs_run(averaging='pooled')"
+        )
+    wanted = ds["status"].values == int(FrameStatus.OK)
+    if trains is not None:
+        trains = np.asarray(trains, dtype=np.uint64)
+        unknown = trains[~np.isin(trains, ds.trainId.values)]
+        if unknown.size:
+            raise ValueError(
+                f"{unknown.size} train(s) are not in the hit set "
+                f"(first: {unknown[:5].tolist()})"
+            )
+        wanted &= np.isin(ds.trainId.values, trains)
+    rows = np.flatnonzero(wanted)
+    terms = [
+        ds[name].isel(trainId=rows).transpose("trainId", "roi_q", "lag_frame").values
+        for name in (
+            "train_g2_num",
+            "train_g2_den",
+            "train_baseline_num",
+            "train_baseline_den",
+        )
+    ]
+    has_off = np.isfinite(terms[2]).all(axis=(1, 2))
+    on, den_on, off, den_off = (
+        terms[0],
+        terms[1],
+        np.nan_to_num(terms[2]),
+        np.nan_to_num(terms[3]),
+    )
+    return pooled_g2(
+        on,
+        den_on,
+        off,
+        den_off,
+        has_off,
+        lags=lag_frames(ds.sizes["lag_frame"] + 1, skip_last),
+        period=ds.attrs.get("period_s"),
+        roi_q=ds.roi_q.values,
+        binned=binned,
+        n_blocks=n_blocks,
+    )
+
+
 def xpcs_run(
     run_nr: int,
     db,
@@ -546,6 +653,15 @@ def xpcs_run(
         ``has_off``, ``kbar`` over (trainId, frame, roi_q), NaN for a train without
         sums, ``time``, the `analysis.utils.droplet_scaling` fields and ``droplet_*``
         as in `saxs_run`, stored, never applied.
+
+    ``train_g2_num``, ``train_g2_den``, ``train_baseline_num``, ``train_baseline_den``
+    over (trainId, roi_q, lag_frame), pooled averaging only
+        Each hit train's lag terms of g2 and of its baseline, lags ``1 … P − 1``
+        (``lag_frame``, with ``lag_tau`` in seconds), the numerators and
+        denominators `XpcsHits.g2` pools. NaN for an unusable train; the baseline
+        terms are NaN for a usable train without a baseline. ``num / den`` is one
+        train's g2, which is noisy: re-pool a selection of trains with `pool_g2`.
+        ``averaging="es"`` files do not carry them.
 
     ``ring_bounds_nm`` holds the ring edges when the file has them. The attributes
     carry the results file's ``schema``, ``merge_hash``, ``hits_sha256`` and
@@ -596,6 +712,7 @@ def xpcs_run(
         "n_pulses": n_pulses,
         "averaging": averaging,
         "binned": bool(binned),
+        "layout": 2,
         **composition,
     }
     sources = [_source(results_file)]
@@ -611,9 +728,11 @@ def xpcs_run(
         sums = hits.pooled_sums(n_workers=n_workers)
         g2 = hits.g2(mode, binned=binned, sums=sums)
         ttcf = hits.ttcf(mode, sums=sums)
+        terms = _train_terms(hits, sums)
     else:
         g2 = hits.g2(mode, binned=binned)
         ttcf = hits.ttcf(mode)
+        terms = None
     ds = xr.merge(
         [g2, ttcf.rename({v: f"ttcf_{v}" for v in ttcf.data_vars})],
         join="outer",
@@ -621,6 +740,18 @@ def xpcs_run(
     )
 
     tids = hits.train_ids
+    if terms is not None:
+        n_lags = terms["train_g2_num"].shape[-1]
+        ds = ds.assign_coords(lag_frame=np.arange(1, n_lags + 1))
+        if (period := g2.attrs.get("period_s")) is not None:
+            ds = ds.assign_coords(lag_tau=("lag_frame", ds.lag_frame.values * period))
+        for name, values in terms.items():
+            ds[name] = xr.DataArray(
+                values,
+                dims=("trainId", "roi_q", "lag_frame"),
+                coords={"trainId": tids},
+            )
+            ds[name].encoding.update(zlib=True, complevel=1, shuffle=True)
     by_train = {
         "status": hits.status.astype(np.uint8),
         "pair_status": hits.pair_status.astype(np.uint8),
