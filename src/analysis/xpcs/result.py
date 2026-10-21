@@ -54,6 +54,7 @@ __all__ = [
     "RepRateMismatch",
     "ResultWriter",
     "XpcsHits",
+    "pooled_g2",
     "read",
     "result_reasons",
 ]
@@ -956,46 +957,18 @@ class XpcsHits:
 
         if sums is None:
             sums = self.pooled_sums(trains)
-        rows, has_off = sums.rows, sums.has_off
-        on, den_on, off, den_off = (
-            a[..., lags - 1] for a in (sums.on, sums.den_on, sums.off, sums.den_off)
+        return pooled_g2(
+            sums.on,
+            sums.den_on,
+            sums.off,
+            sums.den_off,
+            sums.has_off,
+            lags=lags,
+            period=period,
+            roi_q=self.roi_q,
+            binned=binned,
+            n_blocks=n_blocks,
         )
-        groups = (
-            _lag_bins(lags) if binned else [np.array([i]) for i in range(lags.size)]
-        )
-        pooled = lambda a: np.stack([a[..., g].sum(-1) for g in groups], -1)  # noqa: E731
-        on, den_on, off, den_off = (pooled(a) for a in (on, den_on, off, den_off))
-        g2, sigma_g2 = _jackknife(on, den_on, n_blocks)
-        g2_paired, _ = _jackknife(on[has_off], den_on[has_off], n_blocks)
-        baseline, _ = _jackknife(off[has_off], den_off[has_off], n_blocks)
-        c2, sigma = self._c2_error(
-            on[has_off], den_on[has_off], off[has_off], den_off[has_off], n_blocks
-        )
-        centre = np.array([lags[g].mean() for g in groups])
-        dims = ("roi_q", "tau")
-        dataset = xr.Dataset(
-            {
-                "g2": (dims, g2),
-                "sigma_g2": (dims, sigma_g2),
-                "g2_paired": (dims, g2_paired),
-                "baseline": (dims, baseline),
-                "c2": (dims, c2),
-                "sigma": (dims, sigma),
-            },
-            coords={
-                "roi_q": self.roi_q,
-                "tau": centre * period,
-                "lag": ("tau", centre),
-            },
-        )
-        dataset.attrs.update(
-            averaging="pooled",
-            n_trains=int(rows.size),
-            n_with_baseline=int(has_off.sum()),
-            period_s=period,
-            binned=int(binned and lags.size > BIN_THRESHOLD),
-        )
-        return dataset
 
     def _empty_g2(self, averaging: Averaging) -> xr.Dataset:
         """g2 of a run with fewer than two frames: no lag, so nothing to report."""
@@ -1010,31 +983,6 @@ class XpcsHits:
             coords={"roi_q": self.roi_q, "tau": np.zeros(0)},
             attrs={"averaging": averaging.value},
         )
-
-    @staticmethod
-    def _c2_error(on, den_on, off, den_off, n_blocks):
-        """``c2 = g2 − baseline`` and its jackknife error, blocks shared by both."""
-        n = on.shape[0]
-        value = _safe_divide(on.sum(0), den_on.sum(0)) - _safe_divide(
-            off.sum(0), den_off.sum(0)
-        )
-        if n < 2:
-            return value, np.full_like(value, np.nan)
-        blocks = np.array_split(np.arange(n), min(n_blocks, n))
-        totals = [a.sum(0) for a in (on, den_on, off, den_off)]
-        parts = [
-            np.stack([a[b].sum(0) for b in blocks]) for a in (on, den_on, off, den_off)
-        ]
-        loo = _safe_divide(totals[0] - parts[0], totals[1] - parts[1]) - _safe_divide(
-            totals[2] - parts[2], totals[3] - parts[3]
-        )
-        count = len(blocks)
-        with np.errstate(invalid="ignore"):
-            sigma = np.sqrt(
-                (count - 1) / count * np.nansum((loo - np.nanmean(loo, 0)) ** 2, 0)
-            )
-        sigma[~np.isfinite(value)] = np.nan
-        return value, sigma
 
     def _g2_es(self, trains, lags, period, binned, kbar_min, nan_thresh) -> xr.Dataset:
         mean = self.ttcf(Averaging.ES, trains, kbar_min)["c2"].values
@@ -1103,6 +1051,85 @@ class XpcsHits:
                 c2[~(lit[..., :, None] & lit[..., None, :])] = np.nan
             sums[at], counts[at] = diagonal_sums(c2)
         return TtcfDiagonals(self.train_ids[rows], self.roi_q, sums, counts)
+
+
+def _c2_error(on, den_on, off, den_off, n_blocks):
+    """``c2 = g2 − baseline`` and its jackknife error, blocks shared by both."""
+    n = on.shape[0]
+    value = _safe_divide(on.sum(0), den_on.sum(0)) - _safe_divide(
+        off.sum(0), den_off.sum(0)
+    )
+    if n < 2:
+        return value, np.full_like(value, np.nan)
+    blocks = np.array_split(np.arange(n), min(n_blocks, n))
+    totals = [a.sum(0) for a in (on, den_on, off, den_off)]
+    parts = [
+        np.stack([a[b].sum(0) for b in blocks]) for a in (on, den_on, off, den_off)
+    ]
+    loo = _safe_divide(totals[0] - parts[0], totals[1] - parts[1]) - _safe_divide(
+        totals[2] - parts[2], totals[3] - parts[3]
+    )
+    count = len(blocks)
+    with np.errstate(invalid="ignore"):
+        sigma = np.sqrt(
+            (count - 1) / count * np.nansum((loo - np.nanmean(loo, 0)) ** 2, 0)
+        )
+    sigma[~np.isfinite(value)] = np.nan
+    return value, sigma
+
+
+def pooled_g2(
+    on: np.ndarray,
+    den_on: np.ndarray,
+    off: np.ndarray,
+    den_off: np.ndarray,
+    has_off: np.ndarray,
+    *,
+    lags: np.ndarray,
+    period: float | None,
+    roi_q: np.ndarray,
+    binned: bool = True,
+    n_blocks: int = N_BLOCKS,
+) -> xr.Dataset:
+    """The pooled g2 Dataset of per-row lag terms, as `XpcsHits.g2` makes it.
+
+    ``on, den_on, off, den_off`` are ``(rows, rings, P − 1)`` over the lags
+    ``1 … P − 1`` (`PooledSums`); ``lags`` picks the columns used. A row without a
+    baseline has ``has_off`` False and its baseline terms are not read. Rows pool
+    as a ratio of sums, and the jackknife blocks are contiguous in row order.
+    """
+    rows = on.shape[0]
+    on, den_on, off, den_off = (a[..., lags - 1] for a in (on, den_on, off, den_off))
+    groups = _lag_bins(lags) if binned else [np.array([i]) for i in range(lags.size)]
+    pooled = lambda a: np.stack([a[..., g].sum(-1) for g in groups], -1)  # noqa: E731
+    on, den_on, off, den_off = (pooled(a) for a in (on, den_on, off, den_off))
+    g2, sigma_g2 = _jackknife(on, den_on, n_blocks)
+    g2_paired, _ = _jackknife(on[has_off], den_on[has_off], n_blocks)
+    baseline, _ = _jackknife(off[has_off], den_off[has_off], n_blocks)
+    c2, sigma = _c2_error(
+        on[has_off], den_on[has_off], off[has_off], den_off[has_off], n_blocks
+    )
+    centre = np.array([lags[g].mean() for g in groups])
+    dims = ("roi_q", "tau")
+    dataset = xr.Dataset(
+        {
+            "g2": (dims, g2),
+            "sigma_g2": (dims, sigma_g2),
+            "g2_paired": (dims, g2_paired),
+            "baseline": (dims, baseline),
+            "c2": (dims, c2),
+            "sigma": (dims, sigma),
+        },
+        coords={"roi_q": roi_q, "tau": centre * period, "lag": ("tau", centre)},
+    )
+    dataset.attrs.update(
+        averaging="pooled",
+        n_trains=int(rows),
+        n_with_baseline=int(has_off.sum()),
+        period_s=period,
+        binned=int(binned and lags.size > BIN_THRESHOLD),
+    )
+    return dataset
 
 
 def _lag_bins(lags: np.ndarray) -> list[np.ndarray]:
