@@ -10,7 +10,10 @@ sources change.
 from __future__ import annotations
 
 import os
+import sys
+from pathlib import Path
 
+import h5py
 import numpy as np
 import pandas as pd
 import pytest
@@ -19,8 +22,21 @@ import xarray as xr
 pytest.importorskip("extra_data")  # analysis.utils imports it at module level
 pytest.importorskip("h5netcdf")  # the cache and the fake DAMNIT files are netCDF
 
+sys.path.insert(0, str(Path(__file__).parent / "xpcs"))  # xpcs_fakes lives there
+
+from xpcs_fakes import (  # noqa: E402
+    build_results,
+    make_dense,
+    make_flags,
+    make_rings,
+    make_train,
+)
+
 from analysis import cache, utils  # noqa: E402
+from analysis.common.status import FrameStatus  # noqa: E402
+from analysis.common.writer import IncompleteRun  # noqa: E402
 from analysis.utils import deff_sq_to_volume  # noqa: E402
+from analysis.xpcs.result import Averaging, XpcsHits  # noqa: E402
 
 FIRST_TRAIN = 2637862276
 
@@ -616,3 +632,149 @@ def test_sums_are_cached_and_rebuilt_on_new_trains_a_changed_run_or_refresh(
     cache.detector_sums(1, [10000, 10001], label="pair", **kw)
     assert len(reads) == 4
     assert len(list(tmp_path.glob("sums_r0001_pair_*.nc"))) == 2
+
+
+# ── xpcs_run ──────────────────────────────────────────────────────────────────
+XPCS_OFFSETS = (0, 1, 2, 4, 5, 6)  # hit trains that gave photons
+XPCS_FAILED = 3  # a hit train with no sums
+XPCS_FRAMES, XPCS_ENV, XPCS_RINGS = 14, 300, 3
+
+
+@pytest.fixture
+def xpcs(tmp_path, xgm_by_raw):
+    """Run 1: seven hit trains in a real results file, one of them failed.
+
+    The DAMNIT side has droplet entries for eight trains, so every hit has a train
+    timestamp and a scaling; the hit trains are not the run's first seven.
+    """
+    rng = np.random.default_rng(5)
+    rings = make_rings(rng, XPCS_ENV, XPCS_RINGS)
+    photons = [
+        make_train(
+            int(train_ids(1, k)[0]),
+            make_dense(rng, XPCS_FRAMES, XPCS_ENV, 0.12),
+            make_flags(rng, XPCS_FRAMES, XPCS_ENV),
+        )
+        for k in XPCS_OFFSETS
+    ]
+    failed_id = int(train_ids(1, XPCS_FAILED)[0])
+    path = tmp_path / "xpcs_hits.h5"
+    build_results(path, photons, rings, failed={failed_id: FrameStatus.MISSING_MODULES})
+    tids = train_ids(8)
+    db = {1: damnit_run(tmp_path / "x1.h5", tids, 2.2 - 0.01 * np.arange(8))}
+    xgm = xr.DataArray(300.0 + np.arange(8.0), dims="trainId", coords={"trainId": tids})
+    raw = FakeRaw(timestamps(tids), xgm)
+    return {
+        "db": db,
+        "raw": raw,
+        "path": path,
+        "failed": failed_id,
+        "hit_ids": np.array(sorted([*(t.train_id for t in photons), failed_id])),
+        "kw": {"results_file": path, "raw": raw, "cache_dir": tmp_path / "c"},
+        "dir": tmp_path / "c",
+    }
+
+
+@pytest.mark.parametrize("averaging", ["pooled", "es"])
+def test_g2_and_the_two_time_maps_are_the_readers_own(xpcs, averaging):
+    ds = cache.xpcs_run(1, xpcs["db"], averaging=averaging, **xpcs["kw"])
+
+    hits = XpcsHits(xpcs["path"])
+    mode = Averaging(averaging)
+    g2, ttcf = hits.g2(mode), hits.ttcf(mode)
+    np.testing.assert_allclose(ds.tau, g2.tau)
+    for name in g2.data_vars:
+        kept = ds[name].sel(roi_q=g2.roi_q)  # es may leave rings out
+        np.testing.assert_allclose(kept.values, g2[name].values, equal_nan=True)
+    for name in ttcf.data_vars:
+        np.testing.assert_allclose(
+            ds[f"ttcf_{name}"].values, ttcf[name].values, equal_nan=True
+        )
+    assert ("sigma" in ds) == (averaging == "pooled")
+    assert ("ttcf_raw_paired" in ds) == (averaging == "pooled")
+    assert ds.attrs["averaging"] == averaging
+    assert ds.attrs["n_trains"] == ttcf.attrs["n_trains"] == len(XPCS_OFFSETS)
+    assert ds.attrs["coverage"] == str(hits.coverage())
+
+
+def test_the_pooled_lag_axis_is_stored(xpcs):
+    ds = cache.xpcs_run(1, xpcs["db"], **xpcs["kw"])
+
+    want = XpcsHits(xpcs["path"]).g2()
+    np.testing.assert_array_equal(ds.lag, want.lag)
+    assert ds.attrs["period_s"] == pytest.approx(want.attrs["period_s"])
+    assert ds.attrs["n_with_baseline"] == want.attrs["n_with_baseline"]
+    np.testing.assert_allclose(
+        ds.ring_bounds_nm.values, XpcsHits(xpcs["path"]).bounds_nm
+    )
+
+
+def test_every_hit_train_is_listed_by_train_id(xpcs):
+    ds = cache.xpcs_run(1, xpcs["db"], **xpcs["kw"])
+    hits = XpcsHits(xpcs["path"])
+
+    np.testing.assert_array_equal(ds.trainId, xpcs["hit_ids"])
+    failed = ds.sel(trainId=xpcs["failed"])
+    assert failed.status == FrameStatus.MISSING_MODULES
+    assert failed.kbar.isnull().all()
+    assert not failed.has_off
+    usable = hits.train_ids[hits.usable]
+    np.testing.assert_allclose(
+        ds.kbar.sel(trainId=usable).values, hits.kbar().values, equal_nan=True
+    )
+    np.testing.assert_array_equal(ds.status, hits.status)
+    np.testing.assert_array_equal(ds.pair_status, hits.pair_status)
+    np.testing.assert_array_equal(ds.partner, hits.partner_ids)
+    np.testing.assert_array_equal(ds.has_off, hits.has_off)
+    assert ds.status.dtype == np.uint8 and ds.has_off.dtype == bool
+
+
+def test_xpcs_scaling_and_times_sit_on_the_hit_train(xpcs):
+    ds = cache.xpcs_run(1, xpcs["db"], **xpcs["kw"])
+    scaling = utils.droplet_scaling(1, xpcs["db"], raw=xpcs["raw"], n_pulses=155)
+
+    np.testing.assert_allclose(ds.scale, scaling.scale.sel(trainId=xpcs["hit_ids"]))
+    by_label = xpcs["raw"].times.dt.tz_localize(None).loc[xpcs["hit_ids"]]
+    np.testing.assert_array_equal(
+        ds.time.values, by_label.to_numpy().astype("datetime64[ns]")
+    )
+    # the failed hit has no sums but keeps its place and its droplet
+    assert np.isfinite(ds.scale.sel(trainId=xpcs["failed"]))
+    assert np.isfinite(ds.droplet_volume.sel(trainId=xpcs["failed"]))
+
+
+def test_an_unfinished_results_file_is_refused(xpcs):
+    with h5py.File(xpcs["path"], "r+") as f:
+        f["hits/status"][2] = int(FrameStatus.NOT_PROCESSED)
+
+    with pytest.raises(IncompleteRun, match="1 hit trains are unfinished"):
+        cache.xpcs_run(1, xpcs["db"], **xpcs["kw"])
+    assert not xpcs["dir"].exists()
+
+
+def test_a_missing_results_file_and_a_bad_averaging_are_refused(xpcs, tmp_path):
+    with pytest.raises(FileNotFoundError, match="nowhere.h5"):
+        cache.xpcs_run(
+            1, xpcs["db"], **{**xpcs["kw"], "results_file": tmp_path / "nowhere.h5"}
+        )
+    with pytest.raises(ValueError, match="'pooled', 'es'"):
+        cache.xpcs_run(1, xpcs["db"], averaging="mean", **xpcs["kw"])
+
+
+def test_xpcs_is_cached_per_averaging_and_rebuilt_on_new_results(xpcs, count_builds):
+    first = cache.xpcs_run(1, xpcs["db"], **xpcs["kw"])
+    second = cache.xpcs_run(1, xpcs["db"], **xpcs["kw"])
+    assert len(count_builds) == 1
+    assert second.attrs["created_utc"] == first.attrs["created_utc"]
+
+    cache.xpcs_run(1, xpcs["db"], averaging="es", **xpcs["kw"])
+    assert len(count_builds) == 2
+    assert len(list(xpcs["dir"].glob("xpcs_r0001_*.nc"))) == 2
+
+    stat = os.stat(xpcs["path"])
+    os.utime(xpcs["path"], ns=(stat.st_atime_ns, stat.st_mtime_ns + 10**9))
+    cache.xpcs_run(1, xpcs["db"], **xpcs["kw"])
+    assert len(count_builds) == 3
+
+    cache.xpcs_run(1, xpcs["db"], refresh=True, **xpcs["kw"])
+    assert len(count_builds) == 4
