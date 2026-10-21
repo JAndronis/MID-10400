@@ -40,15 +40,21 @@ this script with the shared environment too (the overviews need xarray and matpl
     $PY scripts/damnit_saxs_figures.py s443 s409        # some droplets, then overviews
     $PY scripts/damnit_saxs_figures.py --overview-only  # overviews from curves.nc
     $PY scripts/damnit_saxs_figures.py --xpcs           # XPCS mesh vs static only
+    $PY scripts/damnit_saxs_figures.py --xpcs --xpcs-beta bounded  # β free, ≤ β_ref
 
 The XPCS comparison (``xpcs_mesh_vs_static_*.png``) takes the same mesh and static
 representatives and, per MATCH_T, pools every hit train within MATCH_TOLERANCE
-(`analysis.cache.pool_g2`) and fits each ring (weighted, bounded): c2(τ),
-Γ(q), τ(q) and the fit parameters against t/t*, the fits in one JSON.
+(`analysis.cache.pool_g2`) and fits each ring with a stretched exponential (KWW,
+weighted, bounded): c2(τ), Γ(q), τ(q), α(q) and the fit parameters against t/t*,
+the fits in one JSON. The pooled windows are saved per droplet as
+``figures/overview/xpcs_windows_<id>.nc``, so a refit reads them in seconds;
+``--refresh-xpcs`` pools them again, and a file made from other runs or source files
+is refused.
 """
 
 import argparse
 import datetime
+import functools
 import json
 import math
 import shutil
@@ -131,12 +137,18 @@ MATCH_TOLERANCE = 0.08
 # the mesh droplet shown per condition in the mesh/static comparison (the others stay in
 # their own mesh figures); a condition not listed shows all its mesh droplets
 MESH_REPRESENTATIVE = {"ferritin50-peg6k": "s258"}
-# likewise the static droplet; static droplets vary too much to pool. s394 for no PEG is
-# my pick (a fresh droplet at attenuator 1.0, no flux-correction issue), not the user's
+# likewise the static droplet; static droplets vary too much to pool. Both chosen by the
+# user: s443 (r443-452) for PEG 6K, s394 (r394-400) for no PEG
 STATIC_REPRESENTATIVE = {"ferritin50-peg6k": "s443", "ferritin50": "s394"}
 # the bounds of Γ in the per-ring XPCS fit, s⁻¹: 1/Γ from 10 ms down to 10 ns, two
 # decades past either end of the 0.44-135 µs lag window
 XPCS_GAMMA_BOUNDS = (1e2, 1e8)
+# the bounds of the KWW exponent α: from strongly stretched (0.2, a generous floor) to
+# compressed up to 2, the ballistic limit seen in jammed and gelling soft matter
+XPCS_STRETCH_BOUNDS = (0.2, 2.0)
+# a fitted parameter this close to a bound, as a fraction of the bound interval (log Γ,
+# α, b), marks the ring unresolved: the bound, not the data, set it
+AT_BOUND = 0.01
 KNOWN_Q = [0.2 * (1.0 / 0.2) ** (i / 199) for i in range(200)]
 # blocks the matching passes over, (run, first trainId) -> why. Found 2026-10-08 as the
 # only blocks in any curves.nc whose mean I over q 0.3-0.4 is under a tenth of the
@@ -730,41 +742,165 @@ def xpcs_windows(droplet, db):
     return out, {str(r): s for r, s in sources.items()}
 
 
-def fit_window(g2):
-    """Per ring, a weighted fit of a pooled g2's baseline-subtracted ``c2`` to
-    ``β exp(−2Γτ) + b`` (errors ``sigma``, β in [0, 1], Γ in XPCS_GAMMA_BOUNDS). Not
+def saved_windows(droplet, db, refresh=False):
+    """`xpcs_windows` of `droplet`, from ``figures/overview/xpcs_windows_<id>.nc``
+    when it exists, else computed and saved there (``refresh`` recomputes). The file
+    keeps each window's pooled ``c2``, ``sigma``, ``g2``, ``baseline`` over (t_target,
+    roi_q, tau), NaN for a window without trains, and the records and hit sources as
+    JSON. It records what it was made from: the runs, MATCH_T, MATCH_TOLERANCE, the
+    PEG %, `analysis.cache.CACHE_VERSION`, and the size and mtime of every run's XPCS
+    results file and DAMNIT file (the sources of `cache.xpcs_run` and
+    `cache.droplet_timeline`). A file made from anything else raises, never reused."""
+    import numpy as np
+    import xarray as xr
+
+    from analysis import cache
+    from analysis.xpcs.damnit import result_file
+
+    droplet_id = droplet[0]
+    runs = kept_runs(droplet)
+    inputs = {
+        "runs": runs,
+        "match_t": list(MATCH_T),
+        "match_tolerance": MATCH_TOLERANCE,
+        "peg_percent_wv": droplet[4],
+        "cache_version": cache.CACHE_VERSION,
+    }
+    sources = [cache._source(result_file(10400, r)) for r in runs]
+    sources += [cache._source(db[r].file) for r in runs]
+    path = FIGURES / "overview" / f"xpcs_windows_{droplet_id}.nc"
+    if path.exists() and not refresh:
+        with xr.open_dataset(path, engine="h5netcdf") as ds:
+            # every attribute read inside the block (CLAUDE.md pitfall 13)
+            stale = [
+                key
+                for key, now in (("inputs", inputs), ("sources", sources))
+                if json.loads(ds.attrs[key]) != cache._normalised(now)
+            ]
+            if stale:
+                raise ValueError(
+                    f"{path} was made from other {' and '.join(stale)} than "
+                    f"{droplet_id}'s now; remake it with --refresh-xpcs"
+                )
+            records = json.loads(ds.attrs["windows"])
+            hit_sources = json.loads(ds.attrs["hit_sources"])
+            ds = ds.load()
+        out = {}
+        for target, entry in zip(MATCH_T, records, strict=True):
+            g2 = None if "skipped" in entry else ds.sel(t_target=target)
+            out[target] = (g2, entry)
+        return out, hit_sources
+
+    windows, hit_sources = xpcs_windows(droplet, db)
+    pooled = [g2 for g2, _ in windows.values() if g2 is not None]
+    keep = ["c2", "sigma", "g2", "baseline"]
+    ds = xr.concat(
+        [g2[keep] for g2 in pooled],
+        xr.DataArray(
+            [t for t, (g2, _) in windows.items() if g2 is not None], dims="t_target"
+        ),
+        combine_attrs="drop",
+    ).reindex(t_target=list(MATCH_T))
+    ds.attrs = {
+        "inputs": json.dumps(inputs, sort_keys=True),
+        "sources": json.dumps(sources, sort_keys=True),
+        "windows": json.dumps([entry for _, entry in windows.values()]),
+        "hit_sources": json.dumps(hit_sources),
+        "period_s": pooled[0].attrs["period_s"] if pooled else np.nan,
+        "description": "pooled g2 of the hit trains of each t/t* window; see "
+        "scripts/damnit_saxs_figures.py saved_windows",
+    }
+    cache._write(ds, path)
+    return {
+        t: (None if g2 is None else ds.sel(t_target=t), e)
+        for t, (g2, e) in windows.items()
+    }, hit_sources
+
+
+def fit_window(g2, beta_mode="fixed"):
+    """Per ring, a weighted fit of a pooled g2's baseline-subtracted ``c2`` to the
+    stretched exponential (KWW) ``β exp(−2 (Γτ)^α) + b`` (errors ``sigma``) with β
+    fixed at the ring's reference contrast (`analysis.triage.xpcs.REFERENCE_BETA`,
+    the τ → 0 intercept of r450 and r493-496) and Γ (XPCS_GAMMA_BOUNDS), α
+    (XPCS_STRETCH_BOUNDS) and b free. With β free the fit degenerates wherever part
+    of the decay lies below the first lag: β, Γ and α trade off, α runs to its floor.
+    Fixed, contrast lost before the first lag reads as a fast Γ. τ = 1/Γ is the KWW
+    relaxation time, not the mean one, τ Γ(1/α)/α. Not
     `analysis.xpcs.figures.fit_g2`, the DAMNIT column's: that is one unweighted joint
-    fit over all rings, so one ring that does not converge fails them all, and it
-    fits flat noise as readily as a decay. A ring is ``resolved`` when its contrast is
-    significant (β ≥ 3 σ_β), 1/Γ lies inside the lag window and σ_Γ < Γ. The slope n
-    of Γ ∝ qⁿ and D = Γ/q² (weighted mean) use the resolved rings only. Returns (fit,
-    record), the fit a namespace of per-ring arrays."""
+    fit over all rings, so one ring that does not converge fails them all. A ring is
+    ``resolved`` when no fitted parameter lies within AT_BOUND of a bound (relative,
+    in log for Γ), 1/Γ lies inside the lag window and σ_Γ < Γ. ``visible`` is the
+    measured c2 at the first lag over β, the fraction of the contrast left there. The
+    slope n of Γ ∝ qⁿ, D = Γ/q² and the mean α use the resolved rings only.
+    ``beta_mode="bounded"`` fits β too, in [0, the reference's p84] from the reference:
+    β is then the amplitude of the decay inside the lag window, ``lost`` = 1 − β/β_ref
+    the fraction of the contrast gone before the first lag, and a β at either bound
+    marks the ring unresolved. Returns (fit, record), the fit a namespace of per-ring
+    arrays."""
     import types
 
     import numpy as np
     from scipy.optimize import curve_fit
 
+    from analysis.triage.xpcs import fixed_beta
+
     q_nm = 10 * g2.roi_q.values  # roi_q is in Å⁻¹
+    reference = fixed_beta(g2.roi_q.values)
     tau = g2.tau.values
     n = q_nm.size
     fit = types.SimpleNamespace(
         q=g2.roi_q.values,
         tau=tau,
         curve=np.full((n, tau.size), np.nan),
-        **{k: np.full(n, np.nan) for k in ("gamma", "err_gamma", "beta", "err_beta")},
+        **{
+            k: np.full(n, np.nan)
+            for k in (
+                "gamma",
+                "err_gamma",
+                "beta",
+                "err_beta",
+                "beta_ref",
+                "stretch",
+                "err_stretch",
+                "visible",
+                "err_visible",
+            )
+        },
     )
+    fit.at_bound = np.zeros(n, dtype=bool)
+    low = (np.log(XPCS_GAMMA_BOUNDS[0]), XPCS_STRETCH_BOUNDS[0], -1)
+    high = (np.log(XPCS_GAMMA_BOUNDS[1]), XPCS_STRETCH_BOUNDS[1], 1)
 
-    def model(t, beta, gamma, base):
-        return beta * np.exp(-2 * gamma * t) + base
+    if beta_mode not in ("fixed", "bounded"):
+        raise ValueError(f"beta_mode must be 'fixed' or 'bounded', got {beta_mode!r}")
+
+    # Γ fitted as log Γ, so that its bound check is relative
+    def kww(t, log_gamma, stretch, base, beta):
+        return beta * np.exp(-2 * (np.exp(log_gamma) * t) ** stretch) + base
 
     failed = {}
     for r in range(n):
+        ref = reference[r]
+        fit.beta_ref[r] = ref.value
+        if beta_mode == "fixed":
+            fit.beta[r], fit.err_beta[r] = ref.value, (ref.p84 - ref.p16) / 2
         y, e = g2.c2.values[r], g2.sigma.values[r]
         ok = np.isfinite(y) & np.isfinite(e) & (e > 0)
+        if not np.isfinite(ref.value):
+            failed[r] = "no reference contrast for this ring"
+            continue
         if ok.sum() < 6:
             failed[r] = "fewer than 6 points"
             continue
-        p0 = (max(float(y[ok][:3].mean()), 1e-3), 1 / float(np.median(tau)), 0.0)
+        fit.visible[r], fit.err_visible[r] = y[0] / ref.value, e[0] / ref.value
+        p0 = (-np.log(float(np.median(tau))), 1.0, 0.0)
+        if beta_mode == "fixed":
+            model = functools.partial(kww, beta=ref.value)
+            lo, hi = low, high
+        else:
+            model = kww
+            lo, hi = (*low, 0.0), (*high, ref.p84)
+            p0 = (*p0, ref.value)
         try:
             popt, pcov = curve_fit(
                 model,
@@ -773,20 +909,27 @@ def fit_window(g2):
                 p0=p0,
                 sigma=e[ok],
                 absolute_sigma=True,
-                bounds=((0, XPCS_GAMMA_BOUNDS[0], -1), (1, XPCS_GAMMA_BOUNDS[1], 1)),
+                bounds=(lo, hi),
                 maxfev=20000,
             )
         except (RuntimeError, ValueError) as error:
             failed[r] = str(error)
             continue
         err = np.sqrt(np.diag(pcov))
-        fit.beta[r], fit.gamma[r] = popt[:2]
-        fit.err_beta[r], fit.err_gamma[r] = err[:2]
+        span = np.subtract(hi, lo)
+        fit.at_bound[r] = bool(
+            np.any((popt - lo) < AT_BOUND * span)
+            or np.any((hi - popt) < AT_BOUND * span)
+        )
+        fit.gamma[r], fit.stretch[r] = np.exp(popt[0]), popt[1]
+        fit.err_gamma[r], fit.err_stretch[r] = fit.gamma[r] * err[0], err[1]
+        if beta_mode == "bounded":
+            fit.beta[r], fit.err_beta[r] = popt[3], err[3]
         fit.curve[r] = model(tau, *popt)
     relax = 1 / fit.gamma
     with np.errstate(invalid="ignore"):
         resolved = (
-            (fit.beta >= 3 * fit.err_beta)
+            ~fit.at_bound
             & (relax >= tau.min())
             & (relax <= tau.max())
             & (fit.err_gamma < fit.gamma)
@@ -799,6 +942,12 @@ def fit_window(g2):
         "tau_s": relax.tolist(),
         "beta": fit.beta.tolist(),
         "err_beta": fit.err_beta.tolist(),
+        "beta_ref": fit.beta_ref.tolist(),
+        "stretch": fit.stretch.tolist(),
+        "err_stretch": fit.err_stretch.tolist(),
+        "visible": fit.visible.tolist(),
+        "err_visible": fit.err_visible.tolist(),
+        "at_bound": fit.at_bound.tolist(),
         "resolved": resolved.tolist(),
         "n_resolved": int(resolved.sum()),
     }
@@ -812,6 +961,17 @@ def fit_window(g2):
             "D_um2_per_s": float(np.average(d, weights=w)),
             "D_err_um2_per_s": float(w.sum() ** -0.5),
         }
+    if resolved.any():
+        w = fit.err_stretch[resolved] ** -2
+        record |= {
+            "stretch_mean": float(np.average(fit.stretch[resolved], weights=w)),
+            "stretch_mean_err": float(w.sum() ** -0.5),
+        }
+    if beta_mode == "bounded":
+        lost = 1 - fit.beta / fit.beta_ref
+        record["lost"] = lost.tolist()
+        if resolved.any():
+            record["lost_mean"] = float(lost[resolved].mean())
     if resolved.sum() >= 3:
         # Γ ∝ q^n over the resolved rings, weighted by the relative errors of Γ
         (slope, _), cov = np.polyfit(
@@ -825,14 +985,17 @@ def fit_window(g2):
     return fit, record
 
 
-def compare_xpcs_mesh_static(sample, db):
+def compare_xpcs_mesh_static(sample, db, refresh=False, beta_mode="fixed"):
     """`sample`'s mesh and static representatives' XPCS at matched t/t*, every hit
     train within MATCH_TOLERANCE pooled (`xpcs_windows`) and fitted per ring
     (`fit_window`; fits drawn and Γ, τ filled only where resolved).
-    Four figures: c2(τ) with the fit at four rings, a panel per (ring, t/t*); Γ against
-    q and τ = 1/Γ against q, a panel per t/t*, with the Γ ∝ q² (diffusion) and Γ ∝ q
-    (shear) slopes; and against t/t* the slope n of Γ ∝ qⁿ, D = Γ/q², β at the lowest
-    ring and τ at a middle one. Returns the files written and the record."""
+    Five figures: c2(τ) with the KWW fit at four rings, a panel per (ring, t/t*); Γ, τ
+    = 1/Γ and the KWW exponent α against q, a panel per t/t*, Γ and τ with the Γ ∝ q²
+    (diffusion) and Γ ∝ q (shear) slopes; and against t/t* the slope n of Γ ∝ qⁿ,
+    D = Γ/q², c2 at the first lag over β at the lowest ring, τ at a middle one and the
+    mean α, and with ``beta_mode="bounded"`` 1 − β/β_ref at the lowest ring; those
+    figures' names end in ``_beta_bounded``. The windows come from `saved_windows`.
+    Returns the files written and the record."""
     import matplotlib
 
     matplotlib.use("Agg")
@@ -855,10 +1018,10 @@ def compare_xpcs_mesh_static(sample, db):
     data = {}
     record = {"sample": sample, "droplets": {}}
     for kind, droplet_id in picks.items():
-        windows, sources = xpcs_windows(by_id[droplet_id], db)
+        windows, sources = saved_windows(by_id[droplet_id], db, refresh)
         fits = {}
         for target, (g2, entry) in windows.items():
-            fit, fitted = (None, {}) if g2 is None else fit_window(g2)
+            fit, fitted = (None, {}) if g2 is None else fit_window(g2, beta_mode)
             entry |= fitted
             fits[target] = (g2, fit, entry)
         data[kind] = fits
@@ -872,6 +1035,7 @@ def compare_xpcs_mesh_static(sample, db):
     out = FIGURES / "overview"
     out.mkdir(parents=True, exist_ok=True)
     names = []
+    suffix = "" if beta_mode == "fixed" else "_beta_bounded"
     labels = {k: f"{k}: {picks[k]}" for k in picks}
 
     def legend(fig, x=0.91):
@@ -946,13 +1110,13 @@ def compare_xpcs_mesh_static(sample, db):
         ax.set_xlabel(r"$\tau$ (s)")
     legend(fig)
     fig.suptitle(suptitle, fontsize=10)
-    names.append(f"xpcs_mesh_vs_static_g2_{sample}.png")
+    names.append(f"xpcs_mesh_vs_static_g2_{sample}{suffix}.png")
     fig.savefig(out / names[-1], dpi=200, bbox_inches="tight")
     plt.close(fig)
 
     # Γ(q) and τ(q), a panel per t/t*
     nrows = math.ceil(len(MATCH_T) / 3)
-    for quantity in ("gamma", "tau"):
+    for quantity in ("gamma", "tau", "stretch"):
         fig, axs = plt.subplots(
             nrows,
             3,
@@ -971,6 +1135,8 @@ def compare_xpcs_mesh_static(sample, db):
                 ok = np.array(entry["resolved"])
                 if quantity == "gamma":
                     y, err = fit.gamma, fit.err_gamma
+                elif quantity == "stretch":
+                    y, err = fit.stretch, fit.err_stretch
                 else:
                     y = 1 / fit.gamma
                     err = fit.err_gamma / fit.gamma**2
@@ -989,7 +1155,7 @@ def compare_xpcs_mesh_static(sample, db):
                 if ok.any() and anchor is None:
                     k = np.flatnonzero(ok)[ok.sum() // 2]
                     anchor = (q[k], y[k])
-                if "exponent_n" in entry:
+                if "exponent_n" in entry and quantity != "stretch":
                     ax.text(
                         0.04,
                         0.94 - 0.08 * list(picks).index(kind),
@@ -1000,7 +1166,9 @@ def compare_xpcs_mesh_static(sample, db):
                         fontsize=7,
                         va="top",
                     )
-            if anchor is not None:
+            if quantity == "stretch":
+                ax.axhline(1, color="0.5", ls="--", lw=0.8)
+            elif anchor is not None:
                 qq = np.geomspace(0.22, 0.9, 20)
                 sign = 1 if quantity == "gamma" else -1
                 for power, style in ((2, "--"), (1, ":")):
@@ -1012,9 +1180,12 @@ def compare_xpcs_mesh_static(sample, db):
                         lw=0.8,
                     )
             ax.set_xscale("log")
-            ax.set_yscale("log")
             ax.set_xlim(0.22, 0.9)
-            ax.set_ylim(*((1e3, 1e7) if quantity == "gamma" else (1e-7, 1e-3)))
+            if quantity == "stretch":
+                ax.set_ylim(0, 2.1)
+            else:
+                ax.set_yscale("log")
+                ax.set_ylim(*((1e3, 1e7) if quantity == "gamma" else (1e-7, 1e-3)))
             ax.xaxis.set_major_locator(FixedLocator([0.3, 0.5, 0.8]))
             ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}"))
             ax.xaxis.set_minor_formatter(NullFormatter())
@@ -1025,25 +1196,39 @@ def compare_xpcs_mesh_static(sample, db):
             ax.set_xlabel(r"$q$ (nm$^{-1}$)")
         for ax in axs[:, 0]:
             ax.set_ylabel(
-                r"$\Gamma$ (s$^{-1}$)"
-                if quantity == "gamma"
-                else r"$\tau = 1/\Gamma$ (s)"
+                {
+                    "gamma": r"$\Gamma$ (s$^{-1}$)",
+                    "tau": r"$\tau = 1/\Gamma$ (s)",
+                    "stretch": r"KWW exponent $\alpha$",
+                }[quantity]
             )
         legend(fig)
         guide = (
-            r"dashed $\propto q^{2}$ (diffusion), dotted $\propto q$ (shear); "
-            r"open: not resolved ($\beta < 3\sigma_\beta$, $1/\Gamma$ outside the lags "
-            r"or $\sigma_\Gamma \geq \Gamma$); "
-            r"$n$ from $\Gamma \propto q^n$ over filled points"
+            (
+                r"$c_2 = \beta_\mathrm{ref}\,e^{-2(\Gamma\tau)^\alpha} + b$, "
+                r"$\beta_\mathrm{ref}$ fixed (r450, r493-496); "
+                if beta_mode == "fixed"
+                else r"$c_2 = \beta\,e^{-2(\Gamma\tau)^\alpha} + b$, "
+                r"$0 \leq \beta \leq \beta_\mathrm{ref}$'s p84 (r450, r493-496); "
+            )
+            + (
+                r"dashed $\alpha = 1$ (simple exponential); "
+                if quantity == "stretch"
+                else r"dashed $\propto q^{2}$ (diffusion), dotted $\propto q$ (shear); "
+            )
+            + r"open: not resolved (a parameter at its bound, "
+            r"$1/\Gamma$ outside the lags or $\sigma_\Gamma \geq \Gamma$); "
+            + r"$n$ from $\Gamma \propto q^n$ over filled points"
         )
         fig.suptitle(suptitle + "\n" + guide, fontsize=9)
-        names.append(f"xpcs_mesh_vs_static_{quantity}_{sample}.png")
+        names.append(f"xpcs_mesh_vs_static_{quantity}_{sample}{suffix}.png")
         fig.savefig(out / names[-1], dpi=200, bbox_inches="tight")
         plt.close(fig)
 
     # fit parameters against t/t*
     mid = 5
-    fig, axs = plt.subplots(1, 4, figsize=(14, 3.4))
+    npanel = 5 if beta_mode == "fixed" else 6
+    fig, axs = plt.subplots(1, npanel, figsize=(3.5 * npanel, 3.4))
     for kind in picks:
         rows = [
             (e["t_over_tstar_mean"], e)
@@ -1065,33 +1250,56 @@ def compare_xpcs_mesh_static(sample, db):
         )
         axs[2].errorbar(
             t,
-            [r[1]["beta"][0] for r in rows],
-            [r[1]["err_beta"][0] for r in rows],
+            [r[1]["visible"][0] for r in rows],
+            [r[1]["err_visible"][0] for r in rows],
             **style,
         )
         tau_mid = np.array(
             [r[1]["tau_s"][mid] if r[1]["resolved"][mid] else np.nan for r in rows]
         )
         axs[3].plot(t, tau_mid, **{k: v for k, v in style.items() if k != "capsize"})
+        axs[4].errorbar(
+            t,
+            [r[1].get("stretch_mean", np.nan) for r in rows],
+            [r[1].get("stretch_mean_err", np.nan) for r in rows],
+            **style,
+        )
+        if beta_mode == "bounded":
+            axs[5].errorbar(
+                t,
+                [r[1]["lost"][0] for r in rows],
+                [r[1]["err_beta"][0] / r[1]["beta_ref"][0] for r in rows],
+                **style,
+            )
     for ax in axs:
         ax.set_xlabel("$t/t^*$")
     axs[0].axhline(2, color="0.5", ls="--", lw=0.8)
     axs[0].axhline(1, color="0.5", ls=":", lw=0.8)
     axs[0].set_ylabel(r"$n$ in $\Gamma \propto q^n$")
     axs[1].set_ylabel(r"$D = \Gamma/q^2$ ($\mu$m$^2$/s)")
-    axs[2].set_ylabel(rf"$\beta$, $q$ = {q_rings[0]:.3f} nm$^{{-1}}$")
+    axs[2].axhline(1, color="0.5", ls="--", lw=0.8)
+    axs[2].set_ylabel(
+        rf"$c_2(\tau_1)/\beta_\mathrm{{ref}}$, $q$ = {q_rings[0]:.3f} nm$^{{-1}}$"
+    )
     axs[3].set_ylabel(rf"$\tau$, $q$ = {q_rings[mid]:.3f} nm$^{{-1}}$ (s)")
     axs[3].set_yscale("log")
+    axs[4].axhline(1, color="0.5", ls="--", lw=0.8)
+    axs[4].set_ylabel(r"KWW $\alpha$, mean over resolved rings")
+    if beta_mode == "bounded":
+        axs[5].axhline(0, color="0.5", ls="--", lw=0.8)
+        axs[5].set_ylabel(
+            rf"$1 - \beta/\beta_\mathrm{{ref}}$, $q$ = {q_rings[0]:.3f} nm$^{{-1}}$"
+        )
     legend(fig, x=0.99)
     fig.suptitle(suptitle, fontsize=10)
     fig.tight_layout()
-    names.append(f"xpcs_mesh_vs_static_params_{sample}.png")
+    names.append(f"xpcs_mesh_vs_static_params_{sample}{suffix}.png")
     fig.savefig(out / names[-1], dpi=200, bbox_inches="tight")
     plt.close(fig)
     return names, record
 
 
-def compare_xpcs_all():
+def compare_xpcs_all(refresh=False, beta_mode="fixed"):
     "compare_xpcs_mesh_static() for every condition with both kinds; fits in one JSON."
     import damnit
 
@@ -1099,12 +1307,13 @@ def compare_xpcs_all():
     written = []
     record = []
     for sample in CONDITIONS:
-        names, entry = compare_xpcs_mesh_static(sample, db)
+        names, entry = compare_xpcs_mesh_static(sample, db, refresh, beta_mode)
         written += names
         if entry:
             record.append(entry)
     if written:
-        name = "xpcs_mesh_vs_static_fits.json"
+        suffix = "" if beta_mode == "fixed" else "_beta_bounded"
+        name = f"xpcs_mesh_vs_static_fits{suffix}.json"
         (FIGURES / "overview" / name).write_text(
             json.dumps(
                 {
@@ -1112,9 +1321,17 @@ def compare_xpcs_all():
                     "tolerance": MATCH_TOLERANCE,
                     "pooling": "every usable hit train within the tolerance, "
                     "analysis.cache.pool_g2",
-                    "model": "c2 = beta exp(-2 Gamma tau) + b per ring, weighted by "
-                    "sigma, bounded (fit_window); resolved = beta >= 3 sigma_beta, "
-                    "1/Gamma inside the lags, sigma_Gamma < Gamma",
+                    "model": "c2 = beta exp(-2 (Gamma tau)^alpha) + b (KWW; 'stretch' "
+                    "is alpha) per ring, "
+                    + (
+                        "beta fixed at REFERENCE_BETA"
+                        if beta_mode == "fixed"
+                        else "beta in [0, REFERENCE_BETA p84], lost = 1 - beta/beta_ref"
+                    )
+                    + ", weighted by sigma, bounded (fit_window); resolved = no "
+                    "parameter at a bound, 1/Gamma inside the lags, "
+                    "sigma_Gamma < Gamma",
+                    "beta_mode": beta_mode,
                     "conditions": record,
                 },
                 indent=1,
@@ -1137,6 +1354,18 @@ def main(argv=None):
         action="store_true",
         help="only make the XPCS mesh-vs-static comparison",
     )
+    parser.add_argument(
+        "--refresh-xpcs",
+        action="store_true",
+        help="re-pool the XPCS windows instead of reading figures/overview/"
+        "xpcs_windows_<id>.nc",
+    )
+    parser.add_argument(
+        "--xpcs-beta",
+        choices=("fixed", "bounded"),
+        default="fixed",
+        help="the XPCS fit's β: fixed at REFERENCE_BETA, or free in [0, its p84]",
+    )
     args = parser.parse_args(argv)
     unknown = set(args.ids) - {d[0] for d in DROPLETS}
     if unknown:
@@ -1153,7 +1382,7 @@ def main(argv=None):
             "LaTeX without type1cm.sty on PATH; run `module load texlive/2022` first"
         )
     if args.xpcs:
-        for name in compare_xpcs_all():
+        for name in compare_xpcs_all(args.refresh_xpcs, args.xpcs_beta):
             print(f"xpcs mesh vs static: figures/overview/{name}", flush=True)
         return 0
 
