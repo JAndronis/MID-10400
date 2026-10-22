@@ -10,7 +10,13 @@ runs are pooled, g2 by `analysis.cache.pool_g2` and the two-time map by summing 
 run's `XpcsHits.pooled_sums` before dividing (photon-weighted, as `XpcsHits.ttcf`).
 The pooled windows are saved in the droplet's folder (``xpcs_windows.nc``, with what
 they were made from), so a refit or a new figure need not pool again. A file made
-from other inputs is refused, and ``--refresh`` pools again.
+from other inputs is refused, and ``--refresh`` pools again. ``run.json`` holds the
+droplet's status, and ``index.json`` beside the folders gathers every ``run.json``.
+
+Droplets can run as parallel jobs (a Slurm array task each), and ``--matched`` and
+``--mesh-vs-static`` beside them. A job writes only its droplet's folder, the
+windows files under a temporary name renamed into place, and ``index.json``, which
+it gathers under a lock.
 
 Each ring's baseline-subtracted c2 is fitted with `analysis.xpcs.kww.fit_rings`: a KWW
 ``β exp(−2(Γτ)^α) + b`` with β fixed at the ring's reference contrast
@@ -69,7 +75,7 @@ import sys
 import time
 import traceback
 
-from _common import REPO, droplets_dir, overview_dir
+from _common import REPO, droplets_dir, overview_dir, write_index
 
 from analysis import plotting
 from analysis.droplets import (
@@ -803,12 +809,18 @@ def run_one(droplet, db, refresh=False):
     (out / "xpcs_fits.json").write_text(json.dumps(record, indent=1))
     seconds = time.perf_counter() - started
     print(f"{droplet_id}: {len(names)} figures in {seconds:.0f} s -> {out}", flush=True)
-    return {
-        "id": droplet_id,
-        "folder": str(out.relative_to(REPO)),
-        "n_windows": len(windows),
-        "seconds": round(seconds, 1),
-    }
+    write_run(
+        droplet,
+        {"status": "ok", "n_windows": len(windows), "seconds": round(seconds, 1)},
+    )
+
+
+def write_run(droplet, entry):
+    "The droplet's ``run.json``, its line of ``index.json``."
+    out = outdir(droplet)
+    out.mkdir(parents=True, exist_ok=True)
+    record = {"id": droplet.id, "folder": str(out.relative_to(REPO))} | entry
+    (out / "run.json").write_text(json.dumps(record, indent=1))
 
 
 def matched(sample, mesh, db, refresh=False):
@@ -1455,21 +1467,18 @@ def main(argv=None):
             out = overview_dir("xpcs_mesh_vs_static").relative_to(REPO)
             print(f"mesh vs static: {out / name}", flush=True)
         return 0
-    results, failed = [], []
+    failed = []
     for droplet in DROPLETS:
         if not droplet.figures or (args.ids and droplet.id not in args.ids):
             continue
         try:
-            results.append(run_one(droplet, db, args.refresh))
+            run_one(droplet, db, args.refresh)
         except Exception:  # one droplet's failure must not stop the rest
             failed.append(droplet.id)
-            print(f"{droplet.id}: FAILED\n{traceback.format_exc()}", flush=True)
-    index = droplets_dir("xpcs") / "index.json"
-    previous = json.loads(index.read_text()) if index.exists() else []
-    merged = {r["id"]: r for r in previous} | {r["id"]: r for r in results}
-    index.write_text(
-        json.dumps(sorted(merged.values(), key=lambda r: r["id"]), indent=1)
-    )
+            error = traceback.format_exc()
+            print(f"{droplet.id}: FAILED\n{error}", flush=True)
+            write_run(droplet, {"status": "FAILED", "error": error.splitlines()[-1]})
+    write_index("xpcs")
     if failed:
         print(f"failed: {failed}", flush=True)
     return 1 if failed else 0

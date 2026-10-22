@@ -11,6 +11,8 @@ import os
 import platform
 import socket
 import subprocess
+import time
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -25,6 +27,7 @@ __all__ = [
     "overview_dir",
     "report_header",
     "stamp",
+    "write_index",
     "write_report",
 ]
 
@@ -44,6 +47,42 @@ def droplets_dir(technique: str) -> Path:
 def overview_dir(kind: str) -> Path:
     """The folder of one kind of overview ("saxs", "saxs_matched_tstar", ...)."""
     return FIGURES / "overview" / kind
+
+
+def write_index(technique: str, attempts: int = 120) -> None:
+    """Gather every droplet's ``run.json`` into ``droplets/<technique>/index.json``.
+
+    An entry already in the index stays for a folder without a ``run.json``.
+    Parallel jobs each call this after writing their own ``run.json``: the lock
+    makes the gathers take turns, so the last one sees every record, and the
+    rename means a reader never sees a partial index.
+
+    :param attempts: one-second waits for another job's lock before giving up.
+    :raises OutputBusy: the lock stayed held for every attempt.
+    """
+    from analysis.common.lock import OutputBusy, output_lock
+
+    index = droplets_dir(technique) / "index.json"
+    for _ in range(attempts):
+        try:
+            with output_lock(index):
+                merged = (
+                    {r["id"]: r for r in json.loads(index.read_text())}
+                    if index.exists()
+                    else {}
+                )
+                for path in index.parent.glob("*/run.json"):
+                    record = json.loads(path.read_text())
+                    merged[record["id"]] = record
+                tmp = index.with_name(f".{index.name}.{uuid.uuid4().hex}.tmp")
+                tmp.write_text(
+                    json.dumps(sorted(merged.values(), key=lambda r: r["id"]), indent=1)
+                )
+                os.replace(tmp, index)
+            return
+        except OutputBusy:
+            time.sleep(1)
+    raise OutputBusy(f"{index} stayed locked for {attempts} s")
 
 
 def git_commit() -> str:
