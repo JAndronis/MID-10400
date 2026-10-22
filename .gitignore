@@ -27,6 +27,8 @@ wheels/
 *.npz
 *.dat
 *.nc
+*.csv
+*.json
 data/
 
 # OS cruft
