@@ -1,10 +1,10 @@
 """Make the XPCS figures of every droplet after r240, one folder per droplet.
 
 The droplets are `analysis.droplets.DROPLETS` with ``figures`` set,
-and each gets ``figures/droplets_xpcs/<id>_<sample>_r<first>-<last>/``, named as its
+and each gets ``figures/droplets/xpcs/<id>_<sample>_r<first>-<last>/``, named as its
 SAXS folder. A droplet's usable hit trains (every train of a static run that hit the
 droplet, the "on" trains of a mesh run) are split into contiguous t/t* windows
-WINDOW_WIDTH wide, t* the SAXS notebook's (`analysis.cache.droplet_timeline` of the
+WINDOW_WIDTH wide, t* the SAXS curves' (`analysis.cache.droplet_timeline` of the
 droplet's runs, checked against its ``curves.nc``). Per window the trains of all its
 runs are pooled, g2 by `analysis.cache.pool_g2` and the two-time map by summing each
 run's `XpcsHits.pooled_sums` before dividing (photon-weighted, as `XpcsHits.ttcf`).
@@ -38,13 +38,13 @@ Per droplet:
 
 With ``--mesh-vs-static``, each condition's mesh and static representatives
 (`analysis.droplets.REPRESENTATIVE`) on the same axes from the same matched windows,
-into ``figures/overview/xpcs_mesh_vs_static_*.png`` and
+into ``figures/overview/xpcs_mesh_vs_static/``: ``xpcs_mesh_vs_static_*.png`` and
 ``xpcs_mesh_vs_static_fits.json``
 (``--beta bounded``: β free in [0, β_ref's p84], names ending in ``_beta_bounded``).
 
 With ``--matched``, each condition's droplets side by side at matched t/t* instead
 (MATCH_T ± MATCH_TOLERANCE, mesh and static apart, saved per droplet as
-``xpcs_windows_matched.nc``), into ``figures/overview/``:
+``xpcs_windows_matched.nc``), into ``figures/overview/xpcs_matched_tstar/``:
 ``xpcs_matched_tstar_<sample>[_mesh]_{g2,gamma,params}.png`` and
 ``xpcs_matched_tstar_fits.json``.
 
@@ -69,7 +69,7 @@ import sys
 import time
 import traceback
 
-from _common import FIGURES, REPO
+from _common import REPO, droplets_dir, overview_dir
 
 from analysis import plotting
 from analysis.droplets import (
@@ -98,7 +98,7 @@ Q_CMAP_RANGE = (0.0, 0.85)
 
 
 def outdir(droplet):
-    return FIGURES / "droplets_xpcs" / droplet.name
+    return droplets_dir("xpcs") / droplet.name
 
 
 def load_droplet(droplet, db):
@@ -156,7 +156,7 @@ def load_droplet(droplet, db):
         "frames_per_train": {str(r): n for r, n in frames.items()},
         "period_s": float(next(iter(parts.values())).attrs["period_s"]),
     }
-    saxs = FIGURES / "droplets" / droplet.name / "curves.nc"
+    saxs = droplets_dir("saxs") / droplet.name / "curves.nc"
     if saxs.exists():
         saxs_t_star = float(xr.load_dataset(saxs).attrs["t_star_s"])
         info["saxs_t_star_s"] = saxs_t_star
@@ -816,10 +816,10 @@ def matched(sample, mesh, db, refresh=False):
     script's ``saxs_matched_tstar_*``: per MATCH_T every usable hit train within
     MATCH_TOLERANCE pooled (`saved_windows(matched=True)`), each ring fitted by
     `fit_rings` (β fixed), a line per droplet in its DROPLET_COLOURS colour. Three
-    figures into ``figures/overview/``: (c2 − b)/β_ref against τ at MATCHED_RINGS, a
-    panel per (ring, t/t*); Γ(q), a panel per t/t*; and against t/t* the slope n of
-    Γ ∝ qⁿ, D = Γ/q², the mean α and c2(τ₀)/β_ref at the lowest ring. Returns the
-    files written and the windows' records."""
+    figures into ``figures/overview/xpcs_matched_tstar/``: (c2 − b)/β_ref against τ at
+    MATCHED_RINGS, a panel per (ring, t/t*); Γ(q), a panel per t/t*; and against t/t*
+    the slope n of Γ ∝ qⁿ, D = Γ/q², the mean α and c2(τ₀)/β_ref at the lowest ring.
+    Returns the files written and the windows' records."""
     import numpy as np
 
     plt = plotting.pyplot()
@@ -852,7 +852,7 @@ def matched(sample, mesh, db, refresh=False):
     colours = {d.id: c for (d, _), c in zip(data, DROPLET_COLOURS, strict=False)}
     labels = {d.id: f"{d.id}: {d.run_label}" for d, _ in data}
     stem = f"xpcs_matched_tstar_{sample}{'_mesh' if mesh else ''}"
-    out = FIGURES / "overview"
+    out = overview_dir("xpcs_matched_tstar")
     names = []
     suptitle = (
         f"{condition_title(sample, mesh)}: XPCS at matched $t/t^*$ (hit trains within "
@@ -1064,7 +1064,7 @@ def matched_all(db, refresh=False):
         record += entries
     if written:
         name = "xpcs_matched_tstar_fits.json"
-        (FIGURES / "overview" / name).write_text(
+        (overview_dir("xpcs_matched_tstar") / name).write_text(
             json.dumps(
                 {
                     "t_targets": list(MATCH_T),
@@ -1086,13 +1086,13 @@ def mesh_vs_static(sample, db, refresh=False, beta_mode="fixed"):
     """`sample`'s mesh and static representatives (`analysis.droplets.REPRESENTATIVE`)
     on the same axes at matched t/t*, from their `matched_windows` fitted with
     `beta_mode` (fits drawn and Γ, τ filled only where resolved). Five figures into
-    ``figures/overview/``: c2(τ) with the KWW fit at four rings, a panel per (ring,
-    t/t*); Γ, τ = 1/Γ and the KWW exponent α against q, a panel per t/t*, Γ and τ with
-    the Γ ∝ q² (diffusion) and Γ ∝ q (shear) slopes; and against t/t* the slope n of
-    Γ ∝ qⁿ, D = Γ/q², c2 at the first lag over β at the lowest ring, τ at a middle one
-    and the mean α, and with ``beta_mode="bounded"`` 1 − β/β_ref at the lowest ring;
-    those figures' names end in ``_beta_bounded``. Returns the files written and the
-    record."""
+    ``figures/overview/xpcs_mesh_vs_static/``: c2(τ) with the KWW fit at four rings, a
+    panel per (ring, t/t*); Γ, τ = 1/Γ and the KWW exponent α against q, a panel per
+    t/t*, Γ and τ with the Γ ∝ q² (diffusion) and Γ ∝ q (shear) slopes; and against
+    t/t* the slope n of Γ ∝ qⁿ, D = Γ/q², c2 at the first lag over β at the lowest
+    ring, τ at a middle one and the mean α, and with ``beta_mode="bounded"``
+    1 − β/β_ref at the lowest ring; those figures' names end in ``_beta_bounded``.
+    Returns the files written and the record."""
     import numpy as np
 
     plt = plotting.pyplot()
@@ -1125,7 +1125,7 @@ def mesh_vs_static(sample, db, refresh=False, beta_mode="fixed"):
             "windows": [e for _, _, e in fits.values()],
         }
 
-    out = FIGURES / "overview"
+    out = overview_dir("xpcs_mesh_vs_static")
     names = []
     suffix = "" if beta_mode == "fixed" else "_beta_bounded"
     labels = {k: f"{k}: {picks[k]}" for k in picks}
@@ -1383,7 +1383,7 @@ def mesh_vs_static_all(db, refresh=False, beta_mode="fixed"):
     if written:
         suffix = "" if beta_mode == "fixed" else "_beta_bounded"
         name = f"xpcs_mesh_vs_static_fits{suffix}.json"
-        (FIGURES / "overview" / name).write_text(
+        (overview_dir("xpcs_mesh_vs_static") / name).write_text(
             json.dumps(
                 {
                     "t_targets": list(MATCH_T),
@@ -1447,11 +1447,13 @@ def main(argv=None):
     db = damnit.Damnit(PROPOSAL)
     if args.matched:
         for name in matched_all(db, args.refresh):
-            print(f"matched t/t*: figures/overview/{name}", flush=True)
+            out = overview_dir("xpcs_matched_tstar").relative_to(REPO)
+            print(f"matched t/t*: {out / name}", flush=True)
         return 0
     if args.mesh_vs_static:
         for name in mesh_vs_static_all(db, args.refresh, args.beta):
-            print(f"mesh vs static: figures/overview/{name}", flush=True)
+            out = overview_dir("xpcs_mesh_vs_static").relative_to(REPO)
+            print(f"mesh vs static: {out / name}", flush=True)
         return 0
     results, failed = [], []
     for droplet in DROPLETS:
@@ -1462,7 +1464,7 @@ def main(argv=None):
         except Exception:  # one droplet's failure must not stop the rest
             failed.append(droplet.id)
             print(f"{droplet.id}: FAILED\n{traceback.format_exc()}", flush=True)
-    index = FIGURES / "droplets_xpcs" / "index.json"
+    index = droplets_dir("xpcs") / "index.json"
     previous = json.loads(index.read_text()) if index.exists() else []
     merged = {r["id"]: r for r in previous} | {r["id"]: r for r in results}
     index.write_text(

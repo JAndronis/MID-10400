@@ -1,35 +1,43 @@
-"""Make the SAXS figures of every droplet after r240 from notebooks/damnit_saxs.ipynb.
+"""Make the SAXS figures of every droplet after r240, one folder per droplet.
 
-For each droplet the notebook is exported to a plain Python script with that droplet's
-parameters filled in, saved as
-``figures/droplets/<id>_<sample>_r<first>-<last>/damnit_saxs_<id>.py``, and run with
-the shared environment's Python (the ``mid-10400`` kernel's). The script writes beside
-itself the two subtracted-I(q) figures and ``curves.nc``, the plotted curves with what
-made them; running it again remakes them. The notebook stays the source; the script
-records the run. The buffer's figure goes to ``figures/buffer/``.
+Each droplet gets ``figures/droplets/saxs/<id>_<sample>_r<first>-<last>/``:
+``curves.nc``, its buffer-subtracted I(q) with what made them, and two figures of
+them, ``saxs_subtracted_norm.png`` (normalised to the mean over q 0.80-0.95) and
+``saxs_subtracted.png`` (per flux*path), coloured by t/t*. ``run.log`` holds the
+droplet's summary, or the traceback when it failed, and ``index.json`` beside the
+folders lists every droplet made.
 
-Then one overview per condition goes to ``figures/overview/``: a grid with one panel per
-droplet, all on the same axes and the same t/t* colour scale, read from the droplets'
-``curves.nc``, once normalised to the mean over q 0.80-0.95 and once per flux*path.
-Beside them, per condition, its droplets side by side at matched t/t*
-(``saxs_matched_tstar_<sample>_norm.png``, a panel per t/t*, a line per droplet), with
-the blocks they used in one JSON. The mesh droplets get figures of their own
-(``saxs_<sample>_mesh_norm.png``, ``saxs_matched_tstar_<sample>_mesh_norm.png``), never
-mixed with the static ones.
+A curve is the mean of N_AVG consecutive complete trains, CURVES_PER_RUN of them
+spread over each run. Every train is scaled per flux*path (`analysis.cache.saxs_run`)
+and has the buffer subtracted at its own t/t*, weighted by the volume fraction the
+ferritin leaves to it. The buffer is the droplet r464 -> r465 -> r466 (PEG 6K 5 % +
+150 mM NaCl, fresh in r464; r463 is left out, a bubble made it explode), binned by
+t/t* (its figure goes to ``figures/droplets/saxs/s464_peg6k-buffer_r464-466/``). Its
+D^2 law never breaks before the droplet goes unstable in r466, so its t* is the end
+of its clean data. Each curve is plotted from its own q_min, the a_x rule below.
+
+Then the overviews, each kind in its own ``figures/overview/<kind>/``, read from the
+droplets' ``curves.nc``. ``saxs/``: one grid per condition, a panel per droplet, all
+on the same axes and the same t/t* colour scale, once normalised to the mean over q
+0.80-0.95 and once per flux*path. ``saxs_matched_tstar/``: per condition, its
+droplets side by side at matched t/t* (``saxs_matched_tstar_<sample>_norm.png``, a
+panel per t/t*, a line per droplet), with the blocks they used in one JSON.
+``saxs_mesh_vs_static/``: each condition's mesh and static representatives on the
+same axes and their ratio. The mesh droplets get figures of their own
+(``saxs_<sample>_mesh_norm.png``, ``saxs_matched_tstar_<sample>_mesh_norm.png``),
+never mixed with the static ones. ``volume/`` holds ``--volumes``' V/V0 figures.
 
 The droplets are `analysis.droplets.DROPLETS` with ``figures`` set, the runs left out
-there. The mesh droplets (SSHEX fly scans, attenuator 0.1006) are run with the
-notebook's MESH_SCAN, so a mesh run's curves average only the trains that hit
-the droplet (`analysis.triage.classify.hits`, class "on"). Their figures carry caveats
-the static ones do not. A hit can cross the droplet off-centre while the scale assumes
-the full chord. The q_min rule (0.156 a_x) comes from static droplets. Like s338-s400,
-the mesh droplets were measured before the stray-light pattern changed between r433
-and r443, and the buffer r464 after it.
+there. A mesh droplet (SSHEX fly scans, attenuator 0.1006) averages only the trains
+of its mesh runs that hit the droplet (`analysis.triage.classify.hits`, class "on").
+Their figures carry caveats the static ones do not. A hit can cross the droplet
+off-centre while the scale assumes the full chord. The q_min rule comes from static
+droplets. Like s338-s400, the mesh droplets were measured before the stray-light
+pattern changed between r433 and r443, and the buffer r464 after it.
 
-The notebook's plot style renders text with LaTeX, and the system TeX on the Maxwell
-nodes lacks ``type1cm.sty``, so load a complete one first or uncached labels fail. Run
-this script with the shared environment too, since the overviews need xarray and
-matplotlib:
+The plot style renders text with LaTeX, and the system TeX on the Maxwell nodes lacks
+``type1cm.sty``, so load a complete one first or uncached labels fail. Run with the
+shared environment:
 
     module load texlive/2022
     PY=/gpfs/exfel/exp/MID/202601/p010400/usr/Software/MID-10400/.venv/bin/python
@@ -48,9 +56,9 @@ import json
 import subprocess
 import sys
 import time
-from pathlib import Path
+import traceback
 
-from _common import FIGURES, REPO
+from _common import REPO, droplets_dir, overview_dir
 
 from analysis import plotting
 from analysis.droplets import (
@@ -67,13 +75,23 @@ from analysis.droplets import (
 )
 from analysis.plotting import DROPLET_COLOURS, KIND_COLOURS
 
-NOTEBOOK = REPO / "notebooks" / "damnit_saxs.ipynb"
-# the interpreter of the shared mid-10400 kernel (scripts/shared_env.sh)
-SHARED_PYTHON = Path(
-    "/gpfs/exfel/exp/MID/202601/p010400/usr/Software/MID-10400/.venv/bin/python"
-)
+BUFFER_RUNS = [464, 465, 466]
+BUFFER_NAME = f"s{BUFFER_RUNS[0]}_peg6k-buffer_r{BUFFER_RUNS[0]}-{BUFFER_RUNS[-1]}"
+BUFFER_BIN = 100  # consecutive complete trains per buffer bin
+N_PULSES = 155  # pulses per train averaged in the cache (and in the XGM normalisation)
+N_AVG = 10  # consecutive complete trains averaged per curve
+CURVES_PER_RUN = 3
+# Lowest trustworthy q per curve. Below it the three chi sectors of the unmasked wedge
+# stop agreeing, because the droplet shadows the stray scatter near the beam; measured
+# on r443-452 it scales with the droplet's horizontal semi-axis a_x. The floor covers
+# the 4 of 15 plateau blocks that already disagreed at 0.105-0.114 nm^-1.
+Q_MIN_PER_MM = 0.156  # nm^-1 per mm of a_x
+Q_MIN_FLOOR = 0.11  # nm^-1
+# Divisor per attenuator transmission that puts a sample on the buffer's scale. At
+# 0.506 everything per logged flux (the stray-light streak and the droplet's own
+# scattering) reads ~1.3x the transmission-1.0 runs (r467/477/487 against r443/453).
+FLUX_CORR = {0.506: 1.3, 0.10059096681319211: 10}
 
-OUTPUTS = ("saxs_subtracted_norm.png", "saxs_subtracted.png", "curves.nc")
 # The V/V0 figure draws a running median over VOLUME_MEDIAN_TRAINS (5 s at 10 Hz) over
 # the per-train volumes, whose fit jumps as a mesh scan moves the droplet. Its line
 # breaks where consecutive trains are more than VOLUME_GAP_S apart, i.e. between runs.
@@ -82,107 +100,279 @@ VOLUME_GAP_S = 5.0
 # the common q grid of the mesh/static ratio, inside the droplet figures' q range
 RATIO_Q = [0.2 * (1.0 / 0.2) ** (i / 199) for i in range(200)]
 
-HEADER = '''"""SAXS figures of droplet {id} ({sample}, runs {first}-{last}).
-
-Exported from notebooks/damnit_saxs.ipynb ({version}) by scripts/damnit_saxs_figures.py
-on {date}. The notebook is the source; this file records the run that made the figures
-and curves.nc beside it, and running it again remakes them:
-
-    module load texlive/2022
-    {python} {name}
-"""
-
-import matplotlib
-
-matplotlib.use("Agg")  # no display: the figures are saved, plt.show() does nothing'''
-
 
 def folder(droplet):
-    return FIGURES / "droplets" / droplet.name
+    return droplets_dir("saxs") / droplet.name
 
 
-def notebook_version():
-    "The commit the notebook comes from, and whether it differs from it."
+def code_version():
+    "The commit this tree is on, and whether scripts/ or src/ differ from it."
     head = subprocess.run(
         ["git", "-C", str(REPO), "rev-parse", "--short", "HEAD"],
         capture_output=True,
         text=True,
     ).stdout.strip()
     dirty = subprocess.run(
-        ["git", "-C", str(REPO), "status", "--porcelain", str(NOTEBOOK)],
+        ["git", "-C", str(REPO), "status", "--porcelain", "--", "scripts", "src"],
         capture_output=True,
         text=True,
     ).stdout.strip()
     return f"git {head}" + (" with uncommitted changes" if dirty else "")
 
 
-def export(droplet, parameters, name):
-    """The notebook's code cells as one script, the droplet's values after the
-    parameters cell; IPython magics are dropped."""
-    runs = parameters["DROPLET_RUNS"]
-    parts = [
-        HEADER.format(
-            id=droplet.id,
-            sample=droplet.sample,
-            first=runs[0],
-            last=runs[-1],
-            version=notebook_version(),
-            date=datetime.date.today().isoformat(),
-            python=SHARED_PYTHON,
-            name=name,
-        )
-    ]
-    for cell in json.loads(NOTEBOOK.read_text())["cells"]:
-        if cell["cell_type"] != "code":
-            continue
-        lines = "".join(cell["source"]).splitlines()
-        code = "\n".join(line for line in lines if not line.lstrip().startswith("%"))
-        if code.strip():
-            parts.append(code.strip())
-        if "parameters" in cell.get("metadata", {}).get("tags", []):
-            values = "\n".join(
-                f"{key} = {value!r}" for key, value in parameters.items()
-            )
-            parts.append(
-                f"# This droplet's parameters (they replace the ones above)\n{values}"
-            )
-    return "\n\n\n".join(parts) + "\n"
+def buffer_library(db):
+    """The buffer's I(q) per flux*path against t/t*, over (tau, q), each bin the mean
+    of BUFFER_BIN consecutive complete trains, and its figure. Attributes:
+    ``t_star_s``, ``t_star_source`` and ``transmission``, the buffer's one attenuator
+    transmission."""
+    import numpy as np
+    import xarray as xr
 
+    from analysis import cache
+    from analysis.utils import style_plot
 
-def run_one(droplet):
-    out = folder(droplet)
-    out.mkdir(parents=True, exist_ok=True)
-    parameters = {
-        "DROPLET_ID": droplet.id,
-        "SAMPLE": droplet.sample,
-        "DROPLET_RUNS": droplet.kept_runs,
-        "PLOT_RUNS": None,
-        "FERRITIN_MG_PER_ML": FERRITIN_MG_PER_ML,
-        "PEG_PERCENT_WV": droplet.peg_percent_wv,
-        "MESH_SCAN": droplet.mesh,
-        "FIGURES_ROOT": str(FIGURES),
+    tl = cache.droplet_timeline(BUFFER_RUNS, db, stop_at_min_volume=True, t_star="end")
+    runs = xr.concat(
+        [
+            cache.saxs_run(r, db, v0_run=BUFFER_RUNS[0], ferritin_mg_per_ml_initial=0)
+            for r in BUFFER_RUNS
+        ],
+        "trainId",
+        combine_attrs="drop",
+    )
+    tau = (tl.elapsed_s / tl.attrs["t_star_s"]).where(tl.used_in_fit)
+    # complete trains with a scale factor and a t/t* before the droplet was lost
+    usable = (runs.n_pulses_with_frames == N_PULSES) & np.isfinite(runs.scale)
+    tids = np.intersect1d(
+        runs.trainId.values[usable.values], tau.trainId.values[np.isfinite(tau.values)]
+    )
+    b = runs.sel(trainId=tids)
+    n_bins = tids.size // BUFFER_BIN
+    kept = slice(0, n_bins * BUFFER_BIN)
+    library = xr.DataArray(
+        np.nanmean(
+            (b.intensity * b.scale).values[kept].reshape(n_bins, BUFFER_BIN, -1), axis=1
+        ),
+        dims=("tau", "q"),
+        coords={
+            "tau": tau.sel(trainId=tids)
+            .values[kept]
+            .reshape(n_bins, BUFFER_BIN)
+            .mean(1),
+            "q": b.q.values,
+        },
+    ).sortby("tau")
+    if not np.all(np.diff(library.tau) > 0):
+        raise ValueError("buffer bins are not monotonic in t/t*")
+    library.attrs = {
+        "t_star_s": tl.attrs["t_star_s"],
+        "t_star_source": tl.attrs["t_star_source"],
+        "transmission": float(
+            np.unique(np.round(b.total_transmission.values, 4)).item()
+        ),
     }
-    script = out / f"damnit_saxs_{droplet.id}.py"
-    script.write_text(export(droplet, parameters, script.name))
+
+    plt = plotting.pyplot()
+    fig, ax = plt.subplots(figsize=(6, 5))
+    norm = plt.Normalize(vmin=float(library.tau.min()), vmax=float(library.tau.max()))
+    for t in library.tau.values[:: max(1, n_bins // 12)]:
+        ax.loglog(library.q, library.sel(tau=t), color=plt.cm.plasma(norm(t)), lw=0.8)
+    fig.colorbar(
+        plt.cm.ScalarMappable(norm=norm, cmap="plasma"), ax=ax, label="buffer $t/t^*$"
+    )
+    ax.set_title(f"buffer r{BUFFER_RUNS[0]}-{BUFFER_RUNS[-1]}", fontsize=14)
+    style_plot(ax, ylabel=r"$I(q)$ per flux$\cdot$path")
+    fig.tight_layout()
+    plotting.save(fig, droplets_dir("saxs") / BUFFER_NAME / "buffer_library.png", 300)
+    return library
+
+
+def flux_corr(transmission, buffer_transmission):
+    "The divisor that puts a sample at attenuator `transmission` on the buffer's scale."
+    import numpy as np
+
+    if np.isclose(transmission, buffer_transmission, rtol=0.01):
+        return 1.0
+    for att, corr in FLUX_CORR.items():
+        if np.isclose(transmission, att, rtol=0.01):
+            return corr
+    raise ValueError(
+        f"no flux correction known for attenuator {transmission} "
+        f"(buffer: {buffer_transmission})"
+    )
+
+
+def subtract(s, tau, buffer):
+    """Buffer-subtracted I(q) per flux*path, the mean over the trains of `s`, each
+    train's buffer taken at its own t/t* `tau`."""
+    import xarray as xr
+
+    corr = xr.DataArray(
+        [
+            flux_corr(t, buffer.attrs["transmission"])
+            for t in s.total_transmission.values
+        ],
+        coords={"trainId": s.trainId},
+    )
+    bg = buffer.interp(tau=tau.clip(buffer.tau.min(), buffer.tau.max()))
+    return (s.intensity * s.scale / corr - (1 - s.phi_ferritin) * bg).mean("trainId")
+
+
+def droplet_curves(droplet, db, buffer):
+    """`droplet`'s buffer-subtracted curves as ``curves.nc`` holds them, over
+    (curve, q), with their t/t*, q_min, ferritin concentration and first train."""
+    import numpy as np
+    import xarray as xr
+
+    from analysis import cache
+    from analysis.triage.classify import hits
+
+    runs = droplet.kept_runs
+    tl = cache.droplet_timeline(runs, db)
+    conc = droplet.ferritin_mg_per_ml(tl).assign_coords(trainId=tl.trainId)
+    t_star = tl.attrs["t_star_s"]
+    tau_s = tl.elapsed_s / t_star
+    curves = []  # (t/t*, q_min, I(q), ferritin mg/ml, run, first trainId)
+    for run_nr in runs:
+        ds = cache.saxs_run(
+            run_nr,
+            db,
+            v0_run=runs[0],
+            ferritin_mg_per_ml_initial=FERRITIN_MG_PER_ML,
+            peg_percent_wv_initial=droplet.peg_percent_wv,
+        )
+        # complete trains that have a scale factor and a t/t*, picked by label
+        usable = (ds.n_pulses_with_frames == N_PULSES) & np.isfinite(ds.scale)
+        tids = np.intersect1d(ds.trainId.values[usable.values], tau_s.trainId.values)
+        if droplet.mesh:
+            run_hits = hits(run_nr)
+            if run_hits["kind"] == "mesh":  # a static run of the droplet keeps all
+                tids = np.intersect1d(tids, run_hits["train_ids"])
+        for i in np.linspace(0, len(tids) - N_AVG, CURVES_PER_RUN).round().astype(int):
+            block = tids[i : i + N_AVG]
+            tau = tau_s.sel(trainId=block)
+            a_x = float(ds.chord_mm.sel(trainId=block).mean()) / 2
+            curves.append(
+                (
+                    float(tau.mean()),
+                    max(Q_MIN_PER_MM * a_x, Q_MIN_FLOOR),
+                    subtract(ds.sel(trainId=block), tau, buffer),
+                    float(conc.sel(trainId=block).mean()),
+                    run_nr,
+                    int(block[0]),
+                )
+            )
+    t, q_min, iq, ferritin, run, first = zip(*curves, strict=True)
+    return xr.Dataset(
+        {
+            "intensity": (("curve", "q"), np.array([c.values for c in iq])),
+            "t_over_tstar": ("curve", list(t)),
+            "q_min": ("curve", list(q_min)),
+            "ferritin_mg_per_ml": ("curve", list(ferritin)),
+            "run": ("curve", list(run)),
+            "first_trainId": ("curve", np.array(first, np.uint64)),
+        },
+        coords={"q": iq[0].q.values},
+        attrs={
+            "description": "buffer-subtracted I(q) per flux*path, each the mean of "
+            f"{N_AVG} consecutive complete trains; q_min is the lowest q plotted "
+            "(a_x rule); made by scripts/damnit_saxs_figures.py"
+            + (
+                "; mesh runs: hit trains only (analysis.triage.classify.hits)"
+                if droplet.mesh
+                else ""
+            ),
+            "code_version": code_version(),
+            "droplet_id": droplet.id,
+            "sample": droplet.sample,
+            "droplet_runs": list(runs),
+            "ferritin_mg_per_ml_initial": FERRITIN_MG_PER_ML,
+            "peg_percent_wv_initial": droplet.peg_percent_wv,
+            "mesh_scan": int(droplet.mesh),
+            "t_star_s": t_star,
+            "buffer_runs": list(BUFFER_RUNS),
+            "buffer_t_star_s": buffer.attrs["t_star_s"],
+            "flux_corr": json.dumps({str(k): v for k, v in FLUX_CORR.items()}),
+            "q_min_per_mm": Q_MIN_PER_MM,
+            "q_min_floor": Q_MIN_FLOOR,
+        },
+    )
+
+
+def plot_curves(ds, normalise):
+    """The droplet's curves coloured by t/t*, each from its q_min: normalised to the
+    mean over q 0.80-0.95, or per flux*path."""
+    from analysis.utils import style_plot
+
+    plt = plotting.pyplot()
+    cmap = plt.get_cmap("viridis")
+    norm = plt.Normalize(
+        vmin=float(ds.t_over_tstar.min()), vmax=float(ds.t_over_tstar.max())
+    )
+    fig, ax = plt.subplots(figsize=(6, 5))
+    for k in range(ds.sizes["curve"]):
+        if normalise:
+            iq = plotting.normalised_curve(ds, k)
+        else:
+            iq = ds.intensity[k]
+            iq = iq.where((iq > 0) & (ds.q >= ds.q_min[k]))
+        ax.loglog(ds.q, iq, color=cmap(norm(float(ds.t_over_tstar[k]))), lw=0.8)
+    fig.colorbar(plt.cm.ScalarMappable(norm=norm, cmap=cmap), ax=ax, label="$t/t^*$")
+    runs = ds.attrs["droplet_runs"]
+    ax.set_title(f"[{runs[0]} ... {runs[-1]}]", fontsize=14)
+    style_plot(
+        ax,
+        ylabel=r"$I(q)\,/\,\langle I \rangle_{0.80-0.95}$"
+        if normalise
+        else r"$I(q)$ per flux$\cdot$path",
+    )
+    ax.set_xlim(0.2, 1.0)  # the last bins at the detector edge are noisy
+    if normalise:
+        ax.set_ylim(0.5, 25)
+    fig.tight_layout()
+    return fig
+
+
+def run_one(droplet, db, buffer):
+    out = folder(droplet)
     started = time.perf_counter()
-    begun = time.time()
-    result = subprocess.run(
-        [str(SHARED_PYTHON), script.name], cwd=out, capture_output=True, text=True
-    )
-    (out / "run.log").write_text(result.stdout + result.stderr)
-    fresh = all(
-        (out / f).exists() and (out / f).stat().st_mtime >= begun for f in OUTPUTS
-    )
+    try:
+        ds = droplet_curves(droplet, db, buffer)
+        out.mkdir(parents=True, exist_ok=True)
+        ds.to_netcdf(out / "curves.nc")
+        for normalise, name in (
+            (True, "saxs_subtracted_norm.png"),
+            (False, "saxs_subtracted.png"),
+        ):
+            plotting.save(plot_curves(ds, normalise), out / name, 300)
+        beyond = int((ds.t_over_tstar > float(buffer.tau.max())).sum())
+        log = (
+            f"buffer: t* = {buffer.attrs['t_star_s']:.0f} s "
+            f"({buffer.attrs['t_star_source']}), {buffer.sizes['tau']} bins over t/t* "
+            f"{float(buffer.tau.min()):.3f}-{float(buffer.tau.max()):.3f}, "
+            f"attenuator {buffer.attrs['transmission']}\n"
+            f"sample: t* = {ds.attrs['t_star_s']:.0f} s; t/t* up to "
+            f"{float(ds.t_over_tstar.max()):.2f}\n"
+            f"{ds.sizes['curve']} curves; {beyond} lie beyond the buffer's t/t* = "
+            f"{float(buffer.tau.max()):.2f} and use its final state\n"
+        )
+        status = "ok"
+    except Exception:  # one droplet's failure must not stop the rest
+        log = traceback.format_exc()
+        status = "FAILED"
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "run.log").write_text(log)
     return {
         "id": droplet.id,
         "sample": droplet.sample,
         "folder": str(out.relative_to(REPO)),
-        "script": script.name,
         "runs": droplet.kept_runs,
         "excluded": {str(r): why for r, why in droplet.excluded.items()},
         "peg_percent_wv": droplet.peg_percent_wv,
         "mesh_scan": droplet.mesh,
-        "status": "ok" if result.returncode == 0 and fresh else "FAILED",
+        "made": datetime.datetime.now().isoformat(timespec="seconds"),
+        "code_version": code_version(),
+        "status": status,
         "seconds": round(time.perf_counter() - started, 1),
     }
 
@@ -257,13 +447,14 @@ def overview(sample, mesh):
         name = (
             f"saxs_{sample}{'_mesh' if mesh else ''}{'_norm' if normalise else ''}.png"
         )
-        written.append(plotting.save(fig, FIGURES / "overview" / name))
+        written.append(plotting.save(fig, overview_dir("saxs") / name))
     return written
 
 
-def write_blocks(name, record, **extra):
-    """The blocks a set of matched figures shows, as JSON beside them."""
-    (FIGURES / "overview" / name).write_text(
+def write_blocks(kind, name, record, **extra):
+    """The blocks a set of matched figures shows, as JSON beside them in the `kind`
+    overview folder."""
+    (overview_dir(kind) / name).write_text(
         json.dumps(
             {
                 "t_targets": list(MATCH_T),
@@ -364,7 +555,7 @@ def matched(sample, mesh):
         f"$\\pm${MATCH_TOLERANCE:g}; ferritin range per panel)"
     )
     name = f"saxs_matched_tstar_{sample}{'_mesh' if mesh else ''}_norm.png"
-    return plotting.save(fig, FIGURES / "overview" / name), record
+    return plotting.save(fig, overview_dir("saxs_matched_tstar") / name), record
 
 
 def matched_all():
@@ -379,6 +570,7 @@ def matched_all():
     if written:
         written.append(
             write_blocks(
+                "saxs_matched_tstar",
                 "saxs_matched_tstar_blocks.json",
                 record,
                 normalisation="mean over q 0.80-0.95 nm^-1",
@@ -457,7 +649,7 @@ def compare_mesh_static(sample):
     )
     fig.suptitle(CONDITIONS[sample] + ": mesh (hit trains) vs static" + suffix)
     fig_r.suptitle(CONDITIONS[sample] + r": mesh / static")
-    out = FIGURES / "overview"
+    out = overview_dir("saxs_mesh_vs_static")
     names = [
         plotting.save(fig, out / f"saxs_mesh_vs_static_{sample}_norm.png"),
         plotting.save(fig_r, out / f"saxs_mesh_vs_static_ratio_{sample}.png"),
@@ -476,6 +668,7 @@ def compare_all():
     if written:
         written.append(
             write_blocks(
+                "saxs_mesh_vs_static",
                 "saxs_mesh_vs_static_blocks.json",
                 record,
                 normalisation="mean over q 0.80-0.95 nm^-1",
@@ -513,7 +706,7 @@ def flux_label(fluxes):
 
 def volume_timelines(sample):
     """V/V0 against t/t* of every droplet of `sample`, static and mesh droplets in
-    panels of their own, from the SAXS notebook's timeline (`cache.droplet_timeline` of
+    panels of their own, from the timeline the curves use (`cache.droplet_timeline` of
     the droplet's kept runs; V0 its first train). Each train faint, with a running
     median over VOLUME_MEDIAN_TRAINS on top; the line breaks where trains are more
     than VOLUME_GAP_S apart (between runs). The legend gives each droplet's flux,
@@ -594,7 +787,7 @@ def volume_timelines(sample):
     axs[0, 0].set_ylim(0, 1.05)
     axs[0, 0].set_ylabel("$V/V_0$")
     fig.suptitle(CONDITIONS[sample])
-    out = FIGURES / "overview"
+    out = overview_dir("volume")
     names = [plotting.save(fig, out / f"volume_{sample}.png"), f"volume_{sample}.json"]
     (out / names[1]).write_text(json.dumps(record, indent=1))
     return names
@@ -622,23 +815,31 @@ def main(argv=None):
         parser.error(
             "LaTeX without type1cm.sty on PATH; run `module load texlive/2022` first"
         )
+
+    def shown(kind, name):
+        return overview_dir(kind).relative_to(REPO) / name
+
     if args.volumes:
         for name in volume_timelines(args.volumes):
-            print(f"volumes: figures/overview/{name}", flush=True)
+            print(f"volumes: {shown('volume', name)}", flush=True)
         return 0
 
     results = []
     if not args.overview_only:
+        import damnit
+
+        db = damnit.Damnit(PROPOSAL)
+        buffer = buffer_library(db)
         for droplet in DROPLETS:
             if not droplet.figures or (args.ids and droplet.id not in args.ids):
                 continue
-            results.append(run_one(droplet))
+            results.append(run_one(droplet, db, buffer))
             r = results[-1]
             print(
                 f"{r['id']}: {r['status']} in {r['seconds']:.0f} s -> {r['folder']}",
                 flush=True,
             )
-        index = FIGURES / "droplets" / "index.json"
+        index = droplets_dir("saxs") / "index.json"
         previous = json.loads(index.read_text()) if index.exists() else []
         merged = {r["id"]: r for r in previous} | {r["id"]: r for r in results}
         index.write_text(
@@ -646,11 +847,11 @@ def main(argv=None):
         )
     for sample, mesh in groups():
         for name in overview(sample, mesh):
-            print(f"overview: figures/overview/{name}", flush=True)
+            print(f"overview: {shown('saxs', name)}", flush=True)
     for name in matched_all():
-        print(f"matched t/t*: figures/overview/{name}", flush=True)
+        print(f"matched t/t*: {shown('saxs_matched_tstar', name)}", flush=True)
     for name in compare_all():
-        print(f"mesh vs static: figures/overview/{name}", flush=True)
+        print(f"mesh vs static: {shown('saxs_mesh_vs_static', name)}", flush=True)
     return 0 if all(r["status"] == "ok" for r in results) else 1
 
 

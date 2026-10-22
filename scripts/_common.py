@@ -1,4 +1,4 @@
-"""What the scripts share: where figures go, and a comparable header for JSON reports.
+"""What the scripts share: the figure tree, and a comparable header for JSON reports.
 
 Not part of the package: these run as ``python scripts/<name>.py``, which puts
 this directory on ``sys.path``.
@@ -20,7 +20,9 @@ from analysis.threadenv import THREAD_ENV
 __all__ = [
     "FIGURES",
     "REPO",
+    "droplets_dir",
     "git_commit",
+    "overview_dir",
     "report_header",
     "stamp",
     "write_report",
@@ -28,8 +30,20 @@ __all__ = [
 
 
 REPO = Path(__file__).resolve().parents[1]
-#: The figure scripts' output, one folder per droplet (gitignored).
+#: The figure scripts' output (gitignored). A droplet's figures go to
+#: ``droplets/<technique>/<Droplet.name>/``, figures across droplets to
+#: ``overview/<kind>/``.
 FIGURES = REPO / "figures"
+
+
+def droplets_dir(technique: str) -> Path:
+    """The folder of every droplet's `technique` figures ("saxs", "xpcs")."""
+    return FIGURES / "droplets" / technique
+
+
+def overview_dir(kind: str) -> Path:
+    """The folder of one kind of overview ("saxs", "saxs_matched_tstar", ...)."""
+    return FIGURES / "overview" / kind
 
 
 def git_commit() -> str:

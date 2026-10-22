@@ -5,26 +5,27 @@ snapshots at the chosen points, and (b) the I(q) at those points, normalised, of
 by a constant factor for clarity and coloured to match the markers.
 
 Nothing here subtracts or scales. The curves are the droplet's ``curves.nc``, which
-``notebooks/damnit_saxs.ipynb`` writes (via ``scripts/damnit_saxs_figures.py``): each
-the buffer-subtracted I(q) per flux*path of N_AVG consecutive complete trains, with
-the buffer matched at the same t/t*. Make or refresh it there first. This script
-picks the curves nearest the requested t/t* (by default the six points of the
-CoSAXS figure, COSAXS_TAU), normalises them the way the notebook's
-NORMALISE does (mean over q 0.80-0.95) and cuts each below its own q_min.
+``scripts/damnit_saxs_figures.py`` writes: each the buffer-subtracted I(q) per
+flux*path of N_AVG consecutive complete trains, with the buffer matched at the same
+t/t*. Make or refresh it there first. This script picks the curves nearest the
+requested t/t* (by default the six points of the CoSAXS figure, COSAXS_TAU),
+normalises them as the droplet figures do (mean over q 0.80-0.95) and cuts each
+below its own q_min.
 
-Panel (a) is `analysis.cache.droplet_timeline` over the droplet's runs, as the
-notebook calls it, so t* and V0 are the ones the curves were made with; the curves'
-``t_star_s`` is checked against it. V0 is the first fitted volume of the droplet's
-first run, t counts from that train. Each marker sits at its curve's first train,
-and the inset is the CAM5 image of that train, cropped to the ROI ``droplet_fit``
-fits in.
+Panel (a) is `analysis.cache.droplet_timeline` over the droplet's runs, as the SAXS
+figures script calls it, so t* and V0 are the ones the curves were made with; the
+curves' ``t_star_s`` is checked against it. V0 is the first fitted volume of the
+droplet's first run, t counts from that train. Each marker sits at its curve's first
+train, and the inset is the CAM5 image of that train, cropped to the ROI
+``droplet_fit`` fits in.
 
     PY=/gpfs/exfel/exp/MID/202601/p010400/usr/Software/MID-10400/.venv/bin/python
     $PY scripts/droplet_series_figure.py s443
     $PY scripts/droplet_series_figure.py s443 --tau 0.2 0.5 0.8 1.0 1.2 1.5
 
 Writes ``droplet_series.{pdf,png}`` and ``droplet_series.json`` (what each marker
-used) into the droplet's figure folder, beside ``curves.nc``.
+used) into the droplet's SAXS folder, ``figures/droplets/saxs/<name>/``, beside
+``curves.nc``.
 """
 
 import argparse
@@ -32,7 +33,7 @@ import json
 from pathlib import Path
 
 import numpy as np
-from _common import FIGURES
+from _common import droplets_dir
 
 from analysis.droplets import PROPOSAL, by_id
 from analysis.plotting import normalised_curve
@@ -40,7 +41,7 @@ from analysis.plotting import normalised_curve
 # The ROI `droplet_fit` fits in (src/amore/context.py), so the insets show what the
 # volume was measured on.
 CAMERA_ROI = np.s_[80:230, 200:400]
-# the notebook's plotted q range (damnit_saxs.ipynb)
+# the droplet figures' plotted q range (scripts/damnit_saxs_figures.py)
 Q_RANGE = (0.2, 1.0)
 # The six points of the CoSAXS figure (JPCL manuscript, Fig. 1a: 50 mg/ml ferritin,
 # 3 w/v % PEG 6000), read off the plot at t = 276, 550, 711, 984, 1158 and 1401 s and
@@ -156,7 +157,7 @@ def main(argv=None):
     from analysis import cache
 
     droplet = by_id(args.droplet)
-    out_dir = FIGURES / "droplets" / droplet.name
+    out_dir = droplets_dir("saxs") / droplet.name
     curves_path = out_dir / "curves.nc"
     if not curves_path.exists():
         raise SystemExit(
