@@ -17,6 +17,7 @@ __all__ = [
     "DROPLET_COLOURS",
     "KIND_COLOURS",
     "NORM_Q",
+    "label_grid",
     "latex_ok",
     "log_q_axis",
     "normalised_curve",
@@ -80,6 +81,14 @@ def panel_grid(n, ncols, *, panel=(3.6, 3.2), pad=(0.0, 0.6), **kwargs):
     for ax in axs.flat[n:]:
         ax.set_visible(False)
     return fig, axs
+
+
+def label_grid(axs, ylabel, xlabel=r"$q$ (nm$^{-1}$)"):
+    """Label a grid's bottom row with `xlabel` and its first column with `ylabel`."""
+    for ax in axs[-1]:
+        ax.set_xlabel(xlabel)
+    for ax in axs[:, 0]:
+        ax.set_ylabel(ylabel)
 
 
 def log_q_axis(ax, lim=(0.2, 1.0), ticks=(0.2, 0.3, 0.5, 1.0)):

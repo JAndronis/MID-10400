@@ -36,6 +36,12 @@ Per droplet:
 ``xpcs_windows.nc``
     the pooled g2 (c2, sigma, g2, baseline) and two-time c2 of every window
 
+With ``--mesh-vs-static``, each condition's mesh and static representatives
+(`analysis.droplets.REPRESENTATIVE`) on the same axes from the same matched windows,
+into ``figures/overview/xpcs_mesh_vs_static_*.png`` and
+``xpcs_mesh_vs_static_fits.json``
+(``--beta bounded``: β free in [0, β_ref's p84], names ending in ``_beta_bounded``).
+
 With ``--matched``, each condition's droplets side by side at matched t/t* instead
 (MATCH_T ± MATCH_TOLERANCE, mesh and static apart, saved per droplet as
 ``xpcs_windows_matched.nc``), into ``figures/overview/``:
@@ -51,6 +57,7 @@ LaTeX):
     $PY scripts/damnit_xpcs_figures.py s443 s394    # some droplets
     $PY scripts/damnit_xpcs_figures.py --refresh    # pool the windows again
     $PY scripts/damnit_xpcs_figures.py --matched    # droplets at matched t/t*
+    $PY scripts/damnit_xpcs_figures.py --mesh-vs-static --beta bounded
 """
 
 import argparse
@@ -71,10 +78,12 @@ from analysis.droplets import (
     MATCH_T,
     MATCH_TOLERANCE,
     PROPOSAL,
+    REPRESENTATIVE,
+    by_id,
     condition_title,
     groups,
 )
-from analysis.plotting import DROPLET_COLOURS
+from analysis.plotting import DROPLET_COLOURS, KIND_COLOURS
 from analysis.xpcs.kww import BASE_BOUNDS, GAMMA_BOUNDS, STRETCH_BOUNDS, fit_rings
 
 # t/t* bin width (user, 2026-10-21): the SAXS blocks are 0.13-0.18 apart, so a window
@@ -375,14 +384,22 @@ def saved_windows(droplet, db, refresh=False, matched=False):
     return windows, info
 
 
-def fit_windows(windows):
-    """`fit_rings` (β fixed) on every window. Returns (record, g2, fit, ttc) per
-    window, the record extended by the fit's summary."""
+def fit_windows(windows, beta_mode="fixed"):
+    """`fit_rings` on every window. Returns (record, g2, fit, ttc) per window, the
+    record extended by the fit's summary."""
     out = []
     for record, g2, ttc in windows:
-        fit = fit_rings(g2)
+        fit = fit_rings(g2, beta_mode)
         out.append((record | fit.summary(), g2, fit, ttc))
     return out
+
+
+def matched_windows(droplet, db, refresh=False, beta_mode="fixed"):
+    """`droplet`'s MATCH_T windows (`saved_windows(matched=True)`) fitted, by target:
+    {t_target: (record, g2, fit, None)} for the targets with a hit train, and the
+    droplet's info."""
+    pooled, info = saved_windows(droplet, db, refresh, matched=True)
+    return {w[0]["t_target"]: w for w in fit_windows(pooled, beta_mode)}, info
 
 
 def window_label(record):
@@ -819,8 +836,7 @@ def matched(sample, mesh, db, refresh=False):
     data = []
     record = []
     for droplet in droplets:
-        pooled, _ = saved_windows(droplet, db, refresh, matched=True)
-        windows = {w[0]["t_target"]: w for w in fit_windows(pooled)}
+        windows, _ = matched_windows(droplet, db, refresh)
         data.append((droplet, windows))
         for target in MATCH_T:
             entry = {"sample": sample, "mesh_scan": mesh, "id": droplet.id}
@@ -1066,6 +1082,334 @@ def matched_all(db, refresh=False):
     return written
 
 
+def mesh_vs_static(sample, db, refresh=False, beta_mode="fixed"):
+    """`sample`'s mesh and static representatives (`analysis.droplets.REPRESENTATIVE`)
+    on the same axes at matched t/t*, from their `matched_windows` fitted with
+    `beta_mode` (fits drawn and Γ, τ filled only where resolved). Five figures into
+    ``figures/overview/``: c2(τ) with the KWW fit at four rings, a panel per (ring,
+    t/t*); Γ, τ = 1/Γ and the KWW exponent α against q, a panel per t/t*, Γ and τ with
+    the Γ ∝ q² (diffusion) and Γ ∝ q (shear) slopes; and against t/t* the slope n of
+    Γ ∝ qⁿ, D = Γ/q², c2 at the first lag over β at the lowest ring, τ at a middle one
+    and the mean α, and with ``beta_mode="bounded"`` 1 − β/β_ref at the lowest ring;
+    those figures' names end in ``_beta_bounded``. Returns the files written and the
+    record."""
+    import numpy as np
+
+    plt = plotting.pyplot()
+    mesh = [d.id for d in DROPLETS if d.figures and d.sample == sample and d.mesh]
+    picks = {
+        "static": REPRESENTATIVE.get((sample, False)),
+        # a condition with one mesh droplet needs no entry
+        "mesh": REPRESENTATIVE.get((sample, True), mesh[0] if len(mesh) == 1 else None),
+    }
+    if not all(picks.values()):
+        return [], {}
+    colours = KIND_COLOURS
+    data = {}
+    record = {"sample": sample, "droplets": {}}
+    for kind, droplet_id in picks.items():
+        windows, info = matched_windows(by_id(droplet_id), db, refresh, beta_mode)
+        fits = {}
+        for target in MATCH_T:
+            if target in windows:
+                entry, g2, fit, _ = windows[target]
+                fits[target] = (g2, fit, {"id": droplet_id} | entry)
+            else:
+                entry = {"t_target": target, "id": droplet_id, "n_trains": 0}
+                entry["skipped"] = f"no hit train within {MATCH_TOLERANCE}"
+                fits[target] = (None, None, entry)
+        data[kind] = fits
+        record["droplets"][kind] = {
+            "id": droplet_id,
+            "hit_sources": info["hit_sources"],
+            "windows": [e for _, _, e in fits.values()],
+        }
+
+    out = FIGURES / "overview"
+    names = []
+    suffix = "" if beta_mode == "fixed" else "_beta_bounded"
+    labels = {k: f"{k}: {picks[k]}" for k in picks}
+
+    def legend(fig, x=0.91):
+        handles = [plt.Line2D([], [], color=colours[k], marker="o") for k in picks]
+        fig.legend(
+            handles,
+            [labels[k] for k in picks],
+            loc="center left",
+            bbox_to_anchor=(x, 0.5),
+            frameon=False,
+            fontsize=8,
+        )
+
+    def title(target):
+        parts = [f"$t/t^* = {target:g}$"]
+        for kind in picks:
+            entry = data[kind][target][2]
+            if entry.get("n_trains"):
+                c = entry["ferritin_mg_per_ml"]
+                parts.append(f"{kind} {entry['n_trains']} tr, {c:.0f} mg/ml")
+        return "\n".join(parts)
+
+    suptitle = (
+        CONDITIONS[sample]
+        + r": XPCS, mesh (hit trains) vs static at matched $t/t^*$ "
+        + rf"(hit trains within $\pm${MATCH_TOLERANCE:g} pooled)"
+    )
+
+    # c2(τ) and its fit at four rings
+    rings = [0, 3, 7, 11]
+    fig, axs = plotting.panel_grid(
+        len(rings) * len(MATCH_T),
+        len(MATCH_T),
+        panel=(2.6, 2.2),
+        pad=(0, 0.8),
+        sharey="row",
+    )
+    for j, target in enumerate(MATCH_T):
+        for kind in picks:
+            g2, fit, _ = data[kind][target]
+            if g2 is None:
+                continue
+            for i, r in enumerate(rings):
+                ax = axs[i, j]
+                ax.errorbar(
+                    g2.tau,
+                    g2.c2[r],
+                    g2.sigma[r],
+                    color=colours[kind],
+                    marker="o",
+                    ms=2,
+                    lw=0,
+                    elinewidth=0.5,
+                )
+                if fit is not None and fit.resolved[r]:
+                    ax.plot(fit.tau, fit.curve[r], color=colours[kind], lw=1)
+        axs[0, j].set_title(title(target), fontsize=7)
+    q_rings = 10 * next(
+        g2.roi_q.values
+        for kind in picks
+        for g2, _, _ in data[kind].values()
+        if g2 is not None
+    )
+    for i, r in enumerate(rings):
+        axs[i, 0].set_ylabel(f"$c_2$, $q$ = {q_rings[r]:.3f} nm$^{{-1}}$", fontsize=8)
+        for ax in axs[i]:
+            ax.axhline(0, color="0.6", lw=0.5)
+    for ax in axs[-1]:
+        ax.set_xscale("log")
+        ax.set_xlabel(r"$\tau$ (s)")
+    legend(fig)
+    fig.suptitle(suptitle, fontsize=10)
+    names.append(
+        plotting.save(fig, out / f"xpcs_mesh_vs_static_g2_{sample}{suffix}.png")
+    )
+
+    # Γ(q) and τ(q), a panel per t/t*
+    for quantity in ("gamma", "tau", "stretch"):
+        fig, axs = plotting.panel_grid(len(MATCH_T), 3, pad=(0.4, 0.8))
+        for ax, target in zip(axs.flat, MATCH_T, strict=False):
+            anchor = None
+            for kind in picks:
+                _, fit, entry = data[kind][target]
+                if fit is None:
+                    continue
+                q = fit.q_nm
+                ok = np.array(entry["resolved"])
+                if quantity == "gamma":
+                    y, err = fit.gamma, fit.err_gamma
+                elif quantity == "stretch":
+                    y, err = fit.stretch, fit.err_stretch
+                else:
+                    y = 1 / fit.gamma
+                    err = fit.err_gamma / fit.gamma**2
+                for mask, face in ((ok, colours[kind]), (~ok, "none")):
+                    ax.errorbar(
+                        q[mask],
+                        y[mask],
+                        err[mask],
+                        color=colours[kind],
+                        mfc=face,
+                        marker="o",
+                        ms=3,
+                        lw=0,
+                        elinewidth=0.6,
+                    )
+                if ok.any() and anchor is None:
+                    k = np.flatnonzero(ok)[ok.sum() // 2]
+                    anchor = (q[k], y[k])
+                if "exponent_n" in entry and quantity != "stretch":
+                    ax.text(
+                        0.04,
+                        0.94 - 0.08 * list(picks).index(kind),
+                        f"$n$ = {entry['exponent_n']:.2f} "
+                        f"$\\pm$ {entry['exponent_err']:.2f}",
+                        transform=ax.transAxes,
+                        color=colours[kind],
+                        fontsize=7,
+                        va="top",
+                    )
+            if quantity == "stretch":
+                ax.axhline(1, color="0.5", ls="--", lw=0.8)
+            elif anchor is not None:
+                qq = np.geomspace(0.22, 0.9, 20)
+                sign = 1 if quantity == "gamma" else -1
+                for power, style in ((2, "--"), (1, ":")):
+                    ax.plot(
+                        qq,
+                        anchor[1] * (qq / anchor[0]) ** (sign * power),
+                        color="0.5",
+                        ls=style,
+                        lw=0.8,
+                    )
+            plotting.log_q_axis(ax, lim=(0.22, 0.9), ticks=(0.3, 0.5, 0.8))
+            if quantity == "stretch":
+                ax.set_ylim(0, 2.1)
+            else:
+                ax.set_yscale("log")
+                ax.set_ylim(*((1e3, 1e7) if quantity == "gamma" else (1e-7, 1e-3)))
+            ax.set_title(title(target), fontsize=7)
+        plotting.label_grid(
+            axs,
+            {
+                "gamma": r"$\Gamma$ (s$^{-1}$)",
+                "tau": r"$\tau = 1/\Gamma$ (s)",
+                "stretch": r"KWW exponent $\alpha$",
+            }[quantity],
+        )
+        legend(fig)
+        guide = (
+            (
+                r"$c_2 = \beta_\mathrm{ref}\,e^{-2(\Gamma\tau)^\alpha} + b$, "
+                r"$\beta_\mathrm{ref}$ fixed (r450, r493-496); "
+                if beta_mode == "fixed"
+                else r"$c_2 = \beta\,e^{-2(\Gamma\tau)^\alpha} + b$, "
+                r"$0 \leq \beta \leq \beta_\mathrm{ref}$'s p84 (r450, r493-496); "
+            )
+            + (
+                r"dashed $\alpha = 1$ (simple exponential); "
+                if quantity == "stretch"
+                else r"dashed $\propto q^{2}$ (diffusion), dotted $\propto q$ (shear); "
+            )
+            + r"open: not resolved (a parameter at its bound, "
+            r"$1/\Gamma$ outside the lags or $\sigma_\Gamma \geq \Gamma$); "
+            + r"$n$ from $\Gamma \propto q^n$ over filled points"
+        )
+        fig.suptitle(suptitle + "\n" + guide, fontsize=9)
+        name = f"xpcs_mesh_vs_static_{quantity}_{sample}{suffix}.png"
+        names.append(plotting.save(fig, out / name))
+
+    # fit parameters against t/t*
+    mid = 5
+    npanel = 5 if beta_mode == "fixed" else 6
+    fig, axs = plt.subplots(1, npanel, figsize=(3.5 * npanel, 3.4))
+    for kind in picks:
+        rows = [
+            (e["t_over_tstar_mean"], e)
+            for _, fit, e in data[kind].values()
+            if fit is not None
+        ]
+        if not rows:
+            continue
+        t = np.array([r[0] for r in rows])
+        style = {"color": colours[kind], "marker": "o", "ms": 3, "capsize": 2}
+        n = np.array([r[1].get("exponent_n", np.nan) for r in rows])
+        n_err = np.array([r[1].get("exponent_err", np.nan) for r in rows])
+        axs[0].errorbar(t, n, n_err, **style)
+        axs[1].errorbar(
+            t,
+            [r[1].get("D_um2_per_s", np.nan) for r in rows],
+            [r[1].get("D_err_um2_per_s", np.nan) for r in rows],
+            **style,
+        )
+        axs[2].errorbar(
+            t,
+            [r[1]["visible"][0] for r in rows],
+            [r[1]["err_visible"][0] for r in rows],
+            **style,
+        )
+        tau_mid = np.array(
+            [r[1]["tau_s"][mid] if r[1]["resolved"][mid] else np.nan for r in rows]
+        )
+        axs[3].plot(t, tau_mid, **{k: v for k, v in style.items() if k != "capsize"})
+        axs[4].errorbar(
+            t,
+            [r[1].get("stretch_mean", np.nan) for r in rows],
+            [r[1].get("stretch_mean_err", np.nan) for r in rows],
+            **style,
+        )
+        if beta_mode == "bounded":
+            axs[5].errorbar(
+                t,
+                [r[1]["lost"][0] for r in rows],
+                [r[1]["err_beta"][0] / r[1]["beta_ref"][0] for r in rows],
+                **style,
+            )
+    for ax in axs:
+        ax.set_xlabel("$t/t^*$")
+    axs[0].axhline(2, color="0.5", ls="--", lw=0.8)
+    axs[0].axhline(1, color="0.5", ls=":", lw=0.8)
+    axs[0].set_ylabel(r"$n$ in $\Gamma \propto q^n$")
+    axs[1].set_ylabel(r"$D = \Gamma/q^2$ ($\mu$m$^2$/s)")
+    axs[2].axhline(1, color="0.5", ls="--", lw=0.8)
+    axs[2].set_ylabel(
+        rf"$c_2(\tau_1)/\beta_\mathrm{{ref}}$, $q$ = {q_rings[0]:.3f} nm$^{{-1}}$"
+    )
+    axs[3].set_ylabel(rf"$\tau$, $q$ = {q_rings[mid]:.3f} nm$^{{-1}}$ (s)")
+    axs[3].set_yscale("log")
+    axs[4].axhline(1, color="0.5", ls="--", lw=0.8)
+    axs[4].set_ylabel(r"KWW $\alpha$, mean over resolved rings")
+    if beta_mode == "bounded":
+        axs[5].axhline(0, color="0.5", ls="--", lw=0.8)
+        axs[5].set_ylabel(
+            rf"$1 - \beta/\beta_\mathrm{{ref}}$, $q$ = {q_rings[0]:.3f} nm$^{{-1}}$"
+        )
+    legend(fig, x=0.99)
+    fig.suptitle(suptitle, fontsize=10)
+    fig.tight_layout()
+    name = f"xpcs_mesh_vs_static_params_{sample}{suffix}.png"
+    names.append(plotting.save(fig, out / name))
+    return names, record
+
+
+def mesh_vs_static_all(db, refresh=False, beta_mode="fixed"):
+    "mesh_vs_static() for every condition with both kinds; the fits in one JSON."
+    written = []
+    record = []
+    for sample in CONDITIONS:
+        names, entry = mesh_vs_static(sample, db, refresh, beta_mode)
+        written += names
+        if entry:
+            record.append(entry)
+    if written:
+        suffix = "" if beta_mode == "fixed" else "_beta_bounded"
+        name = f"xpcs_mesh_vs_static_fits{suffix}.json"
+        (FIGURES / "overview" / name).write_text(
+            json.dumps(
+                {
+                    "t_targets": list(MATCH_T),
+                    "tolerance": MATCH_TOLERANCE,
+                    "pooling": "every usable hit train within the tolerance: "
+                    "analysis.cache.pool_g2 over the lags the window's runs share",
+                    "model": "c2 = beta exp(-2 (Gamma tau)^alpha) + b (KWW; 'stretch' "
+                    "is alpha) per ring, "
+                    + (
+                        "beta fixed at REFERENCE_BETA"
+                        if beta_mode == "fixed"
+                        else "beta in [0, REFERENCE_BETA p84], lost = 1 - beta/beta_ref"
+                    )
+                    + ", weighted by sigma, bounded (analysis.xpcs.kww); resolved = no "
+                    "parameter at a bound, 1/Gamma inside the lags, "
+                    "sigma_Gamma < Gamma",
+                    "beta_mode": beta_mode,
+                    "conditions": record,
+                },
+                indent=1,
+            )
+        )
+        written.append(name)
+    return written
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("ids", nargs="*", help="droplet ids (default: all)")
@@ -1078,6 +1422,17 @@ def main(argv=None):
         "--matched",
         action="store_true",
         help="only the comparison of each condition's droplets at matched t/t*",
+    )
+    parser.add_argument(
+        "--mesh-vs-static",
+        action="store_true",
+        help="only each condition's mesh and static representatives at matched t/t*",
+    )
+    parser.add_argument(
+        "--beta",
+        choices=("fixed", "bounded"),
+        default="fixed",
+        help="--mesh-vs-static's β: fixed at REFERENCE_BETA, or free in [0, its p84]",
     )
     args = parser.parse_args(argv)
     unknown = set(args.ids) - {d.id for d in DROPLETS if d.figures}
@@ -1093,6 +1448,10 @@ def main(argv=None):
     if args.matched:
         for name in matched_all(db, args.refresh):
             print(f"matched t/t*: figures/overview/{name}", flush=True)
+        return 0
+    if args.mesh_vs_static:
+        for name in mesh_vs_static_all(db, args.refresh, args.beta):
+            print(f"mesh vs static: figures/overview/{name}", flush=True)
         return 0
     results, failed = [], []
     for droplet in DROPLETS:
