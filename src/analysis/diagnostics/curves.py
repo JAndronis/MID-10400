@@ -1,15 +1,14 @@
 """Checks on per-train curves and per-frame totals against the per-train flux.
 
-The flux is per train, XGM × ``total_transmission`` (memory, saxs-background-
-subtraction): at 2.26 MHz the per-pulse XGM reads the first ~20 pulses of a train
-15–20 % high while the detector's own signal per pulse is flat, so dividing frame by
-frame writes that ramp into I(q). Every function here divides an in-memory copy and
-says so in ``attrs["normalised_by"]``; nothing is written back.
+The flux is per train, XGM × ``total_transmission``. At 2.26 MHz the per-pulse XGM
+reads the first ~20 pulses of a train 15-20 % high while the detector's own signal
+per pulse is flat, so dividing frame by frame writes that ramp into I(q). Every
+function here divides an in-memory copy and says so in ``attrs["normalised_by"]``;
+nothing is written back.
 
 The XGM is DAMNIT's ``xgm_intensity``, the mean over *all* pulses of a train. That is
 a sound per-train scale inside one run, whose pulse pattern is constant; across runs
-with different pulse counts it is not (context/run-triage.md D4), and nothing here
-compares runs.
+with different pulse counts it is not, and nothing here compares runs.
 """
 
 from __future__ import annotations
@@ -32,11 +31,10 @@ __all__ = [
     "xgm_scatter",
 ]
 
-#: DAMNIT variables the flux is built from (src/amore/context.py).
+#: DAMNIT variables the flux is built from.
 XGM_VARIABLE, TRANSMISSION_VARIABLE = "xgm_intensity", "total_transmission"
 FLUX_DESCRIPTION = "per-train XGM (mean over all pulses) × total_transmission"
-#: Running-median window for `detrend`, in trains: the stability window of
-#: context/run-triage.md §4.3 (5 s at 10 Hz).
+#: Running-median window for `detrend`, in trains (5 s at 10 Hz).
 DETREND_TRAINS = 51
 
 
@@ -65,8 +63,10 @@ def per_train_flux(damnit_file: str | Path):
 
 
 def flux_from(xgm, transmission):
-    """`per_train_flux` from the two per-train arrays themselves (DAMNIT values
-    in memory, inside a DAMNIT job)."""
+    """`per_train_flux` from the two per-train arrays themselves.
+
+    For DAMNIT values in memory, inside a DAMNIT job.
+    """
     import xarray as xr
 
     xgm, trans = xr.align(xr.DataArray(xgm), xr.DataArray(transmission), join="outer")
@@ -213,7 +213,7 @@ def chi2_vs_median(per_train, *, flux=None, q_range=None):
 
     χ²_t = mean over q of ((I_t − M) / σ_t)², over the bins where σ_t > 0. The
     median's own error is ignored: it is ≈ √(π/2)·σ/√N, so χ² reads high by a factor
-    of about 1 + π/(2N) — 5e-4 for 3000 trains.
+    of about 1 + π/(2N), 5e-4 for 3000 trains.
 
     :param per_train: `analysis.diagnostics.frames.per_train`'s Dataset.
     :param flux: per-train flux, or None to compare raw curves (then the flux's own
@@ -244,9 +244,9 @@ def detrend(values: np.ndarray, window: int = DETREND_TRAINS) -> np.ndarray:
     """``x / running_median(x, window) − 1``: the train-to-train fluctuation.
 
     The levitated droplet evaporates through a run, so a per-train signal drifts by
-    tens of per cent while the XGM drifts on its own. Over a whole run two slow
-    trends then decide r (r0423: −0.20 between every lit JF cell and the XGM, +0.20
-    to +0.27 after this). The window counts trains in order, edges held at the
+    tens of per cent while the XGM drifts on its own. Over a whole run the two slow
+    trends then decide r, and can flip its sign. The window counts trains in order,
+    edges held at the
     nearest value; NaN where the running median is not positive.
     """
     from scipy.ndimage import median_filter
@@ -275,8 +275,7 @@ def xgm_scatter(signal, flux, *, detrend_window: int | None = DETREND_TRAINS):
 
     A ratio well below 1 means the flux explains the signal's train-to-train
     variation; near 1, it does not (droplet transmission, for instance, varies
-    independently of the XGM — CLAUDE.md "XGM"); above 1, dividing adds the flux's
-    own scatter.
+    independently of the XGM); above 1, dividing adds the flux's own scatter.
 
     :param signal: a per-train scalar, e.g. `band_mean`.
     :param flux: the per-train flux, e.g. ``per_train_flux(...).flux``.
@@ -329,14 +328,14 @@ def cell_xgm_correlation(
 ):
     """Pearson r of each cell's (or pulse's) per-train value against a reference.
 
-    The lit-cell cross-check of transfer_context/06: on p010646, lit JUNGFRAU cells
-    gave r ≈ 0.98 against the XGM and dark ones ≤ 0.2. The stored WAXS files hold
-    lit cells only, so from them this can confirm that every stored cell follows the
-    beam; a dark-cell control needs the cell from proc.
+    A lit-cell cross-check: lit JUNGFRAU cells follow the XGM closely and dark ones
+    do not. The stored WAXS files hold lit cells only, so from them this can confirm
+    that every stored cell follows the beam; a dark-cell control needs the cell from
+    proc.
 
     The reference is usually the XGM, but any per-train series works, e.g. the
-    AGIPD train total (``frame_scalar(agipd).sum("pulseId")``): on r0423 JF cells
-    follow it at r ≈ 0.8 while the train-mean XGM reaches only ≈ 0.25 (detrended).
+    AGIPD train total (``frame_scalar(agipd).sum("pulseId")``), which JUNGFRAU
+    cells can follow far more closely than the train-mean XGM.
 
     :param grid: ``(trainId, label)`` values, e.g. `frame_scalar` of a JUNGFRAU file.
     :param reference: a per-train series: ``per_train_flux(...).xgm_uJ``, the flux,

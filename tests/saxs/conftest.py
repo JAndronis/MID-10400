@@ -1,9 +1,9 @@
-"""Fixtures for the P1 integrator tests.
+"""Fixtures for the AGIPD SAXS integrator tests.
 
 The geometry is EXtra-geom's idealised AGIPD-1M built from the quad positions
-used in its own tests, so these run anywhere: no CrystFEL file, no Maxwell, no
-data. Building the full-split CSC operator over 1 048 576 pixels costs ~0.3 s
-and ~20 MB, so it is session-scoped and built once.
+used in its own tests, so these run anywhere, with no CrystFEL file, cluster or
+data. The full-split CSC operator over all 1 048 576 pixels is the expensive
+fixture, so it is session-scoped and built once.
 """
 
 from __future__ import annotations
@@ -41,11 +41,10 @@ def cfg() -> AgipdSaxsConfig:
     here: the tests build their geometry and masks in-process, and
     ``config_hash`` must not try to sha256 a file that is not mounted.
 
-    The beam centre goes the same way. It was refined against the beamtime's
-    own geometry, and these quad positions are EXtra-geom's test ones, whose
-    central hole sits elsewhere — applying it here would put the beam
-    0.0008 nm⁻¹ from a pixel rather than in the hole. The beam-centre path has
-    its own tests in ``test_operator.py``.
+    The beam centre is unset for the same reason. It belongs to the beamtime's
+    geometry, and the central hole of EXtra-geom's test quads sits elsewhere,
+    so applying it here would put the beam on a pixel instead of in the hole.
+    ``test_operator.py`` tests the beam-centre path.
     """
     return AgipdSaxsConfig(
         proposal=10400,
@@ -87,8 +86,8 @@ def engine(operator_and_engine):
 def _make_frame(rng: np.random.Generator, occupancy: float) -> np.ndarray:
     """A synthetic int16 photon frame with the given nonzero fraction.
 
-    Counts are 1-3, matching CLAUDE.md's r0423/r0426 distribution (98.9 % zero,
-    1.1-1.3 % ones, 2.5e-4 twos, max < 20).
+    Counts are 1-3, like the corrected AGIPD data, where almost every nonzero
+    pixel holds one photon.
     """
     x = np.zeros(NPIX, dtype=np.int16)
     hits = rng.choice(NPIX, int(occupancy * NPIX), replace=False)

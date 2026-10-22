@@ -1,4 +1,4 @@
-"""End-to-end orchestration for one detector (W3).
+"""End-to-end orchestration for one detector.
 
 The pool is injected rather than real wherever the test is about a failure
 path: killing processes to exercise ``BrokenExecutor`` would put test hooks in
@@ -137,7 +137,7 @@ def test_provenance_records_what_was_decided(cfg, mock_run_factory, tmp_path):
 def test_the_thread_env_is_pinned_before_any_pool(
     cfg, mock_run_factory, tmp_path, monkeypatch
 ):
-    """AGIPD §3 rule 3: a spawned child inherits it at process start."""
+    """A spawned child reads the thread environment at start, so set it first."""
     from analysis.common.cpu import THREAD_ENV
 
     for name in THREAD_ENV:
@@ -169,11 +169,12 @@ def test_a_real_spawned_pool_works(cfg, mock_run_factory, tmp_path):
 def test_an_extreme_pixel_no_longer_takes_the_run_down(
     cfg, mock_run_factory, tmp_path, caplog
 ):
-    """r0480: 473 of 23 992 frames failed the value check and the run raised.
+    """An extreme pixel costs that pixel, and the run completes.
 
-    They were NaCl Bragg spots from the evaporating droplet, so the loss rose
-    through the run — exactly the frames the run exists to record. Now the pixel
-    goes and the frame stays, and the run says what it cost.
+    Such pixels (salt Bragg spots from an evaporating droplet) become more
+    common through a run, so failing their frames would lose the frames the run
+    exists to record. The pixel goes, the frame stays, and the run records what
+    it cost.
     """
     import logging
 
@@ -208,9 +209,9 @@ def test_a_label_mismatch_still_takes_the_run_down(cfg, mock_run_factory, tmp_pa
 def test_which_statuses_block_the_run(cfg):
     """The split the gate rests on, without needing a run to produce each one.
 
-    ``DATA_CHECK_FAILED`` now means a frame with nothing left to integrate — the
-    value check drops pixels, not frames — and it is still a property of the
-    data rather than a failure of the pass, so it stays tolerated by default.
+    ``DATA_CHECK_FAILED`` means a frame with nothing left to integrate (the
+    value check drops pixels, not frames). It is a property of the data rather
+    than a failure of the pass, so it is tolerated by default.
     """
     from analysis.waxs.run import _blocking
 
@@ -281,11 +282,11 @@ def test_resume_processes_only_the_missing_blocks(cfg, mock_run_factory, tmp_pat
 def test_a_pinned_lit_set_that_the_data_contradicts_stops_the_run(
     cfg, mock_run_factory, tmp_path
 ):
-    """§3 D4, end to end: nothing is written when the pinned pattern is wrong.
+    """Nothing is written when the pinned lit-cell pattern is wrong.
 
-    Pinned, because the pass measures the set per run by default — the
-    proposal used four readout patterns. ``(0, 1, 2, 3)`` is a shape a
-    JUNGFRAU can read, so only the pin catches it.
+    The pass measures the set per run by default, because the proposal used
+    several readout patterns. ``(0, 1, 2, 3)`` is a pattern a JUNGFRAU can
+    read, so only the pin catches it.
     """
     mock, dc = mock_run_factory(lit_cells=(0, 1, 2, 3))
     pinned = dataclasses.replace(cfg, expected_lit_cells=EXPECTED_LIT_CELLS)
@@ -302,10 +303,10 @@ def test_a_pinned_lit_set_that_the_data_contradicts_stops_the_run(
 def test_a_run_with_no_lit_cell_returns_nothing_and_says_why(
     cfg, mock_run_factory, tmp_path, caplog
 ):
-    """43 of the proposal's runs saw no beam. That is a result, not a failure.
+    """A run that saw no beam is a result, not a failure.
 
-    Raising here would make a bulk DAMNIT reprocess fall over on runs that are
-    simply dark, so the pass logs the evidence and returns ``None``.
+    Raising here would make a bulk DAMNIT reprocess fall over on dark runs, so
+    the pass logs the evidence and returns ``None``.
     """
     import logging
 
@@ -322,11 +323,11 @@ def test_a_run_with_no_lit_cell_returns_nothing_and_says_why(
 def test_a_run_with_no_dark_cell_falls_back_to_the_configured_noise(
     cfg, mock_run_factory, tmp_path
 ):
-    """213 of the proposal's runs read all 16 cells, so none is left to measure.
+    """A run that reads all 16 cells leaves no dark cell to measure noise on.
 
-    Raising there would take a whole DAMNIT reprocess down on runs that are
-    perfectly ordinary, so sigma_read falls back to the per-detector median and
-    ``ErrorModel.source`` records that it did.
+    Raising there would take a whole DAMNIT reprocess down on ordinary runs, so
+    sigma_read falls back to the per-detector median and ``ErrorModel.source``
+    records that it did.
     """
     import json
 
@@ -342,8 +343,7 @@ def test_a_run_with_no_dark_cell_falls_back_to_the_configured_noise(
 
     # ...and the fallback cannot be cleared: ``None`` means "use the
     # per-detector default" and __post_init__ resolves it, so a constructed
-    # config never holds None. Pinned because reading it the other way is what
-    # made an earlier version of this test assert an unreachable branch.
+    # config never holds None.
     stripped = dataclasses.replace(everything, read_noise_fallback_kev=None)
     assert stripped.read_noise_fallback_kev == cfg.read_noise_fallback_kev
 
@@ -410,9 +410,9 @@ def test_the_pooled_reducer_is_reachable(cfg, mock_run_factory, tmp_path):
 def test_both_detectors_run_independently_into_their_own_files(
     config_for_detector, mock_run_factory, tmp_path
 ):
-    """§3 D2, end to end: two detectors, two passes, two files, no crosstalk.
+    """Two detectors, two passes, two files, no crosstalk.
 
-    The jf2 path differs in more than a name — its source is
+    The jf2 path differs in more than a name. Its source is
     ``MID_EXP_JF500K2/CORR/JNGFR02:daqOutput``, so it exercises ``first_modno``
     and its own PONI and mask.
     """

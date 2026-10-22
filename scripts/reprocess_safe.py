@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Reprocess runs through DAMNIT without ever truncating an output (open task 17f).
+"""Reprocess runs through DAMNIT without ever truncating an output.
 
 The pass refuses to resume into a file it cannot extend, and answers a complete
 one from the file. So reprocessing means moving the output aside first, letting
@@ -9,31 +9,34 @@ DAMNIT write a fresh one, checking it, and only then deleting the old one:
     per run and detector: the output, whether it is complete and why not, a
     lock, a DAMNIT job, backups and their check verdict.
 ``start``
-    refuses unless every run is idle — no DAMNIT job queued or running, no lock,
-    no leftover backup — and the fileset has room for the new files. Then
+    refuses unless every run is idle (no DAMNIT job queued or running, no lock,
+    no leftover backup) and the fileset has room for the new files. Then
     renames each output to ``<stem>_before_reprocess_<stamp>.h5`` (instant, on
     the same fileset) and runs ``damnit reprocess --match <title> <runs>``.
 ``check``
     passes a run when the new output is complete
     (:func:`analysis.saxs.complete.is_complete` / ``analysis.waxs``), every
-    dataset in it reads back, and it has the backup's frames — unless
-    ``--accept-count-change``. Writes the verdict beside the backup.
+    dataset in it reads back, and it has the backup's frames (unless
+    ``--accept-count-change``). Writes the verdict beside the backup.
 ``cleanup``
     deletes only backups whose check passed and whose new output is still the
     file that was checked (same inode, mtime and size).
 ``restore``
     puts a backup back, keeping the new output as ``<stem>_failed_reprocess_…``.
 
-Never moves the AGIPD window sums (``usr/cached_files/agipd_pixel_sums``) or
-photon statistics (``usr/cached_files/agipd_photon_stats``): the pass never
-truncates them, and once proc is on tape they cannot be rebuilt.
+Without ``--fresh`` it never moves the AGIPD window sums
+(``usr/cached_files/agipd_pixel_sums``) or photon statistics
+(``usr/cached_files/agipd_photon_stats``): the pass never truncates them, and
+once proc is on tape they cannot be rebuilt. ``start --fresh`` moves them aside
+with the output, so the pass rewrites them from proc instead of finding them
+complete.
 
-``-d xpcs`` is the hit-train XPCS product (``analysis.xpcs``, ``context/xpcs-hits.md``).
-The output moved aside, rebuilt and checked is the result file ``xpcs_hits.h5``,
-which is derived from the ring-photon store. The **store**
-(``agipd_ring_photons.h5``, ``cfg.store_file``) is the hit trains' only 2D record
-once proc is taped, so it is a companion like the window sums: test-read by
-``check``, never renamed, never in ``--match``. The pass itself also moves a
+``-d xpcs`` is the hit-train XPCS product (``analysis.xpcs``). The output moved
+aside, rebuilt and checked is the result file ``xpcs_hits.h5``, which is
+derived from the ring-photon store. The store (``agipd_ring_photons.h5``,
+``cfg.store_file``) is the hit trains' only 2D record once proc is taped, so it
+is a companion like the window sums: test-read by ``check``, renamed only under
+``--fresh``, never in ``--match``. The pass itself also moves a
 result made for other inputs to ``xpcs_hits.prev.h5``; that file is not one of
 this script's backups. ``xpcs_hits_preprocessing`` depends on ``agipd_saxs``, so
 asking DAMNIT for it would run the AGIPD pass: ``start -d xpcs`` therefore
@@ -147,10 +150,13 @@ class Detector:
         return []
 
     def derived(self, run: int) -> list[Path]:
-        """Regenerable caches built from this run's DAMNIT values, deleted by
-        ``--fresh`` instead of moved: the hit rule's per-train signals
-        (`analysis.triage.classify.train_signals`), keyed by the DAMNIT file's size
-        and mtime, which a reprocess changes. They are rebuilt in seconds on demand."""
+        """Regenerable caches of this run that ``--fresh`` deletes instead of moving.
+
+        They are the hit rule's per-train signals
+        (``analysis.triage.classify.train_signals``), keyed by the DAMNIT file's
+        size and mtime, which a reprocess changes. The hit rule rebuilds them on
+        demand.
+        """
         if self.name not in ("agipd", "xpcs"):
             return []
         from analysis.triage.classify import CACHE_DIR
@@ -164,7 +170,7 @@ class Detector:
         return sorted(p for p in root.iterdir() if pattern.match(p.name))
 
     def caches(self, run: int) -> list[Path]:
-        """`companions`, whether or not they exist now: what ``--fresh`` moves."""
+        """``companions``, whether or not they exist now: what ``--fresh`` moves."""
         if self.name == "xpcs":
             return [self.config(run).store_file]
         return self.companions(run)
@@ -172,11 +178,10 @@ class Detector:
 
 DETECTORS = {
     # The preprocessing variable reads proc and writes the files; the others
-    # read them (user, 2026-10-14). --match takes case-insensitive title
-    # substrings, so "AGIPD I(q)" also matches its overview. Titles are the
-    # group's title plus the variable's (src/amore/context.py groups,
-    # 2026-10-19); `scripts/match_titles.py --self-test` asserts each set
-    # against the context file.
+    # read them. --match takes case-insensitive title substrings, so "AGIPD I(q)"
+    # also matches its overview. Titles are the group's title plus the
+    # variable's; `scripts/match_titles.py --self-test` asserts each set against
+    # the context file.
     "agipd": Detector(
         "agipd",
         (

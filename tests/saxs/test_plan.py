@@ -1,4 +1,4 @@
-"""Run plan over a mock run (context file §6.8; phase P3)."""
+"""Run plan over a mock run."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ def test_plan_over_a_clean_run(run_cfg, mock_run_factory):
 
 
 def test_dropped_train_leaves_a_gap_in_the_run(run_cfg, mock_run_factory):
-    """A train the DAQ never wrote is simply absent from the run."""
+    """A train the DAQ never wrote is absent from the run."""
     run, dc = mock_run_factory(train_ids=(10000, 10001, 10003, 10004))
     plan = build_plan(run_cfg, dc=dc)
 
@@ -50,7 +50,7 @@ def test_train_with_too_few_modules(run_cfg, mock_run_factory, status_of):
 
 
 def test_zero_frame_train(run_cfg, mock_run_factory, status_of):
-    """No module wrote a frame — distinct from too few modules."""
+    """No module wrote a frame, a status distinct from too few modules."""
     _, dc = mock_run_factory(zero_frame_trains=(10002,))
     plan = build_plan(run_cfg, dc=dc)
     assert status_of(plan, 10002) is FrameStatus.NO_FRAMES

@@ -1,4 +1,4 @@
-"""Operator build, hashing and round-trip (context file §6.1)."""
+"""Operator build, hashing and round-trip."""
 
 from __future__ import annotations
 
@@ -14,11 +14,11 @@ extra_geom = pytest.importorskip("extra_geom")
 
 
 def test_method_resolves_to_full_csc_cython(op, engine):
-    """§3 rule 1: the requested tuple must be the one that actually ran.
+    """The requested method tuple must be the one that ran.
 
-    A method *string* silently resolves to a no-split NumPy histogram
-    (CLAUDE.md pitfall 1), so the build asserts the resolved tuple and the
-    engine that carries the LUT is the full-split CSC one.
+    A pyFAI method *string* can silently resolve to a no-split NumPy
+    histogram, so the build asserts the resolved tuple, and the engine that
+    holds the LUT must be the full-split CSC one.
     """
     assert op.method == METHOD
     assert type(engine).__module__ == "pyFAI.ext.splitPixelFullCSC"
@@ -51,7 +51,6 @@ def test_operator_arrays_are_read_only(op):
 
 
 def test_operator_hash_stable_across_rebuilds(quad_pos, cfg, op):
-    """P1 acceptance: the hash is stable across rebuilds."""
     rebuilt, _ = build_operator(
         extra_geom.AGIPD_1MGeometry.from_quad_positions(quad_pos=quad_pos), cfg
     )
@@ -63,11 +62,8 @@ def test_operator_hash_stable_across_rebuilds(quad_pos, cfg, op):
 
 
 def test_operator_hash_changes_with_geometry(quad_pos, cfg, op):
-    """P1 acceptance: a changed geometry changes the hash.
-
-    One quadrant moves by a single pixel, the smallest change the constructor
-    can express.
-    """
+    """One quadrant moves by one pixel, the smallest change the constructor
+    can express."""
     moved = [*quad_pos[:3], (quad_pos[3][0], quad_pos[3][1] + 1)]
     shifted, _ = build_operator(
         extra_geom.AGIPD_1MGeometry.from_quad_positions(quad_pos=moved), cfg
@@ -141,12 +137,12 @@ def test_geometry_from_config_requires_a_file(cfg):
         geometry_from_config(cfg)
 
 
-# ── beam centre (open task 4) ─────────────────────────────────────────────────
+# ── beam centre ───────────────────────────────────────────────────────────────
 # `cfg.beam_center` is expressed in the `to_distortion_array()` frame, not the
 # `to_pyfai_detector()` one PONI = 0 lives in, so `build_operator` has to
 # install that corner array before calling setFit2D. These pin that pairing:
 # dropping either half moves the beam by the offset between the two origins
-# (~20 px in y on this beamtime's geometry) without raising anything.
+# without raising anything.
 
 
 @pytest.fixture(scope="module")
@@ -220,10 +216,9 @@ def test_build_operator_reproduces_extra_speckle_configsaxs(geom, centred_cfg):
     """Cross-check against the implementation the centre was derived against.
 
     ``extra_speckle.setup.configuration.ConfigSAXS`` is what produced the
-    numbers in ``config.py``. If our construction and its construction ever
-    diverge -- a changed corner-array origin, a Fit2D argument order, a
-    millimetre -- the q each pixel is assigned to moves, and this is what
-    catches it.
+    numbers in ``config.py``. If the two constructions diverge (a changed
+    corner-array origin, a Fit2D argument order, a millimetre), the q each
+    pixel is assigned to moves, and this test catches it.
     """
     configuration = pytest.importorskip(
         "extra_speckle.setup.configuration",

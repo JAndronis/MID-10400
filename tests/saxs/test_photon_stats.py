@@ -1,4 +1,4 @@
-"""The photon-statistics pass (context/xpcs-quality.md, Q1) on the mock AGIPD run.
+"""The photon-statistics pass on the mock AGIPD run.
 
 Every frame's histogram must equal a dense count over the same pixels, rows must sit
 where the frame table puts them, and the file must resume, refuse another config and
@@ -168,7 +168,7 @@ def test_a_frame_that_is_not_counts_is_recorded_not_histogrammed(
     pass_on(bad, replace(run_cfg, allow_incomplete=True), geom, tmp_path / "again.h5")
 
 
-# ── written by the agipd_saxs pass from its own read (user, 2026-10-14) ──────
+# ── written by the agipd_saxs pass from its own read ─────────────────────────
 
 
 @pytest.fixture(scope="module")

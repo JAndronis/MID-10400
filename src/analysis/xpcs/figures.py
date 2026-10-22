@@ -1,40 +1,14 @@
-"""extra-speckle's ``xpcs_offline`` figures and data columns, from the hit store.
+"""extra-speckle's ``xpcs_offline`` figures and data columns, made from the hit store.
 
-The old DAMNIT columns (``src/amore/context.py`` ``xpcs_*``) came from one
-``xpcs_offline`` call that read every train of a run. Everything it showed is
-reproduced here from the two files the hit-train pass keeps: the results file
-(:class:`~analysis.xpcs.result.XpcsHits`: exact per-train sums) and, for what is
-a *detector* picture, the photon store (raw counts over the annulus the rings
-span). Nothing here reads proc.
-
-How faithfully each old product is reproduced:
-
-========================= ==============================================================
-old column                here
-========================= ==============================================================
-XPCS TTCF                 :func:`legacy_ttcf` (exact, per hit train, float32)
-XPCS mean dataset         :func:`legacy_mean_dataset` (``ttcf_mean`` and ``g2``)
-XPCS SAXS                 :func:`saxs_curves` (store), :func:`saxs_rings` (results)
-q-rings                   :func:`figure_q_rings` (annulus only, see there)
-beamcenter                :func:`figure_beamcenter` (a check, not a fit, see there)
-outliers                  :func:`figure_outliers` (statistic of N hit trains)
-intensity outliers        :func:`figure_intensity_outliers` (ring pixels only)
-kbar                      :func:`figure_kbar` (exact)
-correction                :func:`figure_correction` (exact up to the pooled estimator)
-TTCF's                    :func:`figure_ttcfs` (exact up to the pooled estimator)
-g2                        :func:`figure_g2`
-g2 fit                    :func:`figure_g2_fit` (extra-speckle's model, :func:`fit_g2`)
-SAXS overview             :func:`figure_saxs`
-========================= ==============================================================
-
-"Up to the pooled estimator" means the default view is
-:attr:`~analysis.xpcs.result.Averaging.POOLED` (ratios of summed sums), the
-production estimate; pass ``Averaging.ES`` for extra-speckle's mean of per-train
-ratios, which the old columns held.
-
-All figures are built on :class:`matplotlib.figure.Figure` directly, not through
-``pyplot``, so no backend is needed and no figure leaks into global state. They
-are returned open for DAMNIT or a notebook to show or save.
+Each function reproduces one extra-speckle product from the two files the
+hit-train pass keeps: the results file (:class:`~analysis.xpcs.result.XpcsHits`,
+exact per-train sums) and, for detector pictures, the photon store (raw counts
+over the annulus the rings span). Nothing here reads proc. The default estimator
+is :attr:`~analysis.xpcs.result.Averaging.POOLED` (ratios of summed sums);
+``Averaging.ES`` gives extra-speckle's mean of per-train ratios. Figures are
+built on :class:`matplotlib.figure.Figure` without ``pyplot``, so no backend is
+needed and no figure enters global state; they are returned open for the caller
+to show or save.
 """
 
 from __future__ import annotations
@@ -87,11 +61,12 @@ __all__ = [
     "saxs_rings",
 ]
 
-#: The old defaults (``xpcs_offline`` and the DAMNIT variable's arguments).
+#: extra-speckle's outlier thresholds and intensity-outlier fraction, as
+#: ``xpcs_offline`` was called with them.
 OUTLIER_THRESHOLDS = (0.75, 1.75)
 INTENSITY_OUTLIER_FRACTION = 0.2
-#: extra-speckle's ``saxs.get`` used 300 radial bins over the detector's q range
-#: (0.0082 to 0.1051 Å⁻¹ in r0493's ``SAXS.nc``): 3.24e-4 Å⁻¹ each.
+#: Width in Å⁻¹ of extra-speckle's ``saxs.get`` bins, 300 over the detector's
+#: q range.
 Q_BIN_A = 3.24e-4
 N_CONES = 8
 #: ``xpcs.fit_dr``'s constants: kB [J/K], 25 °C, viscosity 1 mPa s in N s Å⁻².
@@ -100,7 +75,6 @@ _KB, _T_K, _ETA = 1.381e-23, 273.15 + 25, 1e-23
 _MARKERS = ("o", "v", "^", "<", ">", "H", "D", "*")
 
 
-# ── small shared helpers ────────────────────────────────────────────────────────
 def _run_label(hits: XpcsHits) -> str:
     """The run number, from the recorded config, else from ``r####`` in the path."""
     try:
@@ -195,7 +169,7 @@ def _g2_panel(
 
 
 def _diagonal_curves(maps: np.ndarray, lags: np.ndarray) -> np.ndarray:
-    """``reduce_ttcf``: the NaN-mean of each diagonal of every ring's map."""
+    """The NaN-mean of each diagonal of every ring's map, as ``reduce_ttcf``."""
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)
         return np.stack(
@@ -203,17 +177,16 @@ def _diagonal_curves(maps: np.ndarray, lags: np.ndarray) -> np.ndarray:
         )
 
 
-# ── data products that come from the results file ─────────────────────────────
 def legacy_ttcf(
     hits: XpcsHits, trains: np.ndarray | None = None, chunk: int = 128
 ) -> xr.DataArray:
-    """The old ``XPCS TTCF`` column: each train's own ``TTCF_raw − TTCF_off``.
+    """The ``XPCS TTCF`` column: each train's own ``TTCF_raw − TTCF_off``.
 
     Same layout as extra-speckle's per-train files, ``(trainId, roi_q, frame_1,
     frame_2)`` float32, one row per usable hit train. A train with no baseline
     (the first of a chain, or after a gap) has a NaN ``TTCF_off`` and so a NaN
-    row, as in the old files. **Large** (about 0.65 MB a train a ring set at
-    P = 155, R = 7): pass ``trains`` to take a part.
+    row, as in extra-speckle's files. It holds 4 P² R bytes a train, so pass
+    ``trains`` to take a part of a long run.
 
     :param chunk: trains read at a time, so the peak is one float32 copy, not three.
     """
@@ -241,11 +214,11 @@ def legacy_ttcf(
 def legacy_mean_dataset(
     hits: XpcsHits, averaging: Averaging = Averaging.POOLED
 ) -> xr.Dataset:
-    """The old ``XPCS mean dataset`` column: ``ttcf_mean`` and ``g2``.
+    """The ``XPCS mean dataset`` column: ``ttcf_mean`` and ``g2``.
 
     ``ttcf_mean`` is the baseline-subtracted mean map ``(roi_q, frame_1,
     frame_2)`` and ``g2`` the binned diagonal reduction ``(roi_q, tau)``, both
-    float32 as before. With ``Averaging.POOLED`` they are ``c2`` of
+    float32 as extra-speckle wrote them. With ``Averaging.POOLED`` they are ``c2`` of
     :meth:`XpcsHits.ttcf` and :meth:`XpcsHits.g2` and ``g2_sigma`` (the
     jackknife error) is added; ``Averaging.ES`` gives extra-speckle's own, with
     its noisy-ring rule, so rings can be missing from ``g2`` and not from
@@ -268,9 +241,9 @@ def legacy_mean_dataset(
 def mean_intensity(hits: XpcsHits) -> xr.DataArray:
     """Mean photons per ring pixel and frame of each usable train, ``(trainId,)``.
 
-    The old column was the mean over the *whole masked detector*; this is over
-    the ring pixels (the store holds only the annulus). It tracks the same
-    thing, the droplet's total scattering per train, on another scale.
+    extra-speckle's was the mean over the whole masked detector; this one is
+    over the ring pixels, because the store holds only the annulus. Both track
+    the droplet's total scattering per train, on different scales.
     """
     rows, s_on, cnt = _ring_sums(hits)
     total_pixels = cnt.sum(1)
@@ -285,12 +258,12 @@ def mean_intensity(hits: XpcsHits) -> xr.DataArray:
 
 
 def saxs_rings(hits: XpcsHits) -> xr.DataArray:
-    """I per frame and ring, ``(frame, q)`` in photons per pixel: results file only.
+    """I per frame and ring, ``(frame, q)`` in photons per pixel, from the results file.
 
-    The old ``XPCS SAXS`` column was a 300-point I(q) per pulse. With the
-    sums alone the finest resolution is the rings, so this is that curve
-    sampled at the seven ring centres (pooled over the usable trains). For the
-    full curve use :func:`saxs_curves`.
+    extra-speckle's ``XPCS SAXS`` column was a 300-point I(q) per pulse. The
+    sums resolve nothing finer than the rings, so this is that curve sampled at
+    the ring centres, pooled over the usable trains. For the full curve use
+    :func:`saxs_curves`.
     """
     _, s_on, cnt = _ring_sums(hits)
     with np.errstate(invalid="ignore", divide="ignore"):
@@ -305,7 +278,6 @@ def saxs_rings(hits: XpcsHits) -> xr.DataArray:
     return out
 
 
-# ── what needs the photon store ───────────────────────────────────────────────
 @dataclass(frozen=True, slots=True)
 class DetectorMean:
     """Per-frame mean photons of the ring pixels over some hit trains.
@@ -331,8 +303,8 @@ class DetectorMean:
     #: Flagged in some frame of every train read: ``MaskPolicy.ANY_FRAME`` keeps
     #: such a pixel out of every one of those trains' sums. ``None``: not known.
     always_flagged: np.ndarray | None = None
-    #: The pass's applied outlier mask and its statistic, per pixel above
-    #: (``None``: the results file has none). The pixels include the outliers.
+    #: The pass's applied outlier mask and its statistic, per pixel; ``None``
+    #: when the results file has none. ``pixel`` includes the outliers.
     outlier: np.ndarray | None = None
     outlier_ratio: np.ndarray | None = None
     outlier_thresholds: tuple[float, float] | None = None
@@ -361,14 +333,13 @@ def detector_mean(
 ) -> DetectorMean:
     """Read the photons of up to ``max_trains`` hit trains from the store.
 
-    The trains are spread evenly over the usable ones. Dynamic (per-frame)
-    ``image.mask`` flags are not applied, only the static ring labels: a pixel
-    flagged in one frame only is a small fraction of the ring pixels (§7 of
-    ``context/xpcs-hits.md``).
+    The trains are spread evenly over the usable ones. Only the static ring
+    labels apply, not the per-frame ``image.mask`` flags, because pixels flagged
+    in single frames are a small fraction of the ring pixels.
 
     :param cfg: gives the store path and the geometry (beam centre, distance).
-    :param geometry: an AGIPD geometry object instead of ``cfg.saxs.geometry_file``
-        (the tests' synthetic one).
+    :param geometry: an AGIPD geometry object to use instead of
+        ``cfg.saxs.geometry_file``, such as a synthetic one in tests.
     :raises FileNotFoundError: no photon store for this run.
     :raises ValueError: the store's envelope is not the one the results used.
     """
@@ -447,12 +418,13 @@ def q_curves(
 ) -> xr.DataArray:
     """I(q) per frame by binning the ring pixels in q: ``(frame, q)``, photons/px.
 
-    This is ``saxs.get`` of the old pipeline on the annulus: a plain mean of the
-    pixels in each ``dq_A`` bin (no pixel splitting, which pyFAI's does), so
-    bins at the edge of the annulus hold fewer pixels and a bin with none is NaN.
+    This is extra-speckle's ``saxs.get`` on the annulus, a plain mean of the
+    pixels in each ``dq_A`` bin without the pixel splitting pyFAI does. Bins at
+    the edge of the annulus hold fewer pixels, and a bin with none is NaN.
 
-    :param pixels: boolean ``(n_good,)``: which pixels count (default all but
-        the applied outliers, as ``SAXS.nc`` was made after ``mask_outlier``).
+    :param pixels: boolean ``(n_good,)`` selecting the pixels that count. The
+        default is all but the applied outliers, as extra-speckle made
+        ``SAXS.nc`` after ``mask_outlier``.
     """
     if pixels is not None:
         keep = np.asarray(pixels)
@@ -489,7 +461,7 @@ def _q_edges(det: DetectorMean, dq_A: float) -> np.ndarray:
 
 
 def saxs_curves(det: DetectorMean, *, dq_A: float = Q_BIN_A) -> xr.DataArray:
-    """The old ``XPCS SAXS`` column on the annulus: I(q) per frame, ``(frame, q)``."""
+    """The ``XPCS SAXS`` column on the annulus: I(q) per frame, ``(frame, q)``."""
     return q_curves(det, dq_A=dq_A)
 
 
@@ -500,8 +472,8 @@ def outlier_ratio(
 
     ``sqrt(mean over frames of (per-frame mean)²)`` of a pixel, over the median
     of that quantity in its q bin; a pixel outside ``thresholds`` is an
-    outlier. Pixels in a bin of their own (no q bin) keep the old fill, the
-    mean of the thresholds.
+    outlier. A pixel outside every q bin gets extra-speckle's fill, the mean of
+    the thresholds, and a bin whose median is zero gives NaN.
     """
     per_frame = det.per_frame()
     rms = np.sqrt(np.mean(per_frame.astype(np.float64) ** 2, axis=0))
@@ -521,7 +493,8 @@ def cone_curves(
 ) -> xr.DataArray:
     """I(q) in ``N_CONES`` azimuthal cones, ``(q_slice, q)``, over ``q_bounds`` (Å⁻¹).
 
-    ``get_SAXS_var``'s cones: equal azimuthal sectors of 360/``N_CONES`` degrees.
+    The cones are extra-speckle's ``get_SAXS_var`` ones, equal azimuthal sectors
+    of 360/``N_CONES`` degrees.
     """
     cone = (np.floor((det.chi_deg % 360.0) / (360.0 / N_CONES))).astype(int)
     mean = det.mean_image
@@ -541,7 +514,6 @@ def cone_curves(
     )
 
 
-# ── detector figures ──────────────────────────────────────────────────────────
 def _assemble(det: DetectorMean, values: np.ndarray, fill: float = np.nan):
     """Assemble per-ring-pixel ``values`` into the detector picture.
 
@@ -553,7 +525,7 @@ def _assemble(det: DetectorMean, values: np.ndarray, fill: float = np.nan):
 
 
 def _draw_image(ax, image, centre, det, *, title, norm=None, cmap="jet", **kwargs):
-    """``Setup.plot_data``: front view, NaN gray, the geometry and beam crosses."""
+    """As ``Setup.plot_data``: front view, NaN gray, geometry and beam crosses."""
     colours = colormaps[cmap] if isinstance(cmap, str) else cmap
     colours = colours.copy()
     colours.set_bad(color="0.25", alpha=1.0)
@@ -593,16 +565,16 @@ def figure_q_rings(det: DetectorMean, *, remove_outliers: bool = True) -> Figure
     view, black/white cross at the geometry centre and yellow at the beam
     centre); right, the same image under the ring ROIs at alpha 0.4.
 
-    **Differs from the old figure** in what is shown: the photon store holds the
-    annulus the rings span (plus the envelope margin) and nothing of the
-    rest of the detector, so only ring pixels that survive the static mask are
+    It shows less than extra-speckle's figure. The photon store holds the
+    annulus the rings span (plus the envelope margin) and nothing of the rest
+    of the detector, so only ring pixels that survive the static mask are
     coloured, and the mean is over ``det.n_trains`` hit trains instead of the
-    whole run. The ring layout itself is the stored one, not a recomputation.
+    whole run. The ring layout is the stored one, not a recomputation.
 
-    :param remove_outliers: drop the pixels :func:`outlier_ratio` flags before
-        averaging, as the old figure did (it showed ``mean_pixelcell`` after
-        ``mask_outlier``). Without it a handful of hot pixels set the colour
-        scale.
+    :param remove_outliers: drop the outlier pixels before averaging (the
+        applied mask, else :func:`outlier_ratio` recomputed), as extra-speckle
+        showed ``mean_pixelcell`` after ``mask_outlier``. Without it a few hot
+        pixels set the colour scale.
     """
     mean = det.mean_image.copy()
     if remove_outliers and det.outlier is not None:
@@ -694,18 +666,19 @@ def figure_outliers(
     pixels outside ``thresholds`` removed; right, the histogram of
     :func:`outlier_ratio` with the thresholds dashed.
 
-    **Differs from the old figure:** the statistic comes from ``det.n_trains``
-    hit trains, not the run's 3000. Per-pixel means at 0.01 photon a frame are
-    Poisson-dominated, so with few trains the histogram is wider than the old
-    one and the same thresholds flag more pixels: read the title's train count,
-    and do not compare the number of removed pixels with the old log.
+    The statistic comes from ``det.n_trains`` hit trains, not every train of
+    the run. Per-pixel means at 0.01 photon a frame are Poisson-dominated, so
+    with few trains the histogram is wider than extra-speckle's and the same
+    thresholds flag more pixels. Do not compare the number of removed pixels
+    with extra-speckle's log without the train count in the title.
 
     When the results file carries the pass's applied mask (``det.outlier``),
-    that mask and its statistic (over every usable hit train) are what is
-    shown, and ``thresholds`` and ``dq_A`` only bin the curves. Neither panel
-    shows ``det.always_flagged``: ``MaskPolicy.ANY_FRAME`` keeps those pixels out
-    of every sum, while the store's photons carry no flags (they were r0424's
-    spikes). A NaN ratio is not the same thing: an empty q bin gives 0/0.
+    that mask and its statistic (over every usable hit train) are shown, and
+    ``thresholds`` and ``dq_A`` only bin the curves. Neither curve panel
+    includes ``det.always_flagged``. ``MaskPolicy.ANY_FRAME`` keeps those
+    pixels out of every sum, but the store's photons carry no flags, so they
+    would show as spikes. The histogram leaves out NaN ratios, which come from
+    a q bin whose median is zero.
     """
     if det.outlier is not None:
         ratio, removed = det.outlier_ratio, det.outlier
@@ -748,21 +721,17 @@ def figure_outliers(
 def figure_beamcenter(det: DetectorMean, *, dq_A: float = Q_BIN_A) -> Figure:
     """``XPCS beamcenter``: the cone test of ``fit_saxs_beamcenter``, without the fit.
 
-    **Not reproducible as a fit.** The old figure was produced only when
-    ``refine_beamcenter`` was on, which the production call never set
-    (``args["refine_beamcenter"] = False``), so the old column was empty. A fit
-    moves the centre and re-integrates the *whole* detector image at every
-    step; the store holds the annulus only and the geometry's beam centre
-    (``cfg.saxs.beam_center_*``, open task 4). What the store does support is
-    the old fit's merit function at the configured centre, which is also the
-    decisive check of open task 4: I(q) in eight azimuthal cones should agree if
-    the centre is right.
+    A fit moves the centre and re-integrates the whole detector image at every
+    step, and the store holds the annulus only, so no fit is made. The store
+    does support the fit's merit function at the configured centre
+    (``cfg.saxs.beam_center_*``): I(q) in ``N_CONES`` azimuthal cones agrees
+    between cones when the centre is right.
 
-    Left, I(q) per cone over the ring range, coloured by cone (the old "before
-    refinement" panel, titled with the centre). Right, per ring the relative
-    deviation of each cone's mean from the ring mean: flat when the centre is
-    right, sinusoidal in the cone number when it is off. The title carries the
-    old merit, ``mean over q of var over cones of log I``.
+    Left, I(q) per cone over the ring range, coloured by cone (extra-speckle's
+    "before refinement" panel, titled with the centre). Right, per ring the
+    relative deviation of each cone's mean from the ring mean, flat when the
+    centre is right and sinusoidal in the cone number when it is off. The title
+    carries the merit, ``mean over q of var over cones of log I``.
     """
     q_bounds = (float(det.ring_bounds_A[0, 0]), float(det.ring_bounds_A[-1, 1]))
     cones = cone_curves(det, q_bounds, dq_A=5 * dq_A)
@@ -822,7 +791,6 @@ def figure_beamcenter(det: DetectorMean, *, dq_A: float = Q_BIN_A) -> Figure:
     return fig
 
 
-# ── figures that come from the results file ───────────────────────────────────
 def figure_intensity_outliers(
     hits: XpcsHits,
     xgm: xr.DataArray | np.ndarray | None = None,
@@ -831,16 +799,15 @@ def figure_intensity_outliers(
 ) -> Figure:
     """``XPCS intensity outliers``: the mean intensity of each hit train.
 
-    Without ``xgm`` this is the old ``plot_intensity`` (what the production call
-    drew, since ``intensity_masking`` was off): blue dots against train
-    position. **The y axis differs:** the old one was the mean of the whole
-    masked detector, here it is the mean over ring pixels
-    (:func:`mean_intensity`); the train axis runs over the hit trains, not
-    every train of the run.
+    Without ``xgm`` this is extra-speckle's ``plot_intensity``, blue dots
+    against train position. The y axis is the mean over ring pixels
+    (:func:`mean_intensity`) where extra-speckle used the whole masked detector,
+    and the train axis runs over the hit trains only.
 
     With ``xgm`` (per hit train, aligned by position or as a ``trainId``
     DataArray) it is ``mask_intensity_outliers``: intensity over XGM, trains
-    further than ``out_thresh`` from the median in red, the ±20 % band dashed.
+    further than ``out_thresh`` from the median in red, and the ``±out_thresh``
+    band dashed.
     """
     intensity = mean_intensity(hits)
     fig = Figure()
@@ -876,8 +843,8 @@ def figure_kbar(hits: XpcsHits, threshold: float | None = ES_KBAR_MIN) -> Figure
 
     Left, every frame's k̄ of every ring against train id (log y, the
     threshold as a thick dashed line); right, a step histogram per ring on
-    1000 log bins. Exact reproduction of the old figure's content: k̄ is the
-    mean photons per good ring pixel and frame, as extra-speckle's ``kbar``.
+    1000 log bins. The content is exactly extra-speckle's: k̄ is the mean
+    photons per good ring pixel and frame, as its ``kbar``.
     The default threshold is extra-speckle's ``kbar_threshold`` (3e-3).
     """
     kbar = hits.kbar()
@@ -1026,8 +993,8 @@ def figure_g2(
     log τ in seconds, legend outside to the right, titled ``run N``; the binning
     is extra-speckle's ``g2_to_bins(50, 20, 10)`` (:meth:`XpcsHits.g2`).
 
-    :param errors: add the jackknife error bars (not in the old figure; pooled
-        only, ES has no error).
+    :param errors: add the jackknife error bars, which extra-speckle did not
+        draw (pooled only; ES has no error).
     :param g2: an already computed :meth:`XpcsHits.g2`.
     """
     g2 = g2 if g2 is not None else hits.g2(averaging)
@@ -1082,7 +1049,7 @@ def fit_g2(g2: xr.DataArray, *, min_points: int = 4) -> G2Fit:
     ``err_a = std(Γ/q²)``, ``R_H = kB T / (6 π η a) × 1e10`` with
     ``η = 1e-23 N s Å⁻²``.
 
-    **One deliberate difference.** extra-speckle fitted every ring it was given,
+    One difference is deliberate. extra-speckle fitted every ring it was given,
     after dropping noisy ones itself; a ring here with fewer than
     ``min_points`` finite points (no photons, for instance) is left out of the
     fit and returns NaN, rather than being fitted to nothing.
@@ -1165,11 +1132,11 @@ def figure_g2_fit(
     Left, g2 as markers with the fit as lines (titled ``(fitted) run N``);
     middle, ``β`` against q with its fit error; right, ``Γ`` against q² with
     the ``Γ = a q²`` line and ``R_H`` in the legend. The model, the start values
-    and the dispersion fit are extra-speckle's (:func:`fit_g2`); it has no KWW
-    model (open task 10) and neither does this.
+    and the dispersion fit are extra-speckle's (:func:`fit_g2`), which has no
+    KWW model.
 
-    :raises ValueError: the fit failed. The old pipeline caught that and left
-        the column empty, so callers turn it into "no figure".
+    :raises ValueError: the fit failed. Callers show no figure, as extra-speckle
+        left its column empty.
     """
     g2 = g2 if g2 is not None else hits.g2(averaging)
     values, _ = _g2_series(g2)
@@ -1223,12 +1190,11 @@ def figure_saxs(
 ) -> Figure:
     """``XPCS SAXS overview`` (``saxs.plot``): I(q) per frame, log-log, jet by frame.
 
-    The ring edges are shaded as the old ROIs and the k̄ threshold is a
+    The ring bounds are shaded as extra-speckle's ROIs and the k̄ threshold is a
     dashed line, titled ``I(q) per pulseId``. With ``det`` (the photon store's
-    annulus) the curves are :func:`saxs_curves`, q-binned, but cover only the
-    annulus ``q = 0.02`` to ``0.09`` Å⁻¹ and not the detector's 0.008 to 0.105;
-    without it they are the seven ring means of :func:`saxs_rings`, which is all
-    the results file can give. The title says which.
+    annulus) the curves are :func:`saxs_curves`, q-binned but covering only the
+    annulus, not the whole detector; without it they are the ring means of
+    :func:`saxs_rings`, all the results file can give. The title says which.
     """
     saxs = saxs_rings(hits) if det is None else saxs_curves(det)
     fig = Figure()
@@ -1244,7 +1210,7 @@ def figure_saxs(
     return fig
 
 
-#: The figure of each old column, for callers that loop over them.
+#: The figure of each extra-speckle column, for callers that loop over them.
 FIGURES: dict[str, Callable[..., Figure]] = {
     "q_rings": figure_q_rings,
     "beamcenter": figure_beamcenter,

@@ -1,9 +1,9 @@
-"""Is a run's output already complete? A read-only check (open task 17b).
+"""A read-only check of whether a run's output is already complete.
 
-DAMNIT re-runs a pass on a finished run whenever a variable depending on it is
-requested (CLAUDE.md pitfall 26). Such a call must hand back what the file
-holds and write nothing — no operator, no masks, no provenance attribute — so
-that a reader of the file is never disturbed by someone else's request.
+DAMNIT re-runs a pass on a finished run whenever a variable that depends on it
+is requested. Such a call must return what the file holds and write nothing (no
+operator, no masks, no provenance attribute), so that a reader of the file is
+never disturbed by someone else's request.
 
 A frame table is complete when all of these hold:
 
@@ -17,15 +17,14 @@ A frame table is complete when all of these hold:
 * its stored operator equals the one this pass would build now, array by
   array.
 
-The last two are what make a pyFAI upgrade force a reprocess rather than a file
-half integrated by each version. The operator is compared by its arrays, not
-its sha256: the same build differs by one ULP in the solid angle between AVX2
-and AVX-512 nodes, and ``allcpu`` mixes both (S3, 2026-10-13), so a sha256
+The last two make a pyFAI upgrade force a reprocess instead of leaving a file
+half integrated by each version. The operator is compared array by array, not
+by its sha256. The same build differs by one ULP in the solid angle between
+AVX2 and AVX-512 nodes, and the ``allcpu`` partition mixes both, so a sha256
 match would refuse a valid file whenever DAMNIT landed on the other class.
 
-The pass-specific checks — the operator's layout, and the window sums for
-AGIPD — live beside each pass, in ``analysis.saxs.complete`` and
-``analysis.waxs.complete``.
+The pass-specific checks (the operator's layout, and the window sums for AGIPD)
+live in ``analysis.saxs.complete`` and ``analysis.waxs.complete``.
 """
 
 from __future__ import annotations

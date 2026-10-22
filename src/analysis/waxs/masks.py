@@ -1,20 +1,14 @@
-"""The static mask, and the per-frame union.
+"""The JUNGFRAU static mask.
 
-Much simpler than the AGIPD side, for two measured reasons:
-
-1. **No seam mask.** ``agipd_asic_seams()`` has no JUNGFRAU counterpart and
-   needs none: bit 22 ``NON_STANDARD_SIZE`` *is* set in ``data.mask`` here,
-   which is exactly what the seam mask exists to supply for AGIPD.
-2. **No per-cell base mask.** AGIPD needs one because its ``int16`` frames
-   cannot carry NaN, so the denominator has to be corrected sparsely per frame.
-   JUNGFRAU frames are ``float32``: the dynamic mask is carried as NaN straight
-   into pyFAI, which drops those pixels from the numerator *and* the
-   denominator exactly (see :mod:`analysis.waxs.operator`). There is nothing
-   left for a base mask to precompute.
+Unlike AGIPD there is no seam mask, because proc sets bit 22
+``NON_STANDARD_SIZE`` in ``data.mask`` for the wide edge pixels. There is no
+per-cell base mask either. JUNGFRAU frames are ``float32``, so the dynamic mask
+is carried as NaN into pyFAI, which drops those pixels from numerator and
+denominator alike (:mod:`analysis.waxs.operator`).
 
 So ``static_bad`` is the ``.edf`` file alone. It is a native pyFAI mask written
-from silx view, so it already carries pyFAI's polarity — non-zero =
-excluded — and is used as-is, with no inversion anywhere.
+from silx view, with pyFAI's polarity (non-zero = excluded), and is used with no
+inversion.
 """
 
 from __future__ import annotations
@@ -37,8 +31,8 @@ __all__ = [
 def load_static_mask(path: str | Path) -> np.ndarray:
     """Load a ``.edf`` static mask as a flat boolean array, non-zero = excluded.
 
-    :raises ValueError: unexpected shape, or a mask that excludes every pixel —
-        which would leave nothing to integrate and is always a mistake.
+    :raises ValueError: unexpected shape, or a mask that excludes every pixel,
+        which would leave nothing to integrate.
     :raises TypeError: a non-boolean, non-integer dtype, which would make the
         non-zero convention ambiguous.
     """

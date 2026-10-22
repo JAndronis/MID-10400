@@ -10,7 +10,7 @@ records the run. The buffer's figure goes to ``figures/buffer/``.
 
 Then one overview per condition goes to ``figures/overview/``: a grid with one panel per
 droplet, all on the same axes and the same t/t* colour scale, read from the droplets'
-``curves.nc``. Normalised (to the mean over q 0.80-0.95) and per flux*path versions.
+``curves.nc``, once normalised to the mean over q 0.80-0.95 and once per flux*path.
 Beside them, per condition, its droplets side by side at matched t/t*
 (``saxs_matched_tstar_<sample>_norm.png``, a panel per t/t*, a line per droplet), with
 the blocks they used in one JSON. The mesh droplets get figures of their own
@@ -21,14 +21,15 @@ The droplets are `analysis.droplets.DROPLETS` with ``figures`` set, the runs lef
 there. The mesh droplets (SSHEX fly scans, attenuator 0.1006) are run with the
 notebook's MESH_SCAN, so a mesh run's curves average only the trains that hit
 the droplet (`analysis.triage.classify.hits`, class "on"). Their figures carry caveats
-the static ones do not: a hit can cross the droplet off-centre while the scale assumes
-the full chord; the q_min rule (0.156 a_x) was measured on static droplets; and like
-s338-s400 they predate the r433 -> r443 stray-light change, while the buffer r464 is
-after it.
+the static ones do not. A hit can cross the droplet off-centre while the scale assumes
+the full chord. The q_min rule (0.156 a_x) comes from static droplets. Like s338-s400,
+the mesh droplets were measured before the stray-light pattern changed between r433
+and r443, and the buffer r464 after it.
 
 The notebook's plot style renders text with LaTeX, and the system TeX on the Maxwell
-nodes lacks ``type1cm.sty``: load a complete one first, or uncached labels fail. Run
-this script with the shared environment too (the overviews need xarray and matplotlib):
+nodes lacks ``type1cm.sty``, so load a complete one first or uncached labels fail. Run
+this script with the shared environment too, since the overviews need xarray and
+matplotlib:
 
     module load texlive/2022
     PY=/gpfs/exfel/exp/MID/202601/p010400/usr/Software/MID-10400/.venv/bin/python
@@ -73,9 +74,9 @@ SHARED_PYTHON = Path(
 )
 
 OUTPUTS = ("saxs_subtracted_norm.png", "saxs_subtracted.png", "curves.nc")
-# the V/V0 figure: the running median over this many trains (5 s at 10 Hz) is drawn over
-# the per-train volumes, whose fit jumps as a mesh scan moves the droplet; and its line
-# breaks where trains are further apart than this (runs follow each other ~75 s apart)
+# The V/V0 figure draws a running median over VOLUME_MEDIAN_TRAINS (5 s at 10 Hz) over
+# the per-train volumes, whose fit jumps as a mesh scan moves the droplet. Its line
+# breaks where consecutive trains are more than VOLUME_GAP_S apart, i.e. between runs.
 VOLUME_MEDIAN_TRAINS = 51
 VOLUME_GAP_S = 5.0
 # the common q grid of the mesh/static ratio, inside the droplet figures' q range
@@ -277,8 +278,10 @@ def write_blocks(name, record, **extra):
 
 
 def match_block(ds, target):
-    """The block of `ds` to show at t/t* = `target`: the nearest one not in
-    NEAR_ZERO_BLOCKS, if within MATCH_TOLERANCE. Returns (index or None, record)."""
+    """The block of `ds` to show at t/t* = `target`, or None.
+
+    It is the nearest block not in NEAR_ZERO_BLOCKS, if within MATCH_TOLERANCE.
+    Returns (index or None, record)."""
     import numpy as np
 
     t = ds.t_over_tstar.values

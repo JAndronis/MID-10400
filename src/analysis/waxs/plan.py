@@ -1,21 +1,13 @@
 """Trains, row offsets, blocks and run checks for one JUNGFRAU detector.
 
-The row model of :mod:`analysis.common.plan` carries over, with one thing that
-does not transfer from AGIPD and would be a silent off-by-sixteen if assumed:
-
-**``JUNGFRAU.frame_counts`` counts entries, not frames.** ``JUNGFRAU`` is a
-``MultimodDetectorBase``, whose ``frame_counts`` is the INDEX entry count — one
-per train — while each entry holds ``_frames_per_entry`` memory cells (16 here).
-``AGIPD1M.frame_counts`` counts frames directly. So a train's rows are the *lit*
-cells of its single entry, not its entry count.
-
-EXtra-data's reader assumes one entry per train throughout — ``buffer_shape`` is
-``(modules, trains) + entry_shape`` — so a train with two entries cannot be
-represented at all, and :func:`build_plan` refuses the run rather than reading
-it wrong.
-
-Nothing here imports DAMNIT, so this module can back a reader outside DAMNIT
-later.
+The row model of :mod:`analysis.common.plan` carries over from AGIPD with one
+difference. ``JUNGFRAU.frame_counts`` counts INDEX entries, one per train, and
+each entry holds ``_frames_per_entry`` memory cells, while
+``AGIPD1M.frame_counts`` counts frames. So a train's rows are the lit cells of
+its single entry. EXtra-data's reader shapes its buffer as
+``(modules, trains) + entry_shape``, so a train with two entries cannot be
+represented, and :func:`build_plan` refuses such a run. Nothing here imports
+DAMNIT.
 """
 
 from __future__ import annotations
@@ -45,9 +37,8 @@ class InconsistentEntries(RuntimeError):
 def open_detector(cfg: JungfrauWaxsConfig, dc: Any) -> Any:
     """The ``JUNGFRAU`` component for this detector.
 
-    ``detector_name`` is passed through rather than auto-detected:
-    ``JUNGFRAU._det_name_pat`` matches both of this experiment's detectors, so
-    with two in the run the auto-detection is ambiguous.
+    ``detector_name`` is passed through because ``JUNGFRAU._det_name_pat``
+    matches both of this experiment's detectors, so auto-detection is ambiguous.
     """
     from extra_data.components import JUNGFRAU
 
@@ -98,17 +89,15 @@ def build_plan(
 
     :param lit_cells: the memory cells to integrate, measured from the data by
         :class:`analysis.waxs.cells.CellAccumulator`. They set how many rows a
-        train owns, which is why the plan cannot be built before them. An empty
-        set is allowed and gives a plan of zero rows: a run that saw no beam is
-        not a broken run, and 43 of the proposal's are like that. Whether that
-        is worth integrating is :func:`analysis.waxs.run.run_jungfrau_waxs`'s
-        call, not this function's.
+        train owns, so the plan cannot be built before them. An empty set gives
+        a plan of zero rows, as for a run that saw no beam.
+        :func:`analysis.waxs.run.run_jungfrau_waxs` decides what to do with it.
     :param dc: an open ``DataCollection``. When ``None``, the proc run named by
         ``cfg`` is opened.
     :param control_dc: where :func:`run_checks` looks for the timeserver and
         the XGM. Defaults to the raw location when this function opened the run
         itself, and to ``dc`` otherwise, which lets a mock run carry both.
-    :param det: an already-open ``JUNGFRAU``; ``None`` opens one.
+    :param det: an already-open ``JUNGFRAU``. ``None`` opens one.
 
     :raises InconsistentEntries: a train holds other than one detector entry.
     """
@@ -141,13 +130,10 @@ def build_plan(
         train_id = int(raw_train_id)
         entries = detector_trains.get(train_id)
         if not entries:
-            # No rows of its own; the offset is where the next train starts, so
-            # the ledger stays monotonic. A train where no module wrote an
-            # entry is NO_FRAMES; one where some but too few did is
-            # MISSING_MODULES. With one module per detector (see
-            # :func:`open_detector`) only the first can happen here, but the
-            # distinction is kept so the ledger means the same thing as the
-            # AGIPD one.
+            # No rows of its own. The offset is where the next train starts, so
+            # the ledger stays monotonic. With one module per detector only
+            # NO_FRAMES can occur, but MISSING_MODULES is kept so the statuses
+            # mean what they mean in the AGIPD ledger.
             status = (
                 FrameStatus.NO_FRAMES
                 if modules_present.get(train_id, 0) == 0
@@ -183,8 +169,8 @@ def build_plan(
 def _modules_present(dc: Any, det: Any) -> dict[int, int]:
     """How many detector modules wrote at least one entry, per train.
 
-    ``det.frame_counts`` cannot answer this: ``JUNGFRAU`` has already discarded
-    every train below ``min_modules`` by the time it exists.
+    ``det.frame_counts`` cannot answer this, because ``JUNGFRAU`` has already
+    dropped every train below ``min_modules``.
     """
     import pandas as pd
 
@@ -211,17 +197,13 @@ def run_checks(
 ) -> dict[str, Any]:
     """Provenance flags for the run.
 
-    None of these select frames; each is recorded and a disagreement flagged.
-    Every check is best-effort: a missing source makes the check unavailable,
-    which is itself recorded, rather than failing the run before any data is
-    read.
+    None of these select frames. Each is recorded and a disagreement flagged.
+    A missing source records the check as unavailable and does not fail the
+    run.
 
-    The AGIPD quadrant-motor check has no counterpart here. The X-ray pulse
-    check does, but it means something different: the JUNGFRAU records 8 lit
-    cells where the machine delivers 155 pulses per train, so a difference is
-    the expected state of affairs and is recorded as two numbers rather than
-    flagged as a mismatch. Which 8 of the 155 pulses those cells sampled is
-    open and is why no pulse id is stored.
+    The JUNGFRAU records fewer lit cells than the machine delivers pulses per
+    train, so the pulse check records both numbers and flags no mismatch.
+    Which pulses the cells sampled is unresolved, so no pulse id is stored.
     """
     checks: dict[str, Any] = {
         "entries_per_train": sorted({int(c) for c in counts}),
@@ -264,10 +246,9 @@ def run_checks(
     def energy_check() -> dict[str, Any]:
         """The machine's nominal photon energy, against the configured one.
 
-        ``XGM.photon_energy_by_train`` returns **keV** already. No tolerance is
-        invented: the two are called equal only
-        within the float32 precision the XGM value carries, and any wider gap
-        is reported for a person to settle, because q scales with it.
+        ``XGM.photon_energy_by_train`` returns keV. The two agree only within
+        float32 precision, and any wider gap is logged for a person to settle,
+        because q scales with the energy.
         """
         from extra.components import XGM
 

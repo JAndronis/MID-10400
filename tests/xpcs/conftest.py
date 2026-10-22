@@ -87,7 +87,10 @@ def mock_run_factory(memoised_run_factory):
 
 @pytest.fixture(scope="session")
 def mock_run(mock_run_factory):
-    """``(MockRun, DataCollection)``: 12 frames a train, two awkward trains."""
+    """``(MockRun, DataCollection)``, 12 frames a train.
+
+    One train lacks a module's frames and one has no frames at all.
+    """
     return mock_run_factory(
         train_ids=TRAIN_IDS,
         frames_per_train=FRAMES,

@@ -1,4 +1,4 @@
-"""The worker, the output schema, the ledger and the reducers (W3)."""
+"""The worker, the output schema, the ledger and the reducers."""
 
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ def test_every_lit_frame_is_integrated(worker_ready):
 
 
 def test_identity_comes_from_the_reader(worker_ready):
-    """Train from train_id_coordinates, cell from data.memoryCell (§5 R5)."""
+    """Train from ``train_id_coordinates``, cell from ``data.memoryCell``."""
     lit = worker_ready.classification.lit
     for block in worker_ready.plan.blocks:
         result = worker.process_block(block)
@@ -63,7 +63,7 @@ def test_identity_comes_from_the_reader(worker_ready):
 def test_a_repeated_memory_cell_is_a_label_mismatch(
     cfg, mock_run_factory, operator, model
 ):
-    """Rows cannot be filled by label, and position is what pitfall 4 forbids."""
+    """A repeated cell id leaves rows unplaceable, and position is no substitute."""
     from analysis.waxs.plan import build_plan, open_detector
 
     run, dc = mock_run_factory(shuffled_cells_train=10001)
@@ -88,11 +88,11 @@ def test_a_repeated_memory_cell_is_a_label_mismatch(
 def test_an_extreme_pixel_costs_the_pixel_and_not_the_frame(
     cfg, mock_run_factory, operator, model
 ):
-    """§3 D6′, the r0480 fix: v1 failed the whole frame over one pixel.
+    """One out-of-range pixel is excluded and its frame still integrates.
 
-    On r0480/jf1 that was 473 frames of 126 230 good pixels each, lost over a
-    median of 3 — and lost in step with crystallisation, because the pixels were
-    NaCl Bragg spots from the evaporating droplet.
+    Failing the frame would discard every good pixel in it, and the pixels that
+    trip the check (salt Bragg spots from an evaporating droplet) appear in step
+    with crystallisation.
     """
     from analysis.waxs.plan import build_plan, open_detector
 
@@ -211,7 +211,7 @@ def test_a_wild_pixel_data_mask_already_removes_is_not_counted(
     """``n_extreme_pixels`` means "this check removed it", not "it was wild".
 
     A value ``data.mask`` already drops never reached the integrator, so
-    counting it would overstate what D6 cost.
+    counting it would overstate what the value check cost.
     """
     from analysis.waxs.plan import build_plan, open_detector
 
@@ -290,7 +290,7 @@ def test_the_schema_is_the_jungfrau_one(worker_ready, tmp_path):
 
 
 def test_there_are_no_nan_sentinels_anywhere(worker_ready, tmp_path):
-    """``asic_level`` may hold NaN — an ASIC with no level — but only then."""
+    """``asic_level`` may hold NaN for an ASIC with no level, and only then."""
     path = written(worker_ready, tmp_path)
     with h5py.File(path) as handle:
         for name in (
@@ -330,8 +330,8 @@ def test_the_file_counts_photons_and_says_so(worker_ready, tmp_path):
 def test_each_frames_zero_level_is_the_one_put_in(worker_ready, tmp_path):
     """End to end: the mock's per-train common mode and lit shift come back.
 
-    The frame's own level, not a dark cell's: lit cells sit higher (W7: 0.06 to
-    0.17 keV on r0423), so a dark-cell level would be the wrong one.
+    The level is the frame's own, not a dark cell's, because lit cells sit
+    higher than dark ones in the same train.
     """
     from waxs_mockrun import injected_level
 
@@ -487,13 +487,12 @@ def test_pooled_per_train_agrees_with_the_stored_sums(worker_ready, tmp_path):
 
 
 def test_pooling_really_does_cancel_per_frame_negatives(worker_ready, tmp_path):
-    """§3 D3's actual claim, forced rather than waited for.
+    """Pooling cancels per-frame negative variances in a bin.
 
-    "Store the variance unclamped, pooling fixes it" is a claim about
-    *cancellation*, and a test that only ever saw positive frames would pass
-    whether or not it were true. So half a train's frames are driven negative
-    in one bin and the rest positive by more — how noise around a small true
-    variance behaves — and the pooled sum has to survive it.
+    A test that only saw positive frames would pass whether or not pooling
+    cancels them. So half a train's frames are driven negative in one bin and
+    the rest positive by more, as noise around a small true variance behaves,
+    and the pooled sum has to survive it.
     """
     path = written(worker_ready, tmp_path)
     with h5py.File(path, "r+") as handle:

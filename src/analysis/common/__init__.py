@@ -1,8 +1,8 @@
 """Detector-agnostic pieces shared by the AGIPD SAXS and JUNGFRAU WAXS passes.
 
-Nothing here knows which detector it is serving. Anything that does — the
-geometry, the integration kernel, the mask sources, how many rows a train owns
-— belongs to ``analysis.saxs`` or ``analysis.waxs``.
+Nothing here knows which detector it is serving. Anything that does (the
+geometry, the integration kernel, the mask sources, how many rows a train owns)
+belongs to ``analysis.saxs`` or ``analysis.waxs``.
 """
 
 from __future__ import annotations

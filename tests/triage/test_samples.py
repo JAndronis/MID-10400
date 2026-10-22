@@ -10,9 +10,9 @@ from analysis.triage.samples import OVERRIDES, effective_sample, override_for
 @pytest.mark.parametrize(
     ("run", "label", "expected"),
     [
-        (289, "Silica NP", "ferritin50_peg6k"),  # user, 2026-10-01
+        (289, "Silica NP", "ferritin50_peg6k"),
         (303, "Silica NP", "ferritin50_peg6k"),
-        (308, "Ferritin_50_PEG6K_5p", "ferritin50"),  # r308-309 checked by the user
+        (308, "Ferritin_50_PEG6K_5p", "ferritin50"),
         (335, "Silica NP", "ferritin50"),
         (464, "Ferritin_50_PEG6K_5p", "peg6k_buffer"),
     ],

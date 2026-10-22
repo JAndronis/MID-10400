@@ -1,4 +1,4 @@
-"""Gather kernel and per-frame data checks (context file §6.2, §6.4)."""
+"""Gather kernel, base-mask correction and per-frame data checks."""
 
 from __future__ import annotations
 
@@ -97,7 +97,7 @@ def test_gather_on_a_hand_built_operator():
 
 
 def test_integrate_frame_on_a_hand_built_operator():
-    """End-to-end §6.4 arithmetic small enough to check by hand.
+    """The base-mask correction end to end, small enough to check by hand.
 
     Pixel 1 is bad in the cell but good in this frame (its Ω is added back);
     pixel 4 is good in the cell but bad in this frame (its Ω is subtracted).
@@ -117,8 +117,8 @@ def test_integrate_frame_on_a_hand_built_operator():
     )
     # The corrected denominator must equal one built from ``bad`` directly.
     # atol is not zero because bin 3 is fed only by the deliberately tiny
-    # negative coefficient, so the two summation orders differ there at 1e-16 —
-    # the same reason the self-test compares only bins with N > 0.
+    # negative coefficient, so the two summation orders differ there at 1e-16.
+    # The self-test compares only bins with N > 0 for the same reason.
     np.testing.assert_allclose(
         result.normalization, denominator(op, bad), rtol=1e-9, atol=1e-15
     )
@@ -154,11 +154,11 @@ def test_denominator_excludes_bad_pixels(op):
     )
 
 
-# ── data checks (context file §6.4, §8) ───────────────────────────────────────
+# ── data checks ───────────────────────────────────────────────────────────────
 def test_frame_data_status_accepts_integer_counts():
     assert frame_data_status(np.zeros(16, dtype=np.int16)) is FrameStatus.OK
     counts = np.zeros(16, dtype=np.int16)
-    counts[3] = 19  # CLAUDE.md: max < 20 per pixel per pulse
+    counts[3] = 19  # corrected AGIPD data stay below 20 photons per pixel per pulse
     assert frame_data_status(counts) is FrameStatus.OK
 
 
@@ -176,7 +176,7 @@ def test_frame_data_status_rejects_non_integer_dtype():
 
 
 def test_integrate_frame_raises_on_negative_counts(op):
-    """P1 acceptance: never a silent result."""
+    """A negative count raises instead of giving a silent result."""
     x = np.zeros(NPIX, dtype=np.int16)
     x[10] = -3
     bad = np.zeros(NPIX, dtype=bool)
@@ -185,7 +185,7 @@ def test_integrate_frame_raises_on_negative_counts(op):
 
 
 def test_integrate_frame_raises_on_non_integer_dtype(op):
-    """P1 acceptance: no silent dense fallback for float data."""
+    """Float data raise instead of falling back silently to a dense path."""
     x = np.zeros(NPIX, dtype=np.float32)
     bad = np.zeros(NPIX, dtype=bool)
     with pytest.raises(DataCheckFailed, match="integer"):

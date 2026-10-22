@@ -1,10 +1,10 @@
-"""Per-pixel window sums (context file §15; phase S1).
+"""Per-pixel window sums.
 
 The reference throughout is :func:`analysis.cache.detector_sums`, an independent
 read of the same proc files: every window the pass writes must equal it over the
 window's member trains, bit for bit. The awkward run carries a dropped train, a
 train short of modules and a zero-frame train, so windows are defined by train
-id and not by position (CLAUDE.md pitfall 4).
+id and not by position: a dropped train would shift every position after it.
 """
 
 from __future__ import annotations
@@ -201,7 +201,7 @@ def test_the_frame_table_does_not_depend_on_the_window_sums(
 def test_window_pooled_frame_table_equals_the_gather_over_the_window_sums(
     run_cfg, geom, mock_run_factory, tmp_path
 ):
-    """§15: Σ S = Σ c·counts, Σ N = Σ c·Ω·valid, Σ V = Σ c²·counts off the static mask.
+    """Σ S = Σ c·counts, Σ N = Σ c·Ω·valid, Σ V = Σ c²·counts off the static mask.
 
     This is what makes the window sums the geometry-independent record: the
     1D result of a window can be rebuilt from them under any operator.
@@ -310,10 +310,9 @@ def test_a_window_that_lost_trains_to_a_worker_error_is_rebuilt(
 
     Block 1 (trains 10002, 10003) fails once. With 3-train windows it holds a
     train of each window, so the rerun reads every block; with 1-train windows
-    only its own. Either way the rerun integrates block 1 alone — the others are
-    final in the frame table and are read for their windows only — and both
-    files come out whole. Until open task 17 the frame table kept its
-    WORKER_ERROR until the rows were reset by hand.
+    only its own. Either way the rerun integrates block 1 alone (the others are
+    final in the frame table and are read for their windows only), and both
+    files come out whole.
     """
     run, dc = mock_run_factory()
     real_process, real_integrate = worker.process_block, worker.integrate_frame
@@ -361,7 +360,7 @@ def test_a_window_that_lost_trains_to_a_worker_error_is_rebuilt(
 def test_resetting_a_failed_block_completes_frames_and_windows(
     run_cfg, geom, mock_run_factory, tmp_path, monkeypatch
 ):
-    """A plain rerun repairs both files; resetting the rows is no longer needed."""
+    """A plain rerun repairs both files, with no rows reset by hand."""
     run_dc = mock_run_factory()
     real = worker.process_block
     monkeypatch.setattr(
@@ -448,7 +447,7 @@ def test_a_killed_pool_leaves_windows_unwritten_and_a_rerun_completes_them(
 def test_a_complete_frame_table_gets_its_windows_without_reintegration(
     run_cfg, geom, mock_run_factory, reference, tmp_path, monkeypatch, h5_digest
 ):
-    """The case of every run integrated before the window sums existed."""
+    """The frame table was written with the window sums switched off."""
     run, dc = mock_run_factory()
     run_pass(run_cfg, geom, (run, dc), tmp_path, pixel_sum_trains=None)
     before = frame_table_digest(tmp_path / "out.h5", h5_digest)
@@ -720,4 +719,4 @@ def test_the_window_spec_is_anchored_at_the_first_train(mock_pipeline):
     with pytest.raises(ValueError, match="outside every window"):
         spec.index_of(10008)
     assert pickle.loads(pickle.dumps(spec)) == spec
-    assert isinstance(spec.__getstate__(), dict)  # by name: CLAUDE.md pitfall 20
+    assert isinstance(spec.__getstate__(), dict)  # keyed by name, not position

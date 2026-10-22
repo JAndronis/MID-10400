@@ -72,29 +72,29 @@ _PROPOSAL_ROOT = "/gpfs/exfel/exp/MID/202601/p010400"
 #: set here, unlike AGIPD, which is why no separate seam mask is needed.
 EXPECTED_BITS: frozenset[int] = frozenset({0, 1, 21, 22})
 
-#: The memory cells that carry photons in the r0379–r0500 science block: eight
-#: storage cells starting at 15, so the sequence wraps 15 → 0 → … → 6. Note it
-#: is ``{0…6, 15}`` and not ``{0…7}``, which is the *array position* set.
+#: The memory cells that carry photons in the main science block: eight storage
+#: cells starting at 15, so the sequence wraps 15, 0, 1, ..., 6. The set is
+#: ``{0..6, 15}``. ``{0..7}`` is the set of array positions.
 #:
-#: One of the proposal's four patterns, not *the* pattern — the pass measures the
-#: set per run and checks its shape. Pin it through
+#: Other runs use other patterns, so the pass measures the set per run and
+#: checks its shape. Pin this through
 #: :attr:`JungfrauWaxsConfig.expected_lit_cells` only to make a reprocess of that
-#: block refuse anything that has drifted.
+#: block refuse a run whose pattern differs.
 EXPECTED_LIT_CELLS: tuple[int, ...] = (0, 1, 2, 3, 4, 5, 6, 15)
 
 #: Readout noise in keV per detector, for runs that read all 16 storage cells
-#: and so have no dark cell to measure it from. The per-detector median over
-#: every run where the dark side is unambiguous. A measurement from the run's
-#: own dark cells always wins; :func:`analysis.waxs.run._error_model` decides.
+#: and so have no dark cell to measure it from. Each is the detector's median
+#: over the runs with an unambiguous dark cell. A measurement from the run's own
+#: dark cells takes precedence (:func:`analysis.waxs.run._error_model`).
 DEFAULT_READ_NOISE_KEV: dict[str, float] = {"jf1": 0.3440, "jf2": 0.3195}
 
-#: The shared operational set plus two fields that only *gate*:
+#: The shared operational set plus two fields that only gate.
 #: ``expected_lit_cells`` raises before the output file is opened and
 #: ``allow_data_check_failures`` after it is finished, so neither can change a
 #: value in ``/frames`` and pinning either does not invalidate existing files.
 #:
-#: ``lit_fraction_min`` and ``lit_gap_ratio`` are the opposite case and stay in
-#: the hash: they decide which cells are integrated, so which rows exist at all.
+#: ``lit_fraction_min`` and ``lit_gap_ratio`` stay in the hash because they
+#: decide which cells are integrated, and so which rows exist.
 WAXS_OPERATIONAL_FIELDS: frozenset[str] = OPERATIONAL_FIELDS | {
     "expected_lit_cells",
     "allow_data_check_failures",
@@ -160,37 +160,35 @@ class JungfrauWaxsConfig(PassConfigMembers):
     mask_bits: int = 0xFFFFFFFF
     expected_bits: frozenset[int] = EXPECTED_BITS
     # ── lit-cell selection ────────────────────────────────────────────────
-    #: Pins the lit set, refusing the run if the data disagree. ``None`` — the
-    #: default — measures it and checks only that its shape is a storage-cell
-    #: sequence, the check that holds for every run.
+    #: Pins the lit set, refusing the run if the data disagree. ``None`` measures
+    #: it and checks only that its shape is a storage-cell sequence.
     expected_lit_cells: tuple[int, ...] | None = None
     #: Half a photon: a pixel above this held at least one.
     lit_threshold_kev: float = 4.5
     #: Fraction of kept pixels above :attr:`lit_threshold_kev` for a cell to
-    #: count as lit. Sits in the empty band between the two populations, clear
-    #: of both by 8.5×; any value from 1e-4 to 1e-3 classifies identically.
+    #: count as lit. Sits in the empty band between the lit and dark
+    #: populations.
     lit_fraction_min: float = 4.805e-4
     #: Among the cells that clear the floor, a step larger than this splits them
     #: again, so a uniformly attenuated run still splits on the lit-to-dark step
-    #: rather than on the absolute level.
+    #: and not on the absolute level.
     lit_gap_ratio: float = 30.0
     cell_sample_trains: int = 8
-    # ── readout noise (a recorded diagnostic since photon counting) ────────
+    # ── readout noise (recorded, not used in the variance) ─────────────────
     #: ``None`` measures the readout noise from the dark cells of the sampled
-    #: trains; a float overrides it even when a measurement is available. It no
-    #: longer enters the variance, which is Poisson on the counts, but it is
-    #: stored, so it stays in :meth:`config_hash`.
+    #: trains. A float overrides it even when a measurement is available. The
+    #: variance is Poisson on the counts, but the noise is stored, so it stays
+    #: in :meth:`config_hash`.
     read_noise_kev: float | None = None
     #: Used only when the run reads every storage cell, leaving no dark cell to
     #: measure from. ``None`` is resolved from :data:`DEFAULT_READ_NOISE_KEV` in
     #: ``__post_init__``, so a constructed config never holds ``None`` here and
-    #: the number actually used is the one that enters :meth:`config_hash`.
+    #: the value used is the one that enters :meth:`config_hash`.
     read_noise_fallback_kev: float | None = None
     # ── photon counting (analysis.waxs.photons) ───────────────────────────
     #: The energy the counts are taken at. ``None`` is resolved to
-    #: :attr:`photon_energy_kev` in ``__post_init__``. Separate from it so that
-    #: the counting can follow CLAUDE.md open task 15 (9.04 against the XGM's
-    #: 9.000 keV, 0.3 % in counts) without moving the q axis, which the PONI
+    #: :attr:`photon_energy_kev` in ``__post_init__``. Separate from it so the
+    #: counting energy can change without moving the q axis, which the PONI
     #: wavelength ties to :attr:`photon_energy_kev`.
     count_energy_kev: float | None = None
     #: Which pixels feed each ASIC's zero level: ``"all_good"`` is every
@@ -199,7 +197,8 @@ class JungfrauWaxsConfig(PassConfigMembers):
     level_pixels: str = "all_good"
     #: The first estimate is the median of the values below this.
     level_cut_kev: float = 2.0
-    #: Then the mean of the values within ``±`` this, ~3 σ of the 0.30 keV noise.
+    #: Then the mean of the values within ``±`` this, about 3 sigma of the
+    #: readout noise.
     level_window_kev: float = 1.0
     level_iterations: int = 3
     #: Border pixels of each ASIC left out of its level (larger, noisier).
@@ -208,16 +207,15 @@ class JungfrauWaxsConfig(PassConfigMembers):
     level_min_pixels: int = 1000
     # ── data check ────────────────────────────────────────────────────────
     #: Values beyond ``±`` this are excluded pixel by pixel. Set far above the
-    #: kept-region maximum, in the empty band below the artifact population.
+    #: largest real value, in the empty band below the artifact population.
     max_abs_kev: float = 1.0e3
     # ── run, scheduling and output ────────────────────────────────────────
     min_modules: int = 1
     #: Whether ``DATA_CHECK_FAILED`` frames on their own let the run finish.
-    #: That status means a frame with **every** pixel excluded — a property of
-    #: the data, not a failure of the pass — so one pathological frame does not
-    #: take a bulk reprocess down. The count is logged at WARNING and recorded
-    #: in ``provenance/data_check``. ``WORKER_ERROR``, ``NOT_PROCESSED`` and
-    #: ``LABEL_MISMATCH`` still raise.
+    #: That status means a frame with every pixel excluded, a property of the
+    #: data, so one such frame does not stop a bulk reprocess. The count is
+    #: logged at WARNING and recorded in ``provenance/data_check``.
+    #: ``WORKER_ERROR``, ``NOT_PROCESSED`` and ``LABEL_MISMATCH`` still raise.
     allow_data_check_failures: bool = True
     trains_per_block: int = 8
     n_workers: int | None = None
@@ -231,8 +229,8 @@ class JungfrauWaxsConfig(PassConfigMembers):
             raise ValueError(
                 f"detector must be one of {DETECTORS}, got {self.detector!r}"
             )
-        # Filled here, not at use, so the source actually read enters
-        # config_hash and provenance: it is part of what identifies the result.
+        # Filled here, not at use, so the source read enters config_hash and
+        # provenance as part of what identifies the result.
         if self.detector_name is None:
             object.__setattr__(self, "detector_name", DETECTOR_NAMES[self.detector])
         if self.first_modno is None:
@@ -250,8 +248,7 @@ class JungfrauWaxsConfig(PassConfigMembers):
             raise ValueError(
                 f"photon_energy_kev must be positive, got {self.photon_energy_kev}"
             )
-        # Resolved here for the same reason as the noise fallback: the energy
-        # actually counted at must be the one in config_hash.
+        # Resolved here so the energy counted at is the one in config_hash.
         if self.count_energy_kev is None:
             object.__setattr__(self, "count_energy_kev", self.photon_energy_kev)
         # Imported here: photons imports this module for MODULE_SHAPE.
@@ -312,14 +309,15 @@ class JungfrauWaxsConfig(PassConfigMembers):
             )
 
     def __getstate__(self) -> dict[str, Any]:
-        """Pickle by field name, not by position — see :mod:`analysis.common.config`."""
+        """Pickle by field name (:func:`analysis.common.config.state_by_name`)."""
         return state_by_name(self)
 
     def __setstate__(self, state: Any) -> None:
-        """Unpickle by field name; defined here because a mixin would not bind.
+        """Unpickle by field name.
 
-        ``dataclasses`` installs its own positional pair unless ``__getstate__``
-        is in this class's own ``__dict__``.
+        Defined in this class body because ``dataclasses`` installs its own
+        positional pair unless ``__getstate__`` is in this class's own
+        ``__dict__``, so a mixin would not take effect.
         """
         restore_by_name(self, state)
 
@@ -329,13 +327,11 @@ class JungfrauWaxsConfig(PassConfigMembers):
         ``dataclasses.replace(cfg, detector="jf2")`` keeps whatever
         ``detector_name``, ``poni_file`` and ``static_mask_file`` were already
         set, so it would read jf2's frames through jf1's source name, geometry
-        and mask. Nothing downstream would raise — a wrong PONI still yields a
-        plausible-looking I(q), which is the same trap as the AGIPD beam centre (see
-        pitfall 15) in another guise — so it is caught here.
+        and mask. Nothing downstream would raise, since a wrong PONI still yields
+        a plausible-looking I(q), so it is caught here.
 
-        Only an unambiguous mix-up is refused: a field naming the *other*
-        detector and not this one. Deliberately pointing a run at an unrelated
-        path is still allowed.
+        Only an unambiguous mix-up is refused, a field naming the other
+        detector and not this one. A path naming neither detector is allowed.
         """
         others = [d for d in DETECTORS if d != self.detector]
         for other in others:

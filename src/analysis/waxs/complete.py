@@ -1,8 +1,8 @@
 """Whether one detector's JUNGFRAU output is complete.
 
-See :mod:`analysis.common.complete` for what complete means. A run with no lit
-cell writes no file at all, so it is never complete here; the pass measures its
-cells again — a few seconds — and returns ``None`` again, writing nothing.
+:mod:`analysis.common.complete` defines complete. A run with no lit cell writes
+no file, so it is never complete here. The pass measures its cells again, which
+takes seconds, and returns ``None`` again without writing anything.
 """
 
 from __future__ import annotations
@@ -22,10 +22,10 @@ from analysis.waxs.writer import JungfrauWaxsWriter
 __all__ = ["expected_operator", "is_complete", "operator_differences"]
 
 #: Relative tolerance on the q axis and on the solid angle, which the file
-#: stores as float32. Both are computed floats, which can differ by one ULP
-#: between node classes as AGIPD's solid angle does
-#: (:data:`analysis.saxs.complete.OMEGA_RTOL`); float32 rounding can turn that
-#: into one float32 ULP, 6e-8. The static mask is compared exactly.
+#: stores as float32. Both are computed floats that can differ by one ULP
+#: between node classes, as AGIPD's solid angle does
+#: (:data:`analysis.saxs.complete.OMEGA_RTOL`). Rounding to float32 can turn
+#: that into one float32 ULP, 6e-8. The static mask is compared exactly.
 RTOL = 1e-6
 
 #: Operators by run-neutral config hash, for this process.
@@ -37,11 +37,11 @@ def expected_operator(
 ) -> WaxsOperator:
     """The operator this pass would build for ``cfg`` now, on this node.
 
-    Built for real — 0.17 s on r0423 — and memoised per process with the
-    proposal and run zeroed, as for AGIPD
+    The operator is built for real and memoised per process under the config
+    hash with proposal and run zeroed, as for AGIPD
     (:func:`analysis.saxs.complete.expected_operator`).
 
-    :param poni_file: overrides ``cfg.poni_file``; not memoised.
+    :param poni_file: overrides ``cfg.poni_file``. Not memoised.
     """
     if poni_file is not None:
         return build_operator(cfg, poni_file)[0]

@@ -1,11 +1,11 @@
-"""The sample each run really holds (context/run-triage.md §3.2).
+"""The sample each run really holds.
 
 DAMNIT's ``sample`` column is myMdC's label and is stale for several runs. The
 corrections and the runs with a background role live in `OVERRIDES`, each with the
 source it was taken from. Labels the user confirmed are not repeated here: an
 override range is applied blindly, and a confirming range drawn too wide would
-relabel the runs inside it that hold something else (r382–385 and r389, silica, sit
-inside the ferritin block r336–408).
+relabel the runs inside it that hold something else (r382-385 and r389, silica, sit
+inside the ferritin block r336-408).
 """
 
 from __future__ import annotations
@@ -36,9 +36,9 @@ CANONICAL_LABELS: dict[str, str] = {
     "No Sample": "none",
     "Acqueous solution of ferritin and PEG": "ferritin_peg_commissioning",
 }
-#: Standards: the triage does not analyse them for content (§3.1).
+#: Standards. The triage does not analyse them for content.
 REFERENCE_SAMPLES = frozenset({"lab6", "air", "ludox", "silica_np"})
-#: Samples levitated as a droplet, so the droplet fit and the series apply (§4.2).
+#: Samples levitated as a droplet, so the droplet fit and the series apply.
 DROPLET_SAMPLES = frozenset(
     {
         "ferritin50",

@@ -3,8 +3,8 @@
 A droplet is a series of runs on one levitated drop, from injection to its end: its
 V0 is the first train of its first kept run and its t* comes from the D² fit over its
 kept runs (`analysis.cache.droplet_timeline`). The catalogue is the run triage's
-series (inventory of 2026-10-21, `scripts/run_triage.py`) with the runs left out and
-why. Its ids are the first run of the series, ``s<run>``.
+series (`scripts/run_triage.py`) with the runs left out and why. Its ids are the
+first run of the series, ``s<run>``.
 """
 
 from __future__ import annotations
@@ -163,9 +163,9 @@ REPRESENTATIVE = {
     (_NO_PEG, False): "s394",
 }
 
-#: SAXS blocks the t/t* matching passes over, (run, first trainId) -> why. Found
-#: 2026-10-08 as the only blocks in any curves.nc whose mean I over q 0.3-0.4 is
-#: under a tenth of the median of up to two blocks on each side.
+#: SAXS blocks the t/t* matching passes over, (run, first trainId) -> why. They are
+#: the only blocks in any curves.nc whose mean I over q 0.3-0.4 is under a tenth of
+#: the median of up to two blocks on each side.
 NEAR_ZERO_BLOCKS = {
     (357, 2637483940): "near zero: I(q 0.3-0.4) 0.8 % of its neighbours'",
     (477, 2637914817): "near zero: I(q 0.3-0.4) 1.3 % of its neighbours'",

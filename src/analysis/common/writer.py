@@ -60,7 +60,7 @@ GATING_PACKAGES: tuple[str, ...] = ("pyFAI",)
 
 #: Compares the operator stored in an open output file with the one a pass built
 #: now, returning one reason per difference. Each pass supplies its own, since
-#: only it knows its operator's layout — and which of its arrays are exact.
+#: only it knows its operator's layout and which of its arrays are exact.
 OperatorCheck = Callable[[h5py.File], list[str]]
 
 #: How to reprocess a file this pass refuses to resume into.
@@ -82,20 +82,20 @@ class OperatorMismatch(ConfigHashMismatch):
     would mix rows from two integrators, and finalising would then stamp the
     new version on all of them.
 
-    The operator is compared array by array, not by sha256: the same build
-    differs by one ULP in the solid angle between AVX2 and AVX-512 nodes, and
-    ``allcpu`` mixes both (S3, 2026-10-13).
+    The operator is compared array by array, not by sha256, because the same
+    build differs by one ULP in the solid angle between AVX2 and AVX-512 nodes,
+    and the ``allcpu`` partition mixes both.
     """
 
 
 class SchemaMismatch(RuntimeError):
     """An existing output file has a different frame table from this writer's.
 
-    A column added to a pass does not change ``config_hash`` — the hash covers
-    the config, not the layout — so without this check a file written before
-    the column would be reopened for resume and then fail on the first write,
-    part-processed. Derived from ``FRAME_VECTORS``/``FRAME_MATRICES`` rather
-    than from a version number, so it cannot fall behind the schema it guards.
+    A column added to a pass does not change ``config_hash``, which covers the
+    config and not the layout. Without this check a file written before the
+    column would be reopened for resume and then fail on the first write,
+    part-processed. The check is derived from ``FRAME_VECTORS``/``FRAME_MATRICES``
+    rather than from a version number, so it cannot fall behind the schema.
     """
 
 
@@ -160,7 +160,7 @@ class FrameTableWriter:
     #: Groups created empty at layout time for the pass to fill later.
     EXTRA_GROUPS: tuple[str, ...] = ()
     #: What ``signal`` counts, recorded as ``provenance.attrs["units"]`` when set.
-    #: A file whose stored value differs — or that has none — is refused rather
+    #: A file whose stored value differs, or that has none, is refused rather
     #: than resumed, so rows of two units never share a file.
     UNITS: str | None = None
 
@@ -188,7 +188,6 @@ class FrameTableWriter:
         self._cfg = cfg
         self._plan = plan
 
-    # ── lifecycle ────────────────────────────────────────────────────────────
     @classmethod
     def open_or_create(
         cls,
@@ -371,7 +370,6 @@ class FrameTableWriter:
     def __exit__(self, *exc: object) -> None:
         self.close()
 
-    # ── resume ───────────────────────────────────────────────────────────────
     def block_complete(self, block: Block) -> bool:
         """A block is complete when none of its frames is :data:`UNFINISHED`.
 
@@ -385,14 +383,12 @@ class FrameTableWriter:
         status = self._f["frames/status"][rows[0] : rows[-1] + 1]
         return not bool(np.isin(status, [int(code) for code in UNFINISHED]).any())
 
-    # ── writing ──────────────────────────────────────────────────────────────
     def write_block(self, block: Block, result: Any) -> None:
         """Validate the block's labels, then store its rows.
 
-        :raises ValueError: the result's shape does not match the block. Label
-            disagreements are not an error — they are recorded as
-            ``LABEL_MISMATCH`` by the worker and stored as such — but a result
-            of the wrong length is a programming fault.
+        :raises ValueError: the result's shape does not match the block, which
+            is a programming fault. A label disagreement is not an error. It is
+            stored as ``LABEL_MISMATCH``.
         """
         rows = block.rows()
         if result.n_frames != rows.size:
@@ -479,7 +475,6 @@ class FrameTableWriter:
         self._f["frames/status"][:] = current
         self._f.flush()
 
-    # ── finishing ────────────────────────────────────────────────────────────
     def finalise(self, provenance: dict[str, Any]) -> None:
         group = self._f["provenance"]
         for key, value in provenance.items():
@@ -490,7 +485,6 @@ class FrameTableWriter:
             )
         self._f.flush()
 
-    # ── inspection ───────────────────────────────────────────────────────────
     def status_summary(self) -> dict[str, int]:
         status = self._f["frames/status"][:]
         return {
@@ -503,17 +497,16 @@ class FrameTableWriter:
         return bool((self._f["frames/status"][:] != FrameStatus.OK).any())
 
     def pooled_per_train(self) -> Any:
-        """Per-train pooled ``I(q)`` — see :func:`pooled_per_train`."""
+        """Per-train pooled ``I(q)``, as :func:`pooled_per_train` computes it."""
         return pooled_per_train(self._f)
 
 
 def version_changes(stored: str | None) -> list[str]:
     """How the :data:`GATING_PACKAGES` installed now differ from a record.
 
-    :param stored: a ``package_versions`` provenance attribute, JSON; ``None``
-        for a file written before it was recorded at creation, which cannot be
-        checked and so reports nothing.
-    :returns: one ``"pyFAI 2026.5.0 -> 2026.9.0"`` entry per difference.
+    :param stored: a ``package_versions`` provenance attribute, JSON. A file
+        without one cannot be checked and reports nothing.
+    :returns: one ``"<package> <stored> -> <installed>"`` entry per difference.
     """
     if not stored:
         return []
@@ -526,9 +519,8 @@ def version_changes(stored: str | None) -> list[str]:
     ]
 
 
-# ── reducers ──────────────────────────────────────────────────────────────────
-# These take the output file rather than a live writer, so the same code serves
-# the run that produced it and any post hoc analysis of it months later. They
+# The reducers below take the output file rather than a live writer, so the same
+# code serves the run that produced it and any later analysis of it. They
 # read the ``/trains`` table for the row-to-train map: ``frames/trainId`` is
 # only filled for blocks that were actually written, so a run with an
 # unprocessed block has rows carrying trainId 0.
@@ -664,8 +656,8 @@ def per_label(
         AGIPD grids.
     :param carry_attrs: provenance attributes copied onto the result, for
         things a DAMNIT user needs on the object rather than only in the file.
-    :returns: the grid, with ``n_frames`` as a non-dimension coordinate — which
-        keeps it a DataArray, rendered by DAMNIT as its shape rather than as a
+    :returns: the grid, with ``n_frames`` as a non-dimension coordinate. That
+        keeps it a DataArray, which DAMNIT renders as its shape rather than as a
         total size.
     """
     import xarray as xr

@@ -1,4 +1,4 @@
-"""The figure of one run's hit recognition (run-triage §4.4).
+"""The figure of one run's hit recognition.
 
 Takes the dict `analysis.triage.classify.hits` returns. A mesh run carries the
 overlap fraction f per train (the share of a full hit's droplet signal) and gets

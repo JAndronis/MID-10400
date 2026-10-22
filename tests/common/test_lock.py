@@ -1,4 +1,4 @@
-"""The output lock: one writer per file, stale locks taken over (open task 17a).
+"""The output lock: one writer per file, stale locks taken over.
 
 Slurm is never called: ``slurm_job_state`` is replaced, and its own parsing is
 tested against recorded ``squeue`` output, including the exit status 1 that
@@ -202,7 +202,7 @@ INVALID = "slurm_load_jobs error: Invalid job id specified\n"
     ("returncode", "stdout", "stderr", "expected"),
     [
         # --clusters=all: the job's own cluster lists it, the others complain
-        # and squeue exits 1 regardless (Maxwell, 2026-10-13).
+        # and squeue exits 1 regardless.
         (1, "25284145|RUNNING\n", INVALID * 2, "RUNNING"),
         (0, "25284145|PENDING\n", "", "PENDING"),
         # An array task is shown as <array>_<task>, not by its own job id.
@@ -260,7 +260,7 @@ def test_a_lock_from_another_version_is_judged_on_its_holder(tmp_path, job_state
 def test_a_requeued_job_takes_over_the_lock_its_first_attempt_left(
     tmp_path, job_state, monkeypatch
 ):
-    """allcpu preempts and requeues under the same job id (S4, 2026-10-14).
+    """allcpu preempts and requeues under the same job id.
 
     Asking Slurm about its own id would say RUNNING, and the first attempt ran
     on another node, so only the restart count can say the lock is stale.

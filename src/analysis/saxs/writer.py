@@ -1,8 +1,8 @@
 """Output file, ledger and resume.
 
-The AGIPD schema and the two AGIPD-specific stores. Everything detector-
-agnostic — the layout, the ledger, resume, the label checks, ``mark`` and
-``pooled_per_train`` — is :class:`analysis.common.writer.FrameTableWriter`.
+The AGIPD schema and the two AGIPD-specific stores. Everything
+detector-agnostic (the layout, the ledger, resume, the label checks, ``mark``
+and ``pooled_per_train``) is :class:`analysis.common.writer.FrameTableWriter`.
 
 There are no NaN sentinels anywhere in the file. A frame that was not
 integrated carries a status code and zeros; ``status`` is what
@@ -90,7 +90,7 @@ class AgipdSaxsWriter(FrameTableWriter):
         group.attrs["unexpected_bits"] = int(masks.unexpected_bits)
 
     def per_pulse(self) -> Any:
-        """Per-frame ``I(q)`` on a (train, pulse) grid — see :func:`per_pulse`."""
+        """Per-frame ``I(q)`` on a (train, pulse) grid, as :func:`per_pulse`."""
         return per_pulse(self._f)
 
 
@@ -101,7 +101,7 @@ def per_pulse(source: Any, *, dtype: Any = np.float32, chunk_rows: int = 20_000)
     :param dtype: storage for the intensity grid.
     :param chunk_rows: rows read per pass, bounding peak memory on this grid,
         which is ~0.9 GB as f4 for a 3000-train, 155-pulse run at ``npt`` 500.
-    :returns: the grid — see :func:`analysis.common.writer.per_label`.
+    :returns: the grid, as :func:`analysis.common.writer.per_label` builds it.
     """
     return per_label(
         source,

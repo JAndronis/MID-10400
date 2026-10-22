@@ -20,7 +20,7 @@ from analysis.waxs.config import (
 
 
 def test_the_output_file_is_per_detector(config_for_detector):
-    """§3 D2: two detectors, two files, combined only at the plot."""
+    """Each detector writes its own file, and the two meet only at the plot."""
     jf1 = config_for_detector("jf1")
     jf2 = config_for_detector("jf2")
     assert jf1.output_file.name == "jungfrau_waxs_jf1.h5"
@@ -38,22 +38,22 @@ def test_config_for_fills_the_per_detector_paths():
 
 
 def test_the_defaults_are_the_measured_ones():
-    """These came from r0423 and belong in one place (CLAUDE.md rule 2)."""
+    """The measured defaults, pinned so a change to one is deliberate."""
     assert EXPECTED_BITS == frozenset({0, 1, 21, 22})
     assert EXPECTED_LIT_CELLS == (0, 1, 2, 3, 4, 5, 6, 15)
     cfg = JungfrauWaxsConfig(proposal=10400, run=423, detector="jf1")
     assert cfg.photon_energy_kev == 9.04
     assert cfg.method == ("full", "csc", "cython")
     assert cfg.read_noise_kev is None  # measured per run, not hardcoded
-    # The lit set is measured per run too: the proposal used four readout
-    # patterns between r0001 and r0500, so EXPECTED_LIT_CELLS is the
-    # science-block expectation a reprocess may pin, never the default.
+    # The lit set is measured per run too, because the proposal used several
+    # readout patterns. EXPECTED_LIT_CELLS is the science-block pattern a
+    # reprocess may pin, never the default.
     assert cfg.expected_lit_cells is None
-    # The geometric centre of the one empty band in 16 x 746 measured
-    # fractions, 5.654e-05 -> 4.083e-03. See analysis.waxs.cells.
+    # The geometric centre of the empty band between the measured dark and lit
+    # cell fractions, 5.654e-05 to 4.083e-03.
     assert cfg.lit_fraction_min == pytest.approx(4.805e-4)
-    # Only for runs that read all 16 cells and so have no dark one: the median
-    # over the 159 (run, detector) results per detector where it is measurable.
+    # Only for runs that read all 16 cells and so have no dark one. Each value
+    # is that detector's median over the runs where it could be measured.
     assert cfg.read_noise_fallback_kev == pytest.approx(DEFAULT_READ_NOISE_KEV["jf1"])
     assert DEFAULT_READ_NOISE_KEV == {"jf1": 0.3440, "jf2": 0.3195}
 
@@ -114,7 +114,6 @@ def test_the_hash_ignores_the_pinned_lit_cells(cfg):
 
     ``lit_fraction_min`` and ``lit_gap_ratio`` above are the opposite case and
     stay in: they decide which cells are integrated, and so which rows exist.
-    Full reasoning in :mod:`analysis.common.config` and CLAUDE.md pitfall 12.
     """
     pinned = dataclasses.replace(cfg, expected_lit_cells=EXPECTED_LIT_CELLS)
     assert pinned.config_hash() == cfg.config_hash()
@@ -134,12 +133,12 @@ def test_the_hash_moves_when_an_input_file_changes(cfg, tmp_path):
 
 
 def test_workers_default_to_physical_cores(cfg):
-    """CLAUDE.md pitfall 10: never default to logical CPUs."""
+    """The default counts physical cores, never logical CPUs."""
     assert dataclasses.replace(cfg, n_workers=7).workers == 7
     assert dataclasses.replace(cfg, n_workers=None).workers >= 1
 
 
-# ── the source names, from lsxfel on r0423 (§6 O1) ───────────────────────────
+# ── the source names, as lsxfel reports them ─────────────────────────────────
 def test_the_detector_names_are_the_ones_lsxfel_reports():
     from analysis.waxs.config import DETECTOR_MODNOS, DETECTOR_NAMES
 
@@ -159,7 +158,7 @@ def test_the_filled_source_name_enters_the_hash():
 
 
 def test_swapping_only_the_detector_is_refused():
-    """It would keep the other detector's name, PONI and mask (pitfall 15)."""
+    """It would keep the other detector's name, PONI and mask."""
     jf1 = config_for(10400, 423, "jf1")
     with pytest.raises(ValueError, match="belongs to 'jf1'"):
         dataclasses.replace(jf1, detector="jf2")

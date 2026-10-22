@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""S3 audit of the per-pixel window sums (context file §15.5) over every run.
+"""Audit the AGIPD per-pixel window sums of every run.
 
 For each run with AGIPD proc data, classifies its window-sums file and checks it
 against the run's frame table, from the two files alone:
@@ -15,9 +15,9 @@ against the run's frame table, from the two files alone:
                  nothing reads a file still being written
     no_agipd     no CORR-*-AGIPD*.h5 in the run's proc directory
 
-``missing`` and ``incomplete`` are what ``pixel_sums_backfill.py`` takes.
-``mismatch`` is for a person to look at. Writes its verdict as JSON beside
-itself (CLAUDE.md working rule 4). Read-only; runs on a login node.
+``missing`` and ``incomplete`` are the runs ``analysis.saxs.run.run_pixel_sums``
+must backfill. ``mismatch`` is for a person to look at. Writes its verdict as
+JSON beside itself. Read-only; runs on a login node.
 
     python scripts/pixel_sums_audit.py
     python scripts/pixel_sums_audit.py --runs 17 423 426

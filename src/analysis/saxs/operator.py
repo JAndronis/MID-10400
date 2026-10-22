@@ -72,9 +72,10 @@ def operator_sha256(
 ) -> str:
     """sha256 over the operator arrays and the geometry scalars that set them.
 
-    Stable across rebuilds of the same geometry; any change to the geometry,
-    the distance, the wavelength, the beam centre, ``npt`` or the method
-    changes it.
+    Any change to the geometry, the distance, the wavelength, the beam centre,
+    ``npt`` or the method changes it. So can the node's instruction set, which
+    moves ``omega`` by an ULP on some pixels, so never compare operators built
+    on different nodes by this hash.
     """
     header = json.dumps(
         {
@@ -117,11 +118,11 @@ def build_operator(
 
     ``(px, py)``
         The corner array is replaced by ``geom.to_distortion_array()`` and the
-        centre installed with ``setFit2D``. Both steps are required and belong
-        together: the two corner arrays have different origins — the distortion
-        array's is the corner of the assembled bounding box, ``to_pyfai_detector``'s
-        is the geometry origin — so a ``setFit2D`` on the unreplaced array would
-        place the beam somewhere neither convention means. This is the
+        centre installed with ``setFit2D``. Both steps are required. The two
+        corner arrays have different origins (the distortion array's is the
+        corner of the assembled bounding box, ``to_pyfai_detector``'s is the
+        geometry origin), so a ``setFit2D`` on the unreplaced array would place
+        the beam somewhere neither convention means. This is the
         construction ``extra_speckle.setup.configuration.ConfigSAXS`` uses, and
         the one ``cfg.beam_center`` was derived against.
 
@@ -271,8 +272,7 @@ def load_operator(path: str | Path) -> SparseOperator:
         method=(meta["method"][0], meta["method"][1], meta["method"][2]),
         sdd_m=float(meta["sdd_m"]),
         wavelength_m=float(meta["wavelength_m"]),
-        # .get, because an operator written before the beam centre existed has
-        # no such key and is a PONI = 0 operator by construction.
+        # An archive without a beam_center key holds a PONI = 0 operator.
         beam_center=(
             (float(stored[0]), float(stored[1]))
             if (stored := meta.get("beam_center"))

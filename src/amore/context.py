@@ -194,41 +194,38 @@ def droplet_fit(
         return None
 
 
-# ── Analysis columns, one Group per technique or diagnostic ──────────────────────
-# A Group renames its variables "<group>.<var>" (agipd.saxs, jungfrau.jf1, ...) and
+# Analysis columns, one Group per technique or diagnostic.
+# A Group names its variables "<group>.<var>" (agipd.saxs, jungfrau.jf1, ...) and
 # titles them "<group title> <var title>", so a title match such as
-# `damnit reprocess --match "frames used"` still finds them. Dependencies inside a
-# group are "self#<var>", across groups "var#<group>.<var>". The names are read by
-# name elsewhere: `analysis.damnit_names` is the one table of them.
+# `damnit reprocess --match "frames used"` finds them. Dependencies inside a
+# group are "self#<var>", across groups "var#<group>.<var>". Code elsewhere reads
+# these names from one table, `analysis.damnit_names`.
 #
-# Every wrapper is thin on purpose: DAMNIT execs this file into a dict, so a
+# Every wrapper is an import plus a call. DAMNIT execs this file into a dict, so a
 # function defined here cannot be pickled to the workers a pass spawns, and the
-# physics belongs under `analysis` where it is tested.
+# physics belongs under `analysis`, where it is tested.
 
 
 @Group(tags=["AGIPD", "SAXS"])
 class Agipd:
-    """AGIPD SAXS: one read of proc (frame table, window sums, photon histograms).
+    """AGIPD SAXS from one read of proc (frame table, window sums, photon histograms).
 
-    One variable reads AGIPD proc, once, and writes three files: the frame table
+    Only `preprocessing` reads AGIPD proc. It writes three files: the frame table
     (scratch/agipd_saxs/r####/agipd_saxs.h5), the per-pixel window sums and the
     per-frame photon statistics (usr/cached_files/agipd_pixel_sums, ..._photon_stats).
-    Every other AGIPD column reads one of those files, so the table shows which
-    variable computes and which only presents (user, 2026-10-14). A complete run
-    is answered from its files without writing (CLAUDE.md pitfall 26).
+    Every other AGIPD column reads one of those files. A complete run is answered
+    from its files without writing, so a relaunched job cannot truncate them.
 
-    `saxs` holds I(q) in nm^-1, undivided. Runs processed before this pass
-    existed hold A^-1 divided by I0, so clear the column for them rather than
-    plotting across the boundary.
+    `saxs` holds I(q) in nm^-1, not divided by the XGM.
     """
 
     @Variable("preprocessing", data="proc", cluster=True, tags=["offline"])
     def preprocessing(self, run, proposal: "meta#proposal", run_no: "meta#run_number"):
         """The run's one read of AGIPD proc: frame table, window sums, photon stats.
 
-        `run` is unused: the pass opens proc for the frames and raw for its own
-        run checks. The cell is a status per product, green when all are
-        complete and OK; a failure is a red cell, and each reader then says what
+        `run` is unused because the pass opens proc for the frames and raw for
+        its own run checks. The cell is a status per product, green when all are
+        complete and OK. A failure is a red cell, and each reader then says what
         its file lacks.
         """
         from analysis.saxs import damnit
@@ -261,11 +258,10 @@ class Agipd:
     def frames_used(self, run, proposal: "meta#proposal", run_no: "meta#run_number"):
         """OK frames over all rows of the frame table, coloured by status.
 
-        There is deliberately no var# dependency on the pass: asking for this
-        never relaunches the cluster job (CLAUDE.md pitfall 26). The price is
-        that the cell shows the file as it was when it ran, so refresh after a
-        reprocess with `damnit reprocess --match "frames used"` (--match
-        compares titles).
+        There is no var# dependency on the pass, so asking for this never
+        relaunches the cluster job. The cell therefore shows the file as it was
+        when the cell ran. Refresh it after a reprocess with
+        `damnit reprocess --match "frames used"` (--match compares titles).
 
         Green: all OK. Red: a WORKER_ERROR or LABEL_MISMATCH, or an unreadable
         file. Amber: anything else, e.g. an incomplete run or a file still being
@@ -301,7 +297,7 @@ agipd = Agipd(title="AGIPD", sep=" ")
 
 @Group(tags=["JUNGFRAU", "WAXS"])
 class Jungfrau:
-    """JUNGFRAU WAXS (analysis.waxs; context/jungfrau-waxs-integrator).
+    """JUNGFRAU WAXS from analysis.waxs.
 
     One variable runs the pass for both detectors, one after the other: the two
     JUNGFRAU-500Ks have different geometries, different static masks and
@@ -329,9 +325,9 @@ class Jungfrau:
     ):
         """I(q) per (trainId, cellId) for JUNGFRAU 1, read from its file.
 
-        There is no pulse axis: JUNGFRAU's reader has no pulse ids, and which of
-        a train's X-ray pulses each memory cell sampled is unresolved, so the
-        cell id is stored and no pulse id is invented.
+        There is no pulse axis. JUNGFRAU's reader has no pulse ids, and which of
+        a train's X-ray pulses each memory cell sampled is unknown, so the cell
+        id is stored and no pulse id is invented.
         """
         from analysis.waxs import damnit
 
@@ -364,8 +360,8 @@ class Jungfrau:
         chi-squared of the residual. That chi-squared is a cross-check on the
         two PONIs only when the overlap carries a feature: on a run with no
         Bragg peaks a q error is absorbed by the factor instead of showing up
-        here. Either detector may be missing (a dark run): then there is
-        nothing to combine, and the cell is empty.
+        here. Either detector may be missing (a dark run), and then the cell is
+        empty.
         """
         from analysis.waxs import damnit
 
@@ -395,18 +391,17 @@ jungfrau = Jungfrau(title="JUNGFRAU", sep=" ")
 
 @Group(tags=["XPCS"])
 class Xpcs:
-    """Hit-train XPCS (analysis.xpcs; context/xpcs-hits.md), the only XPCS pass.
+    """Hit-train XPCS from analysis.xpcs.
 
-    It replaced the old extra-speckle pipeline columns, whose figures
-    `analysis.xpcs.figures` reproduces from the hit store. One variable reads
-    proc, once more than the AGIPD pass: the hit rule needs this run's whole
-    agipd.saxs (and the flux), so the XPCS pass cannot share the first read. It
+    `preprocessing` reads AGIPD proc a second time, after the AGIPD pass,
+    because the hit rule needs this run's whole agipd.saxs and the flux. It
     extracts the hit trains into usr/cached_files/agipd_ring_photons (which
     outlives proc) and writes their exact sums to usr/cached_files/xpcs_hits.
-    Every other column reads that file. The hits come from DAMNIT's values in
-    memory, because inside the cluster job this run's agipd.saxs is not in the
-    per-run file until the job ends. A complete run is answered from its files
-    without writing (CLAUDE.md pitfall 26).
+    Every other column reads those files, including the old extra-speckle
+    figures, which `analysis.xpcs.figures` rebuilds from the hit store. The hits
+    come from DAMNIT's values in memory, because inside the cluster job this
+    run's agipd.saxs is not in the per-run file until the job ends. A complete
+    run is answered from its files without writing.
     """
 
     @Variable("preprocessing", data="proc", cluster=True, tags=["offline"])
@@ -420,12 +415,12 @@ class Xpcs:
         run_no: "meta#run_number",
         hits: "var#hits.summary" = None,
     ):
-        """Extract the droplet-hit trains and write their sums; a status, not a result.
+        """Extract the droplet-hit trains and write their sums. The cell is a status.
 
         Green when every hit is usable, amber when some are final non-OK, red
         when the pass failed, grey when the run has no hit. `run` is unused.
-        `hits` is only there for the order: the hit rule runs, and its summary
-        cell exists, before this pass (it finds the same hits again).
+        `hits` only orders the jobs, so the hit summary cell exists before this
+        pass, which finds the same hits again.
         """
         from analysis.xpcs import damnit
 
@@ -442,8 +437,8 @@ class Xpcs:
     ):
         """Pooled g2, baseline and c2 per ring with jackknife errors, from the file.
 
-        `rep` is DAMNIT's rep rate [MHz]: a pulse pattern that implies another
-        rate refuses to make a lag axis.
+        `rep` is DAMNIT's rep rate [MHz]. A pulse pattern that implies another
+        rate raises instead of making a lag axis.
         """
         from analysis.xpcs import damnit
 
@@ -641,7 +636,7 @@ class Xpcs:
         """Hits used over all hits of the XPCS results file, coloured by status.
 
         Like the other frames-used cells there is no var# on the pass, so asking
-        for it cannot relaunch the cluster job; refresh it after a reprocess
+        for it cannot relaunch the cluster job. Refresh it after a reprocess
         with `damnit reprocess --match "frames used"`. Grey: the run has no hit.
         Skipped when the pass has not written the run.
         """
@@ -663,7 +658,7 @@ class Xpcs:
     ):
         """k̄ and single-frame contrast per XPCS ROI and ring, over the droplet hits.
 
-        Read from agipd.preprocessing's photon histograms (context/xpcs-quality.md).
+        Read from agipd.preprocessing's photon histograms.
         The hits come from DAMNIT's values in memory, because inside the cluster
         job this run's agipd.saxs is not in the per-run file until the job ends.
         """
@@ -683,10 +678,9 @@ class Xpcs:
     def score(self, run, proposal: "meta#proposal", run_no: "meta#run_number"):
         """Hits, ROIs at k̄ ≥ 3e-3, best 30 s SNR with the fixed contrast.
 
-        The XPCS keep criterion in one cell (context/run-triage.md §4.6), read
-        from the hit store without a var# dependency on the XPCS variables, so
-        it shows the run as of its last processing: refresh with
-        `damnit reprocess --match "XPCS score"`.
+        The XPCS keep criterion in one cell, read from the hit store without a
+        var# dependency on the XPCS variables. It shows the run as of the cell's
+        last run, so refresh it with `damnit reprocess --match "XPCS score"`.
         """
         from analysis.diagnostics import damnit
 
@@ -698,11 +692,11 @@ xpcs = Xpcs(title="XPCS", sep=" ")
 
 @Group(tags=["Droplet", "diagnostics"])
 class Hits:
-    """Droplet-hit recognition (analysis.triage.classify; context/run-triage.md §4.4).
+    """Droplet-hit recognition from analysis.triage.classify.
 
     What the hit rule decided for the run, so a surprising XPCS result can be
-    traced to its hits. Both read DAMNIT's values in memory, like the XPCS pass:
-    inside a job this run's agipd.saxs is not in the per-run file yet.
+    traced to its hits. Like the XPCS pass, both read DAMNIT's values in memory,
+    because inside a job this run's agipd.saxs is not in the per-run file yet.
     """
 
     @Variable("summary", tags=["diagnostics"])
@@ -734,8 +728,8 @@ class Hits:
     ):
         """Mesh scan map with the droplet's geometric approximation, f against time.
 
-        Raw variable: the hexapod positions are a raw source. Static runs get
-        the class timeline only.
+        A raw variable, because the hexapod positions are a raw source. Static
+        runs get the class timeline only.
         """
         from analysis.triage import damnit
 
@@ -749,19 +743,20 @@ hits = Hits(title="Hits", sep=" ")
 
 @Group(tags=["Droplet", "diagnostics"])
 class Camera:
-    """The droplet camera (analysis.camera; context/diagnostics.md §6).
+    """The droplet camera, from analysis.camera.
 
     CAM5's images go to tape with raw, so each run keeps a labelled video in
-    usr/cached_files/droplet_videos/. Both are raw variables: the camera is a
-    raw source.
+    usr/cached_files/droplet_videos/. Both are raw variables, because the camera
+    is a raw source.
     """
 
     @Variable("video", cluster=True, tags=["diagnostics"])
     def video(self, run, run_no: "meta#run_number"):
         """Every CAM5 image as r{run:04d}_cam5.mp4, 3× real time, labelled per frame.
 
-        The cell holds the path and "N frames, G gaps"; N is counted by decoding
-        the written file and must equal the number of trains with an image.
+        The cell holds the path and "N frames, G gaps". N comes from decoding the
+        written file, and a count that differs from the number of trains with an
+        image raises.
         """
         from analysis.diagnostics import damnit
 

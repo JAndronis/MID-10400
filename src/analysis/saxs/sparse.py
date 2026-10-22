@@ -1,12 +1,11 @@
 """Gather/bincount kernels and the pure per-frame integration.
 
-Kept here rather than in ``worker.py`` so that the per-frame computation stays
-a pure function with no I/O and no EXtra-data import, which is what lets the
-self-test and the unit tests reach it without a run. ``worker.py`` is the
-read-and-loop wrapper around it.
+The per-frame computation has no I/O and no EXtra-data import, so the self-test
+and the unit tests reach it without a run. ``worker.py`` is the read-and-loop
+wrapper around it.
 
-Everything here works on the flattened pixel order module × ss × fs, i.e. a
-1-D array of ``NPIX`` entries, and accumulates in float64.
+Everything here works on the flattened pixel order module × ss × fs, a 1-D
+array of ``NPIX`` entries, and accumulates in float64.
 """
 
 from __future__ import annotations
@@ -43,9 +42,8 @@ def gather(
         ``Σ c·x`` into the ``Σ c²·x`` variance.
     :returns: float64 array of length ``op.npt``.
 
-    Index arithmetic is done in int64 throughout: ``indptr`` is int32 and the
-    per-column offsets would otherwise be at risk of overflow for larger
-    detectors.
+    Index arithmetic is int64 throughout. ``indptr`` is int32, and the
+    per-column offsets could overflow it on a larger detector.
     """
     cols = np.asarray(cols)
     weights = np.asarray(weights, dtype=np.float64)
@@ -132,7 +130,7 @@ def integrate_frame(
     ``normalization`` is corrected off ``base_denominator`` by the pixels where
     this frame disagrees with its cell, in either direction: a pixel the cell
     calls bad but the frame calls good is added, one the cell calls good but
-    the frame calls bad is subtracted. The result is exact, not approximate.
+    the frame calls bad is subtracted. The correction is exact.
 
     :raises DataCheckFailed: ``x`` is not an integer dtype, or carries negative
         counts. There is no dense fallback and no NaN sentinel, so a failing

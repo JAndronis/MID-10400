@@ -18,28 +18,23 @@ def relative_difference(got: np.ndarray, want: np.ndarray) -> np.ndarray:
     The floor keeps a zero reference from producing a division warning and an
     infinite difference; a bin where both sides are zero reports 0.
 
-    :param got: the value under test.
-    :param want: the reference it is compared against.
     :returns: the relative difference, same shape as the inputs.
     """
     return np.abs(got - want) / np.maximum(np.abs(want), 1e-12)
 
 
 def frozen_copy(array: np.ndarray, dtype: Any, *, cast: bool = False) -> np.ndarray:
-    """A contiguous, read-only **copy**.
+    """A contiguous, read-only copy of ``array``.
 
-    The copy is the point: ``np.ascontiguousarray(x, dtype)`` returns ``x``
-    itself when it already matches, so freezing the result would freeze an array
-    pyFAI still owns — a solid-angle cache, or an engine's bin centres — and its
-    Cython kernels reject a read-only buffer, surfacing as a failure somewhere
-    unrelated later.
+    It must be a copy. ``np.ascontiguousarray(x, dtype)`` returns ``x`` itself
+    when it already matches, so freezing that result would freeze an array pyFAI
+    still owns (a solid-angle cache, or an engine's bin centres). pyFAI's Cython
+    kernels reject a read-only buffer, so the failure would appear later,
+    somewhere unrelated.
 
-    :param array: the array to copy.
-    :param dtype: the dtype the result must have.
-    :param cast: convert to ``dtype`` when it differs. The default asserts
-        instead, so that a change in an upstream layout surfaces loudly rather
-        than being silently converted.
-    :returns: the frozen copy.
+    :param cast: convert to ``dtype`` when it differs. When False a different
+        dtype raises, so a change in an upstream layout is never converted
+        silently.
     :raises TypeError: ``cast`` is False and ``array`` has another dtype.
     """
     if not cast and array.dtype != dtype:
@@ -57,7 +52,6 @@ def atomic_savez(path: str | Path, **arrays: Any) -> Path:
     to ``np.savez`` as an open handle, because given a name not ending in
     ``.npz`` it would append one.
 
-    :param path: the archive to write.
     :param arrays: what ``np.savez`` stores.
     :returns: ``path``.
     """

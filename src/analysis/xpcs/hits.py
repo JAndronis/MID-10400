@@ -1,8 +1,8 @@
 """The hit set: which trains the XPCS pass reads.
 
-The classifier that decides what a hit is changes (the mesh rule is being
-reworked), so the pass takes the train ids as an input and knows nothing of it.
-Only ``analysis.xpcs.damnit`` imports ``analysis.triage.classify``.
+The pass takes the train ids as an input and knows nothing of the classifier
+that chose them, so the hit rule can change without touching the pass. Only
+``analysis.xpcs.damnit`` imports ``analysis.triage.classify``.
 """
 
 from __future__ import annotations
@@ -32,8 +32,7 @@ class HitSet:
 
         :raises ValueError: not 1-D, not integer-valued, negative, unsorted or
             containing a duplicate. Nothing is sorted or deduplicated for the
-            caller: a classifier that returns either has a bug worth hearing
-            about.
+            caller, because a classifier that returns either has a bug.
         """
         ids = np.asarray(train_ids)
         if ids.ndim != 1:

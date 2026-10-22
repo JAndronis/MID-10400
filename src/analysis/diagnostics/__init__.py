@@ -1,16 +1,10 @@
-"""Diagnostics of a run's stored products (context/diagnostics.md).
+"""Diagnostics of a run's stored products.
 
 Plain functions over the pass output files and DAMNIT's per-run file. They read
-small, final files only — the frame tables in scratch and the DAMNIT variables —
-so they keep working after raw and proc go to tape, and they never alter a stored
-number: every normalisation is applied to an in-memory copy and named in the
-result's ``attrs``.
-
-``frames``  what a frame table holds: status per code (and per cell), per-frame
-            scalars on a (train, label) grid, the stored units
-``curves``  per-train flux from DAMNIT, and the checks on per-train curves: SVD,
-            χ² against the run median, scatter before and after the flux, and the
-            JUNGFRAU cell–XGM correlation
+small, final files only (the frame tables in scratch and the DAMNIT variables), so
+they keep working after raw and proc go to tape. They never alter a stored number:
+every normalisation is applied to an in-memory copy and named in the result's
+``attrs``.
 """
 
 from __future__ import annotations

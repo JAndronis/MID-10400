@@ -24,8 +24,8 @@ class FrameStatus(IntEnum):
     NOT_PROCESSED = 255
 
 
-#: Codes a rerun retries. ``WORKER_ERROR`` says nothing about the data — a
-#: node, a file system or a pool can fail and succeed the next time — whereas
+#: Codes a rerun retries. ``WORKER_ERROR`` says nothing about the data (a node,
+#: a file system or a pool can fail and succeed the next time).
 #: ``LABEL_MISMATCH`` and ``DATA_CHECK_FAILED`` are properties of the data and
 #: would come out the same, so they count as done.
 UNFINISHED: frozenset[FrameStatus] = frozenset(
@@ -36,8 +36,8 @@ UNFINISHED: frozenset[FrameStatus] = frozenset(
 class DataCheckFailed(ValueError):
     """A frame's values are not what the pass is entitled to assume.
 
-    What that means is the detector's business: AGIPD requires integer photon
-    counts with no negatives, JUNGFRAU finite keV values inside a configured
-    range. Both raise rather than return, because neither pass has a NaN
-    sentinel and a failed frame must not hand back arrays that look integrated.
+    What that means depends on the detector. AGIPD requires integer photon
+    counts with no negatives, JUNGFRAU at least one pixel left after masking.
+    Both raise rather than return, so a failed frame never hands back arrays
+    that look integrated.
     """

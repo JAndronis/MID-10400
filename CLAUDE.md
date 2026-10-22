@@ -50,6 +50,28 @@ Adjust the paths above if the context files live elsewhere.
    is `analysis.*` belongs under the module it tests, even when it is convenient to write it
    against a script's fixtures. Logic a figure reports as a number belongs in `analysis.*`.
 
+8. **Comments and docstrings.** Code is read without this file or `context/` open, so a comment
+   must stand alone.
+   - *Self-contained.* State the fact in place. Never cite CLAUDE.md, a `context/` file, a
+     section number, a pitfall or open-task number, or a phase or session label (P4, W7, S3).
+     If a pointer carried a fact the code needs, write that fact in a sentence or two. If it
+     carried history, measurements or the rationale of a past decision, leave it in git or
+     `context/`.
+   - *No history or volatile facts.* No "added on", "originally", "now", dates, run lists, version
+     numbers or counts, unless the code depends on them. Describe what is true today.
+   - *Why, not what.* Keep a comment for a reason, invariant, unit, hazard or constraint the code
+     cannot show. Delete narration, section labels and commented-out code.
+   - *Docstrings.* One summary sentence, then prose only for what a caller must know (contract,
+     units, side effects, failure modes). Keep Sphinx `:param:` / `:returns:` / `:raises:` fields
+     where they add a unit, shape, range or failure condition, and drop those that restate the
+     name. A helper with an obvious name and body needs one line or none. A module docstring
+     says what the module owns and does not; a test docstring says which behaviour it pins.
+   - *Truth over tradition.* A comment that disagrees with the code is wrong: fix the comment.
+     Do not state a number with no source.
+   - *Prose.* Short declarative sentences, no em dashes, no hedging filler, no rhetorical
+     "not X but Y". Keep pragma comments (`# noqa`, `# type:`) verbatim.
+   - A comment-only change is checked by comparing the AST with `HEAD` after dropping bare string
+     statements; the suite need not run.
 ---
 
 ## Scientific context

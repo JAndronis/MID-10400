@@ -1,4 +1,4 @@
-"""Consecutive runs grouped into droplets, and each run's droplet metrics (§4.2).
+"""Consecutive runs grouped into droplets, and each run's droplet metrics.
 
 Evaporation never increases a droplet's volume, so the question at every run
 boundary is whether the volume went *up* by more than the droplet fit can scatter.
@@ -44,8 +44,8 @@ __all__ = [
 
 #: Trains per median window, at run edges and inside runs alike.
 WINDOW = 20
-#: Droplet camera pixel size: droplet_fit(px=13.9) in src/amore/context.py, the
-#: same value as analysis.utils.DROPLET_PX_MM (not imported: it pulls in extra_data).
+#: Droplet camera pixel size, the ``px`` of DAMNIT's droplet_fit. Same value as
+#: analysis.utils.DROPLET_PX_MM, not imported because that module pulls in extra_data.
 DROPLET_PX_UM = 13.9
 #: Classes whose runs can hold a levitated droplet.
 DROPLET_CLASSES = frozenset({"static_droplet", "mesh_sshex", "reference"})
@@ -100,7 +100,7 @@ def run_noise(log_volume: np.ndarray, w: int = WINDOW) -> float:
     """Robust sd of the differences between adjacent window medians; NaN if < 3.
 
     This is the noise of a *difference* of two window medians. Taking it for both
-    sides of a boundary overstates that boundary's noise by √2, deliberately: a
+    sides of a boundary overstates that boundary's noise by √2, deliberately. A
     boundary also carries a pause and any change of camera conditions, which no
     in-run null sees.
     """
@@ -140,7 +140,7 @@ class Boundary:
     #: a person's verdict on a suspect label change (samples.CHECKED_LABEL_CHANGES)
     label_checked: str | None = None
     #: a "continuing" verdict that even a fresh-sized step (d_fresh) could not have
-    #: overturned against this noise: here "continuing" means "could not tell"
+    #: overturned against this noise, so "continuing" means "could not tell"
     underpowered: bool = False
 
     @property
@@ -168,7 +168,7 @@ def segment(
     droplets: dict[int, Droplet],
     checked: dict[tuple[int, int], str] = CHECKED_LABEL_CHANGES,
 ) -> SeriesResult:
-    """Group the droplet-class runs of `inventory` into series (§4.2).
+    """Group the droplet-class runs of `inventory` into series.
 
     ``droplets`` maps run -> `Droplet` for every run whose fit could be read. A run
     is *fitted* when it has at least two windows of finite volume. Unfitted runs
@@ -191,7 +191,6 @@ def segment(
     # a fallback sigma is a median over many runs: taken as known (infinite dof)
     dof = {r: np.inf if fallback[r] else mad_dof(n_diffs[r]) for r in fitted}
 
-    # pass 1: the step and its significance at every boundary between fitted runs
     pairs = []
     for a, b in pairwise(fitted):
         between = order[order.index(a) : order.index(b) + 1]
@@ -231,7 +230,6 @@ def segment(
         )  # fmt: skip
     after = {bd.after: bd for bd in boundaries}
 
-    # pass 2: series membership, in run order
     series_of: dict[int, str | None] = {}
     member: dict[int, str] = {}
     current: str | None = None
@@ -255,7 +253,6 @@ def segment(
         same = current is not None and sample[u] == sample[int(current[1:])]
         series_of[u], member[u] = (current, "no_fit") if same else (None, "ambiguous")
 
-    # per-run droplet metrics
     n_jump_tests = sum(max(n, 0) for n in n_diffs.values())
     rows = []
     v0 = {}
@@ -273,7 +270,7 @@ def segment(
             jump_cut = z_for_tests(n_jump_tests, two_sided=True, dof=dof[r])
             significant_jump = bool(jump_z > jump_cut)
             # size decides what a significant step means: below d_fresh it is
-            # glitch-sized, at or above it as large as an injection (§4.2)
+            # glitch-sized, at or above it as large as an injection
             big = d_fresh is None or jump >= d_fresh
             row.update(
                 v_start_mm3=float(v_start),

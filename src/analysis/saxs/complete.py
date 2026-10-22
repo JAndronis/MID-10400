@@ -1,7 +1,7 @@
-"""Whether a run's AGIPD output is complete — see :mod:`analysis.common.complete`.
+"""Whether a run's AGIPD output is complete, on top of :mod:`analysis.common.complete`.
 
 Up to three files: the frame table; unless ``cfg.pixel_sum_trains`` is ``None``,
-the per-pixel window sums (context file §15); unless ``cfg.photon_stats`` is
+the per-pixel window sums; unless ``cfg.photon_stats`` is
 False, the per-frame photon statistics (``analysis.saxs.photon_stats``). A run is
 complete only when all of them are.
 """
@@ -37,9 +37,9 @@ __all__ = [
 ]
 
 #: Relative tolerance on the solid angle. The same operator built on AVX2 and on
-#: AVX-512 nodes differs in ``omega`` by one ULP — 105 693 of 1 048 576 pixels,
-#: at most 1.1e-16 relative — and in nothing else (S3, 2026-10-13, r0423). Any
-#: real change to the geometry moves it by many orders of magnitude more.
+#: AVX-512 nodes differs in ``omega`` by one ULP on some pixels, and in nothing
+#: else. Any real change to the geometry moves it by many orders of magnitude
+#: more.
 OMEGA_RTOL = 1e-12
 
 #: The operator arrays a rebuild reproduces bit for bit on every node class.
@@ -53,8 +53,8 @@ def expected_operator(cfg: AgipdSaxsConfig, geometry: Any = None) -> SparseOpera
     """The operator this pass would build for ``cfg`` now, on this node.
 
     Built for real rather than inferred from library versions, because it is
-    cheap — 1.2 s on r0423 — and needs no assumption about what a pyFAI or
-    EXtra-geom release changes. No input of the operator depends on the run, so
+    cheap and needs no assumption about what a pyFAI or EXtra-geom release
+    changes. No input of the operator depends on the run, so
     it is memoised per process on the config with the proposal and run zeroed;
     a script checking hundreds of runs builds it once.
 
@@ -74,9 +74,9 @@ def operator_differences(handle: h5py.File, op: SparseOperator) -> list[str]:
     """How the operator stored in ``handle`` differs from ``op``; empty if not.
 
     :data:`EXACT_ARRAYS` must be equal, ``omega`` equal to :data:`OMEGA_RTOL`.
-    An equal sha256 settles it without reading the arrays — it is written with
-    them and covers all of them — but an unequal one does not: it differs
-    between node classes (see :data:`OMEGA_RTOL`).
+    An equal sha256 settles it without reading the arrays, since it is written
+    with them and covers all of them. An unequal one does not, because it
+    differs between node classes (see :data:`OMEGA_RTOL`).
     """
     group = handle.get("operator")
     names = (*EXACT_ARRAYS, "omega")
@@ -153,7 +153,7 @@ def is_complete(
     photon_stats_path: str | Path | None = None,
     ring_labels: np.ndarray | None = None,
 ) -> Completeness:
-    """Whether a run's frame table — and its window sums and statistics — are complete.
+    """Whether a run's frame table, window sums and statistics are complete.
 
     Read-only: it opens the files for reading and writes nothing anywhere.
 

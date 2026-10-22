@@ -1,25 +1,17 @@
-"""Is the stored σ the scatter the frames actually show? (W4 gate E.)
+"""Whether the stored σ matches the scatter the frames show.
 
-The pass stores a variance per frame and bin — Poisson on the counts since
-photon counting, ``σ_read² + E·x`` in keV² before it. Pooling trusts that number,
-so it is worth checking against the data, and the frames of one train are the
-natural comparison: eight pulses through the same droplet a few hundred
-nanoseconds apart.
-
-What differs between them besides counting noise is mostly the amount of light
-— pulse energy, and cell 15 running ~5 % low — so each frame is first scaled by
-its own mean intensity over the bins every frame of the train populates. The
-scatter left between the scaled frames is then compared with the model's σ
-scaled the same way, **as variances summed over trains** (a sample variance is
-unbiased where a sample σ is not: the median σ of eight Poisson frames sits ~5 %
-below the truth).
-
-A ratio near 1 says the stored σ is what the frames show. W7 measured D = 0.93–0.95
-for the per-pixel counts, which predicts a ratio of ~0.97 for a pure counting
-process; anything well above that is real frame-to-frame structure, or noise the
-model leaves out (an uncorrected zero level, for one).
-
-Works on any output file of the pass, keV or photons, off the stored sums only.
+Pooling trusts the variance the pass stores per frame and bin, so this checks it
+against the data. The frames of one train are the comparison, since they are
+pulses through the same droplet a few hundred nanoseconds apart. Their main
+difference besides counting noise is the amount of light (pulse energy, and
+cells that read systematically low), so each frame is first scaled by its own
+mean intensity over the bins every frame of the train populates. The scatter
+left between scaled frames is compared with the model's σ scaled the same way,
+as variances summed over trains, because a sample variance is unbiased where a
+sample σ is not. A ratio near 1 says the stored σ is what the frames show. A
+ratio well above 1 means real frame-to-frame structure, or noise the model
+leaves out. Works on any output file of the pass, keV or photons, from the
+stored sums only.
 """
 
 from __future__ import annotations
@@ -43,13 +35,13 @@ def frame_scatter(
     """Empirical frame-to-frame scatter against the stored σ, and train spread.
 
     :param source: an open handle or a path to a finished output file.
-    :param q_range: restrict to bins with centres inside it; ``None`` takes all.
-    :returns: ``sigma_ratio_median`` — the median over bins of
-        ``sqrt(Σ_trains empirical variance / Σ_trains model variance)`` — its 5th
-        and 95th percentiles and its value per q band; ``relative_std_between_
-        trains``, the spread of each train's pooled mean intensity; and the
-        counts behind them. Only trains whose frames are all ``OK`` and number
-        at least two take part.
+    :param q_range: restrict to bins with centres inside it. ``None`` takes all.
+    :returns: ``sigma_ratio_median``, the median over bins of
+        ``sqrt(Σ_trains empirical variance / Σ_trains model variance)``, with
+        its 5th and 95th percentiles and its value per q band;
+        ``relative_std_between_trains``, the spread of each train's pooled mean
+        intensity; and the counts behind them. Only trains with at least two
+        frames, all ``OK``, take part.
     """
     with as_handle(source) as handle:
         frames = handle["frames"]

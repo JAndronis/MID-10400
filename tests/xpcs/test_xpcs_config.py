@@ -35,7 +35,7 @@ def test_the_rings_keep_the_es_envelope_and_leave_out_the_bragg_bands():
 
 
 def test_the_default_partner_is_the_previous_train_only(saxs_cfg):
-    """Benchmark B4: the baseline drifts with the gap, so only gap 1 is unbiased."""
+    """The baseline drifts with the partner gap, so only gap 1 is unbiased."""
     assert XpcsConfig(saxs=saxs_cfg).max_partner_gap == 1
 
 

@@ -1,4 +1,4 @@
-"""Pass integrity for one JUNGFRAU (open task 17), as for AGIPD.
+"""Pass integrity for one JUNGFRAU, as for AGIPD.
 
 A complete file is answered from and nothing is written; a live lock refuses;
 ``WORKER_ERROR`` blocks are retried; a file from another pyFAI is refused.

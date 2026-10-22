@@ -1,25 +1,25 @@
-"""Build a proc-like AGIPD run on disk (context file §10, phase P3).
+"""Build a proc-like AGIPD run on disk.
 
 EXtra-data's own mock writer produces ``image/data`` as float32 and does not
 chunk it the way corrected AGIPD files are chunked, so each module file is
 reopened afterwards and the two image datasets are replaced with int16 photon
-counts and a uint32 ``BadPixels`` field, both chunked ``(1, 512, 128)`` with
-shuffle + gzip — the layout CLAUDE.md records for r0423 and r0426.
+counts and a uint32 ``BadPixels`` field. Both are chunked ``(1, 512, 128)`` with
+shuffle + gzip, the layout of the corrected AGIPD files.
 
-The three awkward-train cases are produced the way EXtra-data actually decides
-them (``components.py`` ``_select_trains``):
+The three awkward-train cases are produced the way EXtra-data decides them
+(``components.py`` ``_select_trains``):
 
-* **zero-frame train** — ``frames_per_train`` accepts an array, so a train can
-  simply be written with zero frames;
-* **train with < 16 modules** — module presence is ``(counts > 0)``, so zeroing
-  one module's ``INDEX/.../image/count`` for a train drops it below
-  ``min_modules``;
-* **dropped train** — ``INDEX/trainId`` and ``INSTRUMENT/.../image/trainId`` are
+* zero-frame train. ``frames_per_train`` accepts an array, so a train can be
+  written with zero frames.
+* train with < 16 modules. Module presence is ``(counts > 0)``, so zeroing one
+  module's ``INDEX/.../image/count`` for a train drops it below
+  ``min_modules``.
+* dropped train. ``INDEX/trainId`` and ``INSTRUMENT/.../image/trainId`` are
   renumbered to a non-contiguous sequence, so the run itself has a gap.
 
-This leans on ``extra_data.tests.mockdata``, an internal test package of
-EXtra-data with no API stability promise. It is what the context file
-prescribes, but it is a thing to check when EXtra-data is upgraded.
+This relies on ``extra_data.tests.mockdata``, an internal test package of
+EXtra-data with no API stability promise, so check it when EXtra-data is
+upgraded.
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""Static and per-cell base masks (context file §6.3; phase P2 acceptance)."""
+"""Static and per-cell base masks of the AGIPD SAXS pass."""
 
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ pytest.importorskip("pyFAI")
 
 STATIC_BIT = 1 << 0  # OFFSET_OUT_OF_THRESHOLD
 DYNAMIC_BIT = 1 << 12  # VALUE_OUT_OF_RANGE
-UNEXPECTED_BIT = 1 << 22  # NON_STANDARD_SIZE — never set in these files
+UNEXPECTED_BIT = 1 << 22  # NON_STANDARD_SIZE, never set in corrected AGIPD files
 
 
 def write_mask(tmp_path, array, name="mask.npy"):
@@ -103,7 +103,7 @@ def test_boolean_masks_are_accepted(tmp_path):
 
 # ── static mask: composition ──────────────────────────────────────────────────
 def test_asic_seams_are_repeated_over_sixteen_modules():
-    """NON_STANDARD_SIZE is never set in these files, so the double-width
+    """NON_STANDARD_SIZE is never set in corrected AGIPD files, so the double-width
     ASIC-edge pixels must come from the geometry package instead."""
     static = build_static_bad(mask_cfg_seams_only())
     seams = agipd_asic_seams()
@@ -359,7 +359,7 @@ def test_the_fallback_still_integrates_exactly(op, static_mask, make_frame):
 def test_frame_cell_disagreement_is_exact_in_both_directions(
     op, static_mask, make_frame
 ):
-    """The P2-to-P1 seam, with a base mask from a real majority vote."""
+    """Uses a base mask from a real majority vote, not a hand-built one."""
     rng = np.random.default_rng(23)
     trains = []
     for _ in range(4):
@@ -375,9 +375,9 @@ def test_frame_cell_disagreement_is_exact_in_both_directions(
     base_bad, base_denominator = base.for_cell(0)
 
     bad = np.array(base_bad, copy=True)
-    bad[always_bad] = False  # cell says bad, frame says good  → Ω added back
+    bad[always_bad] = False  # cell says bad, frame says good: Ω is added back
     newly_bad = np.flatnonzero(~base_bad)[:2000]
-    bad[newly_bad] = True  # cell says good, frame says bad  → Ω subtracted
+    bad[newly_bad] = True  # cell says good, frame says bad: Ω is subtracted
     assert (bad & ~base_bad).sum() == 2000
     assert (~bad & base_bad).sum() == 1
 

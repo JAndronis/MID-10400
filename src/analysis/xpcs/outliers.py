@@ -1,11 +1,10 @@
 """extra-speckle's pixel-outlier mask, computed from the hit trains in the store.
 
-``xpcs_offline(outlier_masking=True)`` removed every pixel whose RMS over frames
-of its per-frame mean photon count lies outside ``(0.75, 1.75)`` times the
-median of its q bin (``extra_speckle.stats.tools.mask_outlier``). The mask is a
-property of the run's pixels, so it is made once from every usable hit train,
-folded into the ring labels like the static mask, and the store is not touched
-(``context/xpcs-hits.md`` §12).
+``extra_speckle.stats.tools.mask_outlier`` removes every pixel whose RMS over
+frames of its per-frame mean photon count lies outside given multiples of the
+median of its q bin. The mask is a property of the run's pixels, so it is made
+once from every usable hit train and folded into the ring labels like the static
+mask. The store is not touched.
 
 Per frame position ``f`` and envelope pixel ``p``, over the trains ``t``::
 
@@ -47,7 +46,7 @@ BLOCK_LIMIT = 257
 
 
 class OutlierFailed(RuntimeError):
-    """A block of the statistic failed: the mask would depend on which."""
+    """A block of the statistic failed; a mask without it would depend on which."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,7 +64,7 @@ class OutlierMask:
         return sha256_of_array(self.mask)
 
     def apply(self, rings: Rings) -> Rings:
-        """``rings`` with the outliers set to −1."""
+        """``rings`` with the outliers set to -1."""
         label = rings.label.copy()
         label[self.mask] = -1
         label.flags.writeable = False
@@ -158,7 +157,7 @@ def accumulate(
 
 
 def q_interval(q: np.ndarray, q_range: tuple[float, float], q_bins: int) -> np.ndarray:
-    """extra-speckle's q intervals: index ``i`` for ``c_i < q ≤ c_{i+1}``, else −1.
+    """extra-speckle's q intervals: index ``i`` for ``c_i < q ≤ c_{i+1}``, else -1.
 
     ``c`` are the centres of ``q_bins`` equal bins over ``q_range``, as
     ``saxs.get``'s 300 pyFAI bins over the detector.

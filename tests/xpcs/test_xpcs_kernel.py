@@ -1,4 +1,4 @@
-"""The exact integer sums of one train, against a brute-force reference and ES."""
+"""The exact integer sums of one train, against brute force and extra-speckle."""
 
 from __future__ import annotations
 

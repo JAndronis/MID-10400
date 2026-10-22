@@ -1,4 +1,4 @@
-"""Geometry loading, the method assertion and the operator hash (W2)."""
+"""Geometry loading, the method assertion and the operator hash."""
 
 from __future__ import annotations
 
@@ -30,14 +30,14 @@ def test_operator_carries_a_populated_q_axis(operator, cfg):
 
 
 def test_the_engine_is_the_requested_one(operator):
-    """CLAUDE.md pitfall 1: a method string can silently resolve elsewhere."""
+    """A pyFAI method string can silently resolve to another engine."""
     op, ai = operator
     assert op.method == ("full", "csc", "cython")
     assert len(ai.engines) == 1
 
 
 def test_the_wavelength_assertion_fires_on_a_mismatched_poni(cfg, tmp_path):
-    """§5 R4: the PONI carries its own wavelength, and q scales with it."""
+    """The PONI carries its own wavelength, and q scales with it."""
     wrong = write_synthetic_poni(tmp_path / "wrong.poni", photon_energy_kev=9.000)
     with pytest.raises(WavelengthMismatch, match="q scales"):
         build_operator(dataclasses.replace(cfg, poni_file=str(wrong)))
@@ -88,7 +88,7 @@ def test_the_poni_text_round_trips(operator):
 
 # ── the static mask ──────────────────────────────────────────────────────────
 def test_the_edf_is_used_as_is_with_no_inversion(cfg, geometry_files):
-    """§6 O2: native pyFAI masks, non-zero = excluded."""
+    """The ``.edf`` files are native pyFAI masks, non-zero = excluded."""
     import fabio
 
     with fabio.open(str(geometry_files.mask)) as image:
@@ -120,7 +120,7 @@ def test_a_mask_of_the_wrong_shape_is_refused(tmp_path):
 
 
 def test_masking_reduces_the_denominator(cfg, operator):
-    """The polarity test from §6 O2: masking half the module halves N."""
+    """Masking half the module halves the denominator, which pins the polarity."""
     from analysis.waxs.config import MODULE_SHAPE as SHAPE
 
     op, ai = operator
@@ -143,7 +143,7 @@ def test_building_the_operator_leaves_pyfais_own_arrays_writable(operator):
 
     ``np.ascontiguousarray(x, dtype)`` returns ``x`` itself when it is already
     contiguous and of that dtype, so freezing the result freezes an array pyFAI
-    still owns — its ``_dssa`` solid-angle cache, or an engine's bin centres.
+    still owns (its ``_dssa`` solid-angle cache, or an engine's bin centres).
     pyFAI's Cython kernels acquire writable buffers, so the damage surfaces
     later, in an unrelated call, with a message that names neither.
     """
@@ -168,7 +168,7 @@ def test_the_frozen_outputs_are_copies_not_views(operator):
 
 
 def test_the_mask_handed_to_pyfai_is_writable(operator):
-    """pyFAI tolerates a read-only mask today; relying on that is not a plan."""
+    """Whether pyFAI accepts a read-only mask depends on the platform."""
     op, ai = operator
     assert op.static_mask_2d.flags.writeable
     assert op.static_mask_2d.flags.c_contiguous

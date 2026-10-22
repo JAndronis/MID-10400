@@ -56,7 +56,7 @@ def read_mock_train(run_path, train_id):
             image = f[f"INSTRUMENT/{source(module)}/image"]
             data.append(image["data"][first : first + count])
             mask.append(image["mask"][first : first + count])
-    # (16, P, 512, 128) -> (P, 16·512·128)
+    # (16, P, 512, 128) -> (P, 16*512*128)
     to_frames = lambda a: np.stack(a).transpose(1, 0, 2, 3).reshape(a[0].shape[0], -1)  # noqa: E731
     return to_frames(data), to_frames(mask)
 
@@ -114,7 +114,7 @@ def test_trains_that_gave_no_photons_are_accounted_for_not_dropped(pipeline):
     with h5py.File(path, "r") as f:
         pair = f["hits/pair_status"][()]
         assert pair[row_of[SHORT]] == PairStatus.NOT_OK
-        # 10003 is two trains after 10001: the skipped ones are not hits
+        # 10003 is two trains after 10001, and the train between is not a hit
         assert f["hits/partner"][row_of[10003]] == 10001
 
 
@@ -287,7 +287,7 @@ def test_a_store_made_for_another_envelope_is_refused_and_kept(pipeline):
 def test_worker_count_and_block_size_change_no_stored_number(
     pipeline, mock_run, geom, tmp_path, h5_digest
 ):
-    """The only test that spawns workers: 1 against 3, in blocks of 1 against 4."""
+    """Spawned workers: 1 worker in blocks of 4 against 3 workers in blocks of 1."""
     from dataclasses import replace
 
     from analysis.xpcs.run import run_xpcs_hits
@@ -449,7 +449,7 @@ def test_block_files_a_crashed_parent_left_are_merged_not_extracted_again(
 
 
 def corrupt_chunk(dataset, coord):
-    """Overwrite one stored chunk of ``dataset`` on disk, past HDF5's back."""
+    """Overwrite one stored chunk of ``dataset`` on disk, bypassing HDF5."""
     dataset.file.flush()
     info = dataset.id.get_chunk_info_by_coord(coord)
     with open(dataset.file.filename, "r+b") as raw:

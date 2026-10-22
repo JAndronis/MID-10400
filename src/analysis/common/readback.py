@@ -1,11 +1,10 @@
 """Read a written HDF5 file back from disk before calling it finished.
 
-On 2026-10-20 the ``usr`` fileset hit its quota during a reprocess, and four
-XPCS results files were finalised whose ``sums/*`` chunks raised ``filter
-returned failure during read``. Every completeness check reads attributes and
-statuses only, so all of them called those files complete. A pass that reads
-its own output back, from a fresh handle after an ``fsync``, cannot finalise
-such a file.
+A quota that fills during a write can leave a finalised file whose chunks
+raise ``filter returned failure during read`` while its attributes and
+statuses read fine. A completeness check that reads only those calls such a
+file complete. A pass that reads its own output back, from a fresh handle after
+an ``fsync``, cannot finalise it.
 """
 
 from __future__ import annotations

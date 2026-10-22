@@ -1,4 +1,4 @@
-"""XPCS SNR (context/run-triage.md §4.6) against synthetic runs with known truth.
+"""XPCS SNR against synthetic runs with known truth.
 
 The synthetic TTCF carries contrast β, rate Γ and, per pair, exactly the noise the
 analytical formula predicts. So the jackknife must find that noise (ρ ≈ 1), the fit
@@ -170,7 +170,7 @@ def test_fixed_beta_matches_rois_by_centre():
 
 
 def test_reference_beta_falls_from_five_to_two_percent():
-    """User, 2026-10-13: 5 % at low q to 2 % at high q, from r450 and r493-496."""
+    """The reference β (r450, r493-496) falls from 5 % at low q to 2 % at high q."""
     plain = [REFERENCE_BETA[q][0] for q in (0.02875, 0.04, 0.0505, 0.0805)]
     assert plain == sorted(plain, reverse=True)
     assert 0.045 < plain[0] < 0.05 and 0.017 < plain[-1] < 0.02

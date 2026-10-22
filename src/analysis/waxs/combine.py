@@ -1,38 +1,15 @@
 """Putting the two detectors on one scale.
 
-After masking, jf1 populates ~11.5–23.7 nm⁻¹ and jf2 ~9.8–18.5, so they share a
-wide overlap. This module fits a single multiplicative factor for one detector
-against the other **over that overlap**, and merges the two into one curve.
-
-**What the factor absorbs, and what it cannot.** O5 warned that pooling the two
-onto a common grid needs both `N` arrays on the same absolute scale, which is
-untested: different solid-angle coverage, different masks, two PONIs. A *fitted*
-factor sidesteps that by construction — whatever the relative normalisation is,
-the fit absorbs it. What it cannot absorb is a difference in *shape*, which is
-what :attr:`OverlapScaling.reduced_chi2` and :attr:`OverlapScaling.residual_rms`
-report. A factor is a result; a factor plus a bad χ² is a warning about the
-geometry.
-
-**When that cross-check is blind, measured.** A relative error in the two q axes
-is *degenerate* with a scale factor whenever the overlap is featureless. For a
-power law, `I(1.05·q) = 1.05⁻² · I(q)` exactly, so a 5 % q error is
-indistinguishable from a 9.3 % scale error — and it shows: on a smooth
-`100/q² + 0.5`, a 5 % q shift leaves χ²ᵣ at 0.22, which no one would look at
-twice. Add a Bragg-like peak to the overlap and the same 5 % shift gives χ²ᵣ
-776, and even 1 % gives 77.
-
-So: **this is a real cross-check on the two PONIs only on a run whose overlap
-carries a feature.** On r0426 (crystallised) it bites; on r0423 (no Bragg
-reflections) a good χ² here says the two detectors are mutually consistent in
-*shape*, not that either q axis is right. Do not read more into it than that.
-
-Everything here works on stored sums or on pooled curves — nothing reprocesses
-frames — so it is post hoc, applied to stored sums rather than during the pass.
-
-**keV and photons never mix.** Files written before photon counting store keV,
-later ones photons, and a factor fitted between the two would absorb the unit
-change and report it as a detector mismatch. :func:`require_same_units` refuses
-the pair instead, and everything that combines two inputs calls it.
+This module fits one multiplicative factor for one detector against the other
+over their shared q range, and merges the two into one curve. It works on
+stored sums or pooled curves and never reprocesses frames. The factor absorbs
+any difference in absolute normalisation but not in shape, which the χ² and
+residuals of :class:`OverlapScaling` report. A relative q-axis error is
+degenerate with a scale factor over a featureless overlap (for ``I ∝ q^-2``,
+``I(c q) = c^-2 I(q)``), so a good χ² checks the two PONIs only on a run whose
+overlap carries a feature such as a Bragg peak. A factor fitted between a keV
+file and a photon one would report the unit change as a detector mismatch, so
+:func:`require_same_units` refuses the pair.
 """
 
 from __future__ import annotations
@@ -64,7 +41,7 @@ class NoOverlap(ValueError):
 
 
 class UnitsMismatch(ValueError):
-    """Two inputs count different things — keV and photons — and must not mix."""
+    """Two inputs count different things (keV and photons) and must not mix."""
 
 
 def units_of(source: Any) -> str:
@@ -95,11 +72,11 @@ def require_same_units(reference: str, other: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class OverlapScaling:
-    """One multiplicative factor, and how well it actually worked."""
+    """One multiplicative factor, and how well it fits."""
 
     #: ``I_other * factor`` is on the reference's scale.
     factor: float
-    #: Standard error on the factor, from the weighted fit; ``nan`` for the
+    #: Standard error on the factor, from the weighted fit. ``nan`` for the
     #: median method, which has no closed form here.
     factor_error: float
     q_low: float
@@ -107,23 +84,20 @@ class OverlapScaling:
     n_bins: int
     method: str
     #: Reduced χ² of ``I_ref − factor·I_other`` over the overlap. Near 1 means
-    #: the two agree within their errors; ≫ 1 means they do not lie on top of
-    #: each other and no factor will make them.
+    #: the two agree within their errors. Far above 1 means they differ in shape
+    #: and no factor will make them agree.
     reduced_chi2: float
     #: Fractional RMS residual, which is readable without trusting the errors.
     residual_rms: float
-    #: Slope of the *fractional* residual against q, per nm⁻¹, from an
-    #: unweighted straight-line fit. This is what separates the two things a
-    #: bad χ² can mean. A leftover **normalisation** difference is flat in q and
-    #: the factor absorbs it, leaving slope ≈ 0. Anything **q-dependent** — a
-    #: relative error between the two q axes, or a correction applied to neither
-    #: detector that varies with scattering angle — tilts the residual, and no
-    #: single factor can take that out. Unweighted on purpose: when χ² is this
-    #: far above 1 the errors are no longer what limits the comparison, so
-    #: weighting by them would just re-import the assumption under test.
+    #: Slope of the fractional residual against q, per nm⁻¹, from an
+    #: unweighted straight-line fit. A normalisation difference is flat in q and
+    #: the factor absorbs it, leaving a slope near 0. A q-dependent difference
+    #: (a relative error between the q axes, or an angle-dependent correction
+    #: applied to neither detector) tilts the residual. The fit is unweighted
+    #: because when χ² is far above 1 the errors no longer limit the comparison,
+    #: and weighting by them would assume what is being tested.
     residual_slope_per_nm: float
-    #: The fitted fractional residual at each end of the overlap, which is the
-    #: slope in units anyone can act on.
+    #: The fitted fractional residual at each end of the overlap.
     residual_at_q_low: float
     residual_at_q_high: float
 
@@ -144,10 +118,11 @@ class OverlapScaling:
 
     @property
     def sigma_over_intensity(self) -> float:
-        """Roughly what fractional error the χ² implies the inputs claimed.
+        """The approximate fractional error the inputs claimed, implied by the χ².
 
-        ``residual_rms / sqrt(reduced_chi2)``, which separates "the curves
-        disagree" from "the error bars are too small" — a large χ² alone cannot.
+        ``residual_rms / sqrt(reduced_chi2)``. Beside ``residual_rms`` it
+        separates curves that disagree from error bars that are too small, which
+        a large χ² alone cannot.
         """
         if not np.isfinite(self.reduced_chi2) or self.reduced_chi2 <= 0:
             return float("nan")
@@ -157,16 +132,16 @@ class OverlapScaling:
 def mean_curve(source: Any) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """``(q, I, σ)`` from a per-cell grid or a pooled dataset.
 
-    Accepts what the pass actually hands around:
+    Accepts either input the pass produces:
 
-    * the ``(trainId, cellId, q)`` DataArray the DAMNIT variable returns —
-      averaged over every slot that holds a frame, with σ from the scatter
-      between those slots;
-    * the ``pooled_per_train`` Dataset — averaged over trains that have frames,
+    * the ``(trainId, cellId, q)`` DataArray the DAMNIT variable returns,
+      averaged over every slot that holds a frame, with σ the standard error
+      from the scatter between those slots;
+    * the ``pooled_per_train`` Dataset, averaged over trains that have frames,
       with σ propagated from the stored per-train σ.
 
-    Slots with no frame are stored as zeros, never NaN, so they are selected out
-    by ``n_frames`` rather than by ``isnan``.
+    Slots with no frame hold zeros, never NaN, so they are selected by
+    ``n_frames`` and not by ``isnan``.
     """
     import xarray as xr
 
@@ -191,9 +166,8 @@ def mean_curve(source: Any) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     if flat.size == 0:
         raise ValueError("no slot in this grid holds an integrated frame")
     mean = flat.mean(axis=0)
-    # No stored σ on the per-cell grid, so the scatter between slots is the
-    # honest estimate; with one slot there is none and the weights fall back
-    # to uniform in the fit.
+    # The per-cell grid stores no σ, so it comes from the scatter between slots.
+    # With one slot there is none, and the fit falls back to uniform weights.
     error = (
         flat.std(axis=0, ddof=1) / np.sqrt(flat.shape[0])
         if flat.shape[0] > 1
@@ -213,11 +187,11 @@ def _overlap(
 ) -> tuple[np.ndarray, ...]:
     """Restrict to the shared q range and put ``other`` on the reference's bins.
 
-    Only ``other`` is interpolated; the reference keeps its own bins, so the
-    result is reported on a real q axis rather than an invented one. The
-    variance is interpolated too, which ignores the correlation interpolation
-    introduces — acceptable for a weight, and the reason ``residual_rms`` is
-    reported alongside ``reduced_chi2``.
+    Only ``other`` is interpolated. The reference keeps its own bins, so the
+    result is reported on a measured q axis. The variance is interpolated too,
+    which ignores the correlation that interpolation introduces. That is
+    acceptable for a weight, and is why ``residual_rms`` is reported beside
+    ``reduced_chi2``.
     """
     usable_ref = np.isfinite(i_ref) & (i_ref > 0)
     usable_other = np.isfinite(i_other) & (i_other > 0)
@@ -277,8 +251,7 @@ def scale_to_overlap(
         which is what a pure scale factor is; ``"median"`` takes the median of
         the per-bin ratios, which ignores the errors and is the one to reach for
         when a few bins are wild.
-    :param min_bins: refuse a fit resting on fewer reference bins than this. A
-        factor from three bins is a number, not a measurement.
+    :param min_bins: refuse a fit resting on fewer reference bins than this.
 
     :raises NoOverlap: the curves share no usable q range, or too little of one.
     """
@@ -300,8 +273,8 @@ def scale_to_overlap(
         factor_error = float("nan")
     else:
         # Start unweighted, then weight by the combined error at that estimate.
-        # One refinement is enough: the weights depend on `a` only through the
-        # other curve's contribution, which is second order here.
+        # One refinement is enough because the weights depend on the factor only
+        # through the other curve's error, a second-order effect.
         first = float((reference * other).sum() / (other**2).sum())
         variance = np.zeros_like(reference)
         if sigma_r is not None:
@@ -365,15 +338,15 @@ def combine_curves(
 ) -> tuple[Any, OverlapScaling]:
     """One curve from two, with ``other`` scaled onto the reference.
 
-    ``units``, when given, is recorded on the result; the caller has already
-    checked that both inputs share it (:func:`require_same_units`).
+    ``units``, when given, is recorded on the result. The caller must already
+    have checked that both inputs share it (:func:`require_same_units`).
 
     Returns a Dataset over a q axis that is the sorted union of both, carrying
     ``intensity``, ``sigma`` and ``source`` (0 = reference only, 1 = scaled
     other only, 2 = both). Where the two overlap they are combined by inverse
     variance if both carry errors, and averaged otherwise.
 
-    The reference keeps its own values untouched: only the other detector moves.
+    Only the other detector is scaled.
     """
     import xarray as xr
 

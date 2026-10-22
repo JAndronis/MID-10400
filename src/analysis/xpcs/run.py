@@ -3,8 +3,8 @@
 Two stages, two files, each behind its own lock. The first reads proc and fills
 the photon store with whichever hit trains it lacks; the second reads only the
 store. A run whose results are already complete is answered from the file with
-nothing written (CLAUDE.md pitfall 26), and a larger hit set later extracts only
-its new trains.
+nothing written, so a relaunched job cannot rewrite it, and a larger hit set
+later extracts only its new trains.
 """
 
 from __future__ import annotations

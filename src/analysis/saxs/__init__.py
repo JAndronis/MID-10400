@@ -1,8 +1,8 @@
-"""AGIPD SAXS loader and integrator — the ``agipd_saxs`` DAMNIT variable.
+"""AGIPD SAXS loader and integrator behind the ``agipd_saxs`` DAMNIT variable.
 
 The pass is a sparse full-split operator, per-cell base masks, and a plan,
-worker and writer that address every row by label. See
-``context/agipd-saxs-integrator.md`` for the design.
+worker and writer that address every row by train label, never by array
+position.
 """
 
 from __future__ import annotations

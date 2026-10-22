@@ -1,7 +1,7 @@
 """What the droplet figures share: the notebook's style, panel grids, colours, q axes.
 
 The "science" style sets text in LaTeX, and the system TeX on the Maxwell nodes lacks
-``type1cm.sty``: ``module load texlive/2022`` first (`latex_ok` checks).
+``type1cm.sty``, so run ``module load texlive/2022`` first (`latex_ok` checks).
 """
 
 from __future__ import annotations

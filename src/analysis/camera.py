@@ -1,21 +1,13 @@
 """Droplet camera videos: every image of a run as a labelled H.264 file.
 
 The camera images go to tape with raw, so each run keeps a video in
-``usr/cached_files/droplet_videos/`` (CLAUDE.md open task 20e;
-``context/diagnostics.md`` §6). Adapted from p010646
-(``transfer_context/09_camera_video.md`` and ``templates/camera_video.py``):
-- grey levels from the 0.5 / 99.5 % percentiles of 8 images spread over the run;
-- averaging over ``binning`` × ``binning`` pixels with numpy, cropped to even
-  sides as yuv420p needs;
-- every frame labelled with Pillow: the run, the train ID and the seconds since
-  the first image, because the video plays at a constant rate and a DAQ gap is a
-  jump;
-- a bounded thread pool prepares blocks of images, written to ffmpeg in train
-  order with at most 2 × workers blocks waiting;
-- the MP4 ``comment`` records the display choices; the raw data are untouched.
+``usr/cached_files/droplet_videos/``. Every frame is labelled with the run, the
+train ID and the seconds since the first image, because the video plays at a
+constant rate and a DAQ gap shows only as a jump. The MP4 ``comment`` records
+the display choices; the raw data are untouched.
 
-ffmpeg is ``imageio-ffmpeg``'s static build (7.0.2, with libx264): there is none
-on PATH, and the EuXFEL env's is redeployed nightly. It has no ffprobe, so
+ffmpeg is ``imageio-ffmpeg``'s static build (with libx264), because there is
+none on PATH and the EuXFEL env's is redeployed nightly. It has no ffprobe, so
 :func:`count_frames` decodes the file with the same ffmpeg.
 
 Nothing here imports DAMNIT; the cells are in ``analysis.diagnostics.damnit``.
@@ -47,15 +39,14 @@ __all__ = [
     "write_camera_video",
 ]
 
-#: The droplet camera (``lsxfel`` on r0016, r0060, r0318, r0423, 2026-10-14:
-#: (494, 659) uint16, one image per train, no gaps).
+#: The droplet camera: (494, 659) uint16, one image per train.
 CAMERA_SOURCE = "MID_EXP_SAM/CAM/CAM5:daqOutput"
 IMAGE_KEY = "data.image.pixels"
 VIDEO_ROOT = Path("/gpfs/exfel/exp/MID/202601/p010400/usr/cached_files/droplet_videos")
 
 #: Trains per second, for the seconds in the label.
 TRAIN_RATE_HZ = 10
-#: 3× real time for a camera that records every train (user, 2026-10-13).
+#: 3x real time for a camera that records every train.
 DEFAULT_FPS = 30
 DEFAULT_BINNING = 1
 DEFAULT_CRF = 23
@@ -108,8 +99,8 @@ def camera_facts(run, source: str = CAMERA_SOURCE) -> dict[str, Any]:
 def first_image(run, source: str = CAMERA_SOURCE) -> tuple[int, np.ndarray]:
     """The run's first image of ``source`` and its train ID, reading only it.
 
-    ``kd.ndarray()[0]`` would load every image (OOM-killed inside DAMNIT on
-    p010646).
+    ``kd.ndarray()[0]`` would load every image, enough to run out of memory
+    inside DAMNIT.
 
     :raises ValueError: the camera recorded no image in this run.
     """
@@ -124,7 +115,10 @@ def first_image(run, source: str = CAMERA_SOURCE) -> tuple[int, np.ndarray]:
 
 
 def to_8bit(image: np.ndarray, limits: tuple[float, float], binning: int) -> np.ndarray:
-    """Average ``binning`` × ``binning`` pixels, crop to even sides, scale to uint8."""
+    """Average ``binning`` x ``binning`` pixels, crop to even sides, scale to uint8.
+
+    yuv420p needs even sides.
+    """
     img = np.asarray(image, dtype=np.float32)
     if binning > 1:
         h, w = (np.array(img.shape) // binning) * binning
@@ -168,13 +162,14 @@ def write_camera_video(
     """Write every image of ``source`` in ``run`` to ``path`` (MP4, replaced).
 
     The file is written beside ``path`` under a temporary name and renamed into
-    place, so a second job writing the same run (pitfall 26) never leaves a
-    truncated video behind, and a failed write leaves the old one.
+    place, so a second job writing the same run (DAMNIT can launch a variable
+    twice) never leaves a truncated video behind, and a failed write leaves the
+    old one.
 
     :param limits: grey levels mapped to 0 and 255; default the
         ``PERCENTILES`` of ``LIMIT_SAMPLES`` images spread over the run.
-    :param workers: threads preparing frames. Explicit, never the CPU count
-        (pitfall 10); libx264 threads itself.
+    :param workers: threads preparing frames. Explicit, never the CPU count,
+        which counts hyperthreads; libx264 threads itself.
     :returns: frames written, first and last train, limits, the usual step, the
         number of gaps, the saturated fraction of the sample, the output size
         and the wall time.

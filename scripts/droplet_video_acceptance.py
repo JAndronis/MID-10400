@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Phase E acceptance: droplet videos (``analysis.camera``; context/diagnostics.md §6).
+"""Acceptance check for the droplet videos of ``analysis.camera``.
 
 Per run: the CAM5 facts, then the video written to its real place
 (``usr/cached_files/droplet_videos/r{run:04d}_cam5.mp4``) with the wall time and
@@ -9,8 +9,8 @@ independent build), with the stream's size, codec, rate and comment.
 
     python scripts/droplet_video_acceptance.py --runs 423 318 --workers 16
 
-Writes droplet_video_acceptance_<stamp>.json beside itself. Not unit-tested
-(CLAUDE.md rule 7): run it on a node.
+Writes droplet_video_acceptance_<stamp>.json beside itself. Scripts are not
+unit-tested, so run it on a node after changing it.
 """
 
 from __future__ import annotations

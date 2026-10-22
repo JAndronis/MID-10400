@@ -121,7 +121,7 @@ def test_overrides_reach_the_config(classifier, the_pass):
 def test_a_run_without_hits_is_a_grey_result_not_a_failure(classifier, the_pass):
     classifier["ids"] = ()
     cell = xd.preprocess(10400, 423, *SIGNALS)
-    ((_, hits),) = the_pass  # the pass still runs: its zero-train file is the answer
+    ((_, hits),) = the_pass  # the pass runs; its zero-train file is the answer
     assert len(hits) == 0
     assert cell.summary_value == "no hits" and colour(cell) == xd.NO_HITS_COLOR
     assert json.loads(cell.data)["n_hits"] == 0
@@ -235,7 +235,7 @@ def test_the_overview_draws_from_the_two_readers(written):
 
 
 def test_only_the_damnit_module_imports_the_classifier():
-    """The hit rule is another session's to change: one importer, one seam."""
+    """The hit rule changes on its own schedule, so exactly one module may import it."""
     package = Path(xd.__file__).parent
     importers = []
     for path in sorted(package.glob("*.py")):

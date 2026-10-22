@@ -7,8 +7,8 @@ The analysis columns are ``Group`` classes, which DAMNIT expands to
 ``<group>.<var>`` names; this module loads the file through DAMNIT's own
 ``ctxrunner`` so it sees the expanded names.
 
-Nothing in this module runs a variable — that needs real data — it only checks
-that DAMNIT could find and order them.
+Nothing in this module runs a variable, which would need real data. It only
+checks that DAMNIT could find and order them.
 """
 
 from __future__ import annotations
@@ -42,8 +42,8 @@ def variables() -> dict:
         # The context is compiled without this module's `from __future__ import
         # annotations`: under PEP 563 an annotation becomes its own source
         # text and "var#agipd.saxs" would arrive with quotes, so no dependency
-        # would resolve (CLAUDE.md pitfall 11). ctxrunner compiles with
-        # dont_inherit semantics of its own, which is the faithful path.
+        # would resolve. ctxrunner compiles with dont_inherit semantics of its
+        # own, which is the path DAMNIT takes.
         source = (CONTEXT_DIR / "context.py").read_text()
         return dict(ctxrunner.build_context_from_code(source, "context.py").vars)
     finally:
@@ -181,14 +181,14 @@ def test_a_grouped_variable_carries_its_techniques_tags(variables, name):
 def test_the_agipd_saxs_variable_is_wired(variables):
     variable = variables["agipd.saxs"]
     assert variable.title == "AGIPD I(q)"
-    # cluster=True: one Slurm job per run on a whole node, which is what the
-    # 36-worker pool needs.
+    # cluster=True: one Slurm job per run on a whole node, which the worker pool
+    # sizes itself to.
     assert variable.cluster is True
     assert variables["agipd.iq_overview"].arg_dependencies() == {"grid": "agipd.saxs"}
 
 
 def test_the_titles_still_match_the_reprocess_patterns(variables):
-    """``damnit reprocess --match`` compares title substrings (damnit-integrity §7)."""
+    """``damnit reprocess --match`` selects variables by a substring of the title."""
     titles = {name: variables[name].title.lower() for name in GROUPED}
     frames = [n for n, t in titles.items() if "frames used" in t]
     assert set(frames) == {
@@ -209,12 +209,11 @@ def test_the_old_pipeline_is_gone():
 
 
 #: The only variables that read detector proc; every other column reads a file
-#: one of them wrote (user, 2026-10-14: one read, the table says who computes).
-#: Each entry is the dependencies the variable must have. The detector passes
-#: need none: they read proc alone. The hit-train XPCS pass needs the whole run's
-#: ``agipd.saxs`` (the hit rule is a running percentile over the run, and a mesh
-#: block spans runs) plus the flux, so its read of proc is a second one,
-#: unavoidably, and comes after the first.
+#: one of them wrote. Each entry is the dependencies the variable must have. The
+#: detector passes need none: they read proc alone. The hit-train XPCS pass needs
+#: the whole run's ``agipd.saxs`` (the hit rule is a running percentile over the
+#: run, and a mesh block spans runs) plus the flux, so its read of proc is a
+#: second one, unavoidably, and comes after the first.
 PREPROCESSING = {
     "agipd.preprocessing": {},
     "jungfrau.preprocessing": {},
@@ -241,8 +240,11 @@ def test_one_variable_per_detector_kind_reads_proc(variables):
 
 
 def test_only_the_preprocessing_variables_call_a_pass():
-    """``preprocess`` appears in their bodies and nowhere else, and no body calls
-    the computing entry points of the old layout."""
+    """Only the preprocessing variables call ``preprocess``.
+
+    No other body calls a pass's entry point (``agipd_saxs``, ``jungfrau_waxs``)
+    directly, which would read proc a second time.
+    """
     for name, function in _group_functions().items():
         call = _call_of(function)
         called = (
@@ -268,9 +270,10 @@ FRAMES_USED = (
 
 @pytest.mark.parametrize("name", FRAMES_USED)
 def test_frames_used_never_waits_on_the_pass(variables, name):
-    """No var# on the pass, so asking for the cell cannot relaunch it (pitfall 26).
+    """No var# on the pass, so asking for the cell cannot relaunch the pass.
 
-    Not a cluster job either: it reads one status column.
+    A relaunch while the pass is running would put two writers on one file. The
+    cell is not a cluster job either: it reads one status column.
     """
     variable = variables[name]
     assert variable.arg_dependencies() == {}
@@ -302,10 +305,11 @@ def test_the_context_file_holds_no_heavy_integration_logic(name):
 
 
 def test_no_call_in_the_context_file_passes_overwrite():
-    """CLAUDE.md pitfalls 26-27: DAMNIT reruns a pass whenever a dependant is
-    requested, and with ``overwrite=True`` every rerun truncates the file.
-    Reprocessing is done by moving the output aside
-    (``scripts/reprocess_safe.py``), never from the context file."""
+    """DAMNIT reruns a pass whenever a dependant is requested.
+
+    With ``overwrite=True`` every such rerun would truncate the file. A reprocess
+    moves the output aside instead (``scripts/reprocess_safe.py``).
+    """
     offenders = [
         f"line {node.lineno}"
         for node in ast.walk(_tree())
@@ -340,7 +344,7 @@ def test_no_call_in_the_context_file_passes_overwrite():
 def test_the_integration_wrappers_pass_no_config(name):
     """The config DAMNIT runs with lives in ``analysis.*.damnit``, in one place.
 
-    A keyword here — ``npt=200`` was one — is a config that scripts judging
+    A keyword here, such as ``npt=200``, is a config that scripts judging
     DAMNIT's files (``reprocess_safe``, ``is_complete``) cannot see.
     """
     call = _call_of(_group_functions()[name])
@@ -368,16 +372,18 @@ def test_the_hit_train_pass_replaced_the_extra_speckle_one(variables):
 
 @pytest.mark.parametrize("name", XPCS_LEGACY)
 def test_the_reproduced_xpcs_columns_wait_on_the_hit_pass_only(variables, name):
-    """Each old extra-speckle figure now hangs off ``xpcs.preprocessing`` alone."""
+    """The reproduced extra-speckle figures depend on ``xpcs.preprocessing`` alone."""
     deps = variables[name].arg_dependencies()
     assert deps.pop("rep", "rep_rate") == "rep_rate"
     assert deps == {"prep": "xpcs.preprocessing"}
 
 
 def test_the_hit_rule_comes_before_what_works_on_the_hits(variables):
-    """A clean run orders: preprocessing, SAXS/WAXS columns, the hit rule, then
-    the photon statistics and the hit-train pass on the hits (user, 2026-10-19).
-    The dependency on ``hits.summary`` is what makes DAMNIT run them in that order."""
+    """A clean run goes preprocessing, SAXS/WAXS columns, the hit rule, then the
+    photon statistics and the hit-train pass on the hits.
+
+    The dependency on ``hits.summary`` is what makes DAMNIT run them in that order.
+    """
     assert variables["hits.summary"].arg_dependencies()["saxs"] == "agipd.saxs"
     assert variables["hits.geometry"].arg_dependencies()["summary"] == "hits.summary"
     for name in ("xpcs.preprocessing", "xpcs.photon_statistics"):

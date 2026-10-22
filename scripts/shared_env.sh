@@ -13,7 +13,7 @@
 #                  environment when pyproject.toml or uv.lock changed. The git
 #                  hooks run this after every commit, merge and rewrite on `main`
 #   install-hooks  install those hooks into the source clone
-#   link-kernel    make the shared kernel visible to *your* Jupyter (once per user)
+#   link-kernel    make the shared kernel visible to your Jupyter (once per user)
 #   venv           sync the .venv of the clone you are in against the shared
 #                  interpreter, dev group included (for development clones)
 

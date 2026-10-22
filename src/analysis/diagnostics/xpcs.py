@@ -1,4 +1,4 @@
-"""Per-run XPCS SNR, the keep criterion (context/run-triage.md §4.6), for one run.
+"""Per-run XPCS SNR, the keep criterion, for one run.
 
 A thin layer over `analysis.triage.xpcs`: the same reduction (`measure_run`, from the
 run's hit-train results file, `analysis.xpcs.result.XpcsHits`), the same
@@ -6,17 +6,16 @@ analytical SNR per 30 s slice (`summarise`),
 
     SNR = β · k̄ · sqrt(N_pix · (F − 1) · φ · n) / √2,
 
-with β the fixed `REFERENCE_BETA` table, the same for every run (user, 2026-10-13):
-4.8 % at 0.029 Å⁻¹ to 1.9 % at 0.0805, from r450 and r493–496. A β per run, or one
-that moves with the set of runs it came from, would make the verdict depend on that
-set. A report's ``beta`` block can still be passed in to compare.
+with β the fixed `REFERENCE_BETA` table, the same for every run. A β per run, or
+one that moves with the set of runs it came from, would make the verdict depend on
+that set. A report's ``beta`` block can still be passed in to compare.
 
-An unknown β gives SNR NaN and ``extractable`` None — never False.
+An unknown β gives SNR NaN and ``extractable`` None, never False.
 
 `xpcs_score` is the per-run diagnostic score: the SNR and the k̄ per XPCS ROI, both
-over the run's droplet hits only (the results file's hit set, which the pass took from
-`analysis.triage.classify.hits`; user, 2026-10-13), and the number of ROIs whose
-mean k̄ reaches `KBAR_MIN` (user, 2026-10-14).
+over the run's droplet hits only (the results file's hit set, which the pass took
+from `analysis.triage.classify.hits`), and the number of ROIs whose mean k̄ reaches
+`KBAR_MIN`.
 
 Nothing here reads DAMNIT's ``xpcs_ttcf`` or extra-speckle's ``kbar.nc``; the
 slices are anchored to the first usable hit, because the results file knows only

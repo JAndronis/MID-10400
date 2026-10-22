@@ -1,25 +1,16 @@
 """Output file, ledger and resume for one detector.
 
-The layout, the ledger, resume, the label checks and ``pooled_per_train`` are
-:class:`analysis.common.writer.FrameTableWriter`. What is here is the JUNGFRAU
-schema and the two JUNGFRAU stores.
+:class:`analysis.common.writer.FrameTableWriter` owns the layout, the ledger,
+resume, the label checks and ``pooled_per_train``. This module adds the
+JUNGFRAU schema and the operator and cell stores.
 
-Two columns differ from AGIPD in a way worth stating:
-
-* **There is no ``reader_pulseId``.** ``JUNGFRAU`` is a ``MultimodDetectorBase``
-  and its ``MultimodKeyData`` has ``train_id_coordinates()`` and nothing else —
-  no pulse ids exist in the reader at all. Which of a train's X-ray
-  pulses each memory cell sampled has to be aligned from ``XrayPulses``/LITFRM
-  onto the cell axis, and until that alignment exists the pass stores the cell
-  id and leaves pulse identity absent rather than synthesising one from
-  position.
-* **``max_count`` becomes ``max_kev``**, a float. ``max_kev``, ``max_kev_static``
-  and ``energy_valid`` describe the raw keV values the frame arrived with;
-  ``signal`` and ``variance`` are photon counts (``provenance.attrs["units"]``),
-  counted per ASIC by :mod:`analysis.waxs.photons`, whose levels are stored per
-  frame in ``asic_level`` so any frame can be recounted from proc.
-
-A file written before photon counting has no ``units`` attribute and counts
+There is no ``reader_pulseId`` column, because the JUNGFRAU reader exposes
+train ids only and no pulse ids. The cell id is stored and pulse identity is
+left absent rather than synthesised from position. ``max_kev``,
+``max_kev_static`` and ``energy_valid`` describe the raw keV values a frame
+arrived with. ``signal`` and ``variance`` are photon counts, counted per ASIC
+by :mod:`analysis.waxs.photons`, with each frame's levels in ``asic_level`` so
+any frame can be recounted from proc. A file with no ``units`` attribute counts
 keV. :func:`file_units` says which, and every reader that combines two files
 refuses to mix them.
 """
@@ -50,8 +41,7 @@ __all__ = [
 
 #: What ``signal`` counts in a file this writer produces.
 PHOTONS = "photons"
-#: What it counts in a file written before photon counting, which carries no
-#: ``units`` attribute at all.
+#: What it counts in a file with no ``units`` attribute.
 KEV = "keV"
 
 log = logging.getLogger(__name__)
@@ -87,9 +77,9 @@ class JungfrauWaxsWriter(FrameTableWriter):
         "n_level_missing": "n_level_missing",
         "count_energy_kev": "count_energy_kev",
     }
-    #: The zero level of each ASIC, keV, as counted with. NaN for an ASIC that
-    #: had none in an integrated frame — a measured level of 0.0 is a real
-    #: value, so 0 cannot stand for "none" — and 0 in rows never integrated.
+    #: The zero level of each ASIC in keV, as counted with. NaN for an ASIC that
+    #: had none in an integrated frame, because 0.0 is a valid measured level.
+    #: 0 in rows never integrated.
     FRAME_ARRAYS = {"asic_level": (N_ASICS, np.float32)}
     EXTRA_GROUPS = ("operator", "cells")
     UNITS = PHOTONS
@@ -97,10 +87,8 @@ class JungfrauWaxsWriter(FrameTableWriter):
     def store_operator(self, op: Any) -> None:
         """The q axis, the solid angle, the static mask and the PONI verbatim.
 
-        The PONI text is stored rather than only its path: it is a few hundred
-        bytes and it makes the file self-describing, so a reader months later
-        can rebuild the identical geometry without the file still being on
-        GPFS under the same name.
+        The PONI text is stored, not only its path, so a later reader can
+        rebuild the identical geometry from this file alone.
         """
         group = self._f["operator"]
         payload = {
@@ -189,13 +177,11 @@ class JungfrauWaxsWriter(FrameTableWriter):
     def data_check_summary(self) -> dict[str, Any]:
         """Pixels the value check excluded, and frames it refused.
 
-        The check drops the offending *pixel* and keeps the frame, so what
-        matters is how many frames lost pixels and how many they lost.
-        ``n_frames_refused`` is the residue: a frame with nothing left to
-        integrate at all, which should not happen and is loud if it does.
+        The check drops the offending pixel and keeps the frame, so the record
+        counts how many frames lost pixels and how many they lost.
+        ``n_frames_refused`` counts frames with no pixel left to integrate.
 
-        :returns: the record, empty when the run lost nothing, so a clean run
-            carries no attribute rather than one full of zeros.
+        :returns: the record, or an empty dict when the run lost nothing.
         """
         frames = self._f["frames"]
         status = frames["status"][:]
@@ -223,21 +209,19 @@ class JungfrauWaxsWriter(FrameTableWriter):
         }
 
     def per_cell(self) -> Any:
-        """Per-frame ``I(q)`` on a (train, cell) grid — see :func:`per_cell`."""
+        """Per-frame ``I(q)`` on a (train, cell) grid (:func:`per_cell`)."""
         return per_cell(self._f)
 
 
 def per_cell(source: Any, *, dtype: Any = np.float32) -> Any:
     """Per-frame ``I(q)`` as a ``(trainId, cellId, q)`` DataArray.
 
-    The grid is small — 3000 trains x 8 lit cells at ``npt`` 500 is 48 MB as f4,
-    against 0.93 GB for the AGIPD per-pulse grid — so it is returned whole.
+    The grid is small (trains x lit cells x ``npt``), so it is returned whole.
 
     :param source: an open handle or a path to a finished output file.
     :param dtype: storage for the intensity grid.
     :returns: the grid, carrying ``data_check`` so a DAMNIT user can see why a
-        slot is empty — see :func:`analysis.common.writer.per_label` — and
-        ``units``, so nothing downstream has to guess what it counts.
+        slot is empty (:func:`analysis.common.writer.per_label`), and ``units``.
     """
     grid = per_label(
         source,

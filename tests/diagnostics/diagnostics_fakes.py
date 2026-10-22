@@ -100,9 +100,9 @@ def write_frame_table(
         cls._create_layout(handle, StubConfig(npt), plan, "stub")
         frames = handle["frames"]
         if kind == "jungfrau" and units is None:
-            # ``units=None`` means a file from before photon counting (open task
-            # 18): the current writer stamps ``units = "photons"`` and lays out
-            # the counting columns, which such a file never had.
+            # ``units=None`` means a keV file written without photon counting: the
+            # current writer stamps ``units = "photons"`` and lays out the
+            # counting columns, which such a file never had.
             handle["provenance"].attrs.pop("units", None)
             for name in KEV_ERA_ABSENT:
                 if name in frames:
@@ -121,8 +121,8 @@ def write_frame_table(
         column = "photons_valid" if kind == "agipd" else "energy_valid"
         frames[column][:] = scalar.reshape(-1)
         for name, values in (extra_columns or {}).items():
-            # a column a later writer lays out itself (S2's n_photons) is filled,
-            # one it does not yet know is created
+            # a column the writer lays out itself (n_photons) is filled, any
+            # other is created
             if name in frames:
                 frames[name][:] = np.asarray(values).reshape(-1)
             else:

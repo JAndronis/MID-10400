@@ -1,4 +1,4 @@
-"""Scaling one detector onto the other over the overlap (§6 O5)."""
+"""Scaling one detector onto the other over the overlap."""
 
 from __future__ import annotations
 
@@ -85,12 +85,12 @@ def test_a_q_mismatch_is_caught_when_the_overlap_has_a_feature():
 
 
 def test_a_q_mismatch_is_invisible_on_a_featureless_curve():
-    """Measured, and the reason the check must not be oversold.
+    """A q error on a featureless curve disappears into the factor.
 
     ``I(1.05 q) = 1.05**-2 I(q)`` for a power law, so a 5 % q error is exactly a
-    9.3 % scale error and the fit simply absorbs it. On r0423 — no Bragg
-    reflections — a good chi2 here means the two detectors agree in *shape*, not
-    that either q axis is right.
+    9.3 % scale error and the fit absorbs it. On a run without Bragg
+    reflections, a good chi2 means the two detectors agree in shape, and says
+    nothing about whether either q axis is right.
     """
     i_ref, s_ref, i_other, s_other = curves(shape=featureless, q_shift=1.05)
     scaling = scale_to_overlap(
@@ -99,8 +99,8 @@ def test_a_q_mismatch_is_invisible_on_a_featureless_curve():
     # The fit still looks healthy...
     assert scaling.reduced_chi2 < 1.0
     assert scaling.residual_rms < 0.01
-    # ...while the q error has been absorbed into a factor that is simply wrong,
-    # by far more than its own stated precision. Nothing in the output says so.
+    # ...while the q error has gone into a factor that is wrong by far more
+    # than its own stated precision. Nothing in the output says so.
     assert abs(scaling.factor - TRUE_FACTOR) / TRUE_FACTOR > 0.02
     assert abs(scaling.factor - TRUE_FACTOR) > 10 * scaling.factor_error
 
@@ -116,7 +116,7 @@ def test_curves_that_do_not_meet_are_refused():
 
 
 def test_too_thin_an_overlap_is_refused():
-    """A factor from three bins is a number, not a measurement."""
+    """A few shared bins are too few to fit a factor from."""
     with pytest.raises(NoOverlap, match="fewer than"):
         scale_to_overlap(
             np.linspace(10.0, 20.0, 50),
@@ -229,8 +229,8 @@ def test_combine_files_reads_two_finished_runs(
     assert np.isfinite(combined["intensity"].values).all()
     assert combined.attrs["units"] == "photons"
 
-    # A file written before photon counting carries no units attribute and
-    # counts keV; combining it with a photon file must be refused, not fitted.
+    # A file with no units attribute counts keV, so combining it with a photon
+    # file must be refused rather than fitted.
     import h5py
 
     from analysis.waxs.combine import UnitsMismatch
@@ -272,7 +272,7 @@ def test_a_q_dependent_difference_tilts_the_residual():
 
     Modelled on the polarisation factor, whose azimuthal amplitude goes as
     sin^2(2theta) and so grows through the overlap. No single factor can remove
-    it, and the slope is what says so.
+    it, and the residual slope shows it.
     """
     i_ref, s_ref, i_other, s_other = curves()
     tilt = 1.0 + 0.01 * (Q_OTHER - Q_OTHER.min()) / np.ptp(Q_OTHER)
@@ -285,8 +285,8 @@ def test_a_q_dependent_difference_tilts_the_residual():
         sigma_other=s_other,
     )
     assert abs(scaling.residual_slope_per_nm) > 1e-4
-    # ...and the two ends of the overlap straddle zero, because the factor fits
-    # the middle: that shape is the signature, not the magnitude.
+    # ...and the two ends of the overlap straddle zero because the factor fits
+    # the middle. The sign change marks a tilt whatever its size.
     assert scaling.residual_at_q_low * scaling.residual_at_q_high < 0
 
 

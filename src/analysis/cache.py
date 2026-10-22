@@ -1,7 +1,7 @@
 """On-disk cache of per-train SAXS inputs, so notebooks re-run without re-reading runs.
 
 Only what the sources hold is stored, reduced by averaging or summing over frames and
-nothing else. The pulse-averaged I(q) is DAMNIT's ``agipd_saxs`` grid, neither scaled
+nothing else. The pulse-averaged I(q) is DAMNIT's ``agipd.saxs`` grid, neither scaled
 nor background subtracted; the droplet scale factors, the droplet fit and the D^2-law
 fit sit beside it as variables and attributes and are never applied; the 2D detector
 sums are photon counts per pixel with no mask beyond the frame's own; the XPCS g2 and
@@ -58,8 +58,11 @@ N_MODULES, MODULE_SHAPE = 16, (512, 128)
 
 def stale(attrs, **expected) -> list[str]:
     """The keys of `expected` whose value differs from the JSON stored under the
-    same key in `attrs` (a file's attributes, read inside its ``with`` block,
-    CLAUDE.md pitfall 13). A key missing from `attrs` is stale."""
+    same key in `attrs`. A key missing from `attrs` is stale.
+
+    Pass a file's attributes while the file is open: an h5py attribute manager kept
+    past its ``with`` block returns the default, so every key would read as stale.
+    """
     return [
         key
         for key, value in expected.items()
@@ -84,7 +87,7 @@ def _load(path: Path, inputs: dict, sources: list) -> xr.Dataset | None:
     if not path.exists():
         return None
     with xr.open_dataset(path, engine="h5netcdf") as ds:
-        # read every attribute inside the block (CLAUDE.md pitfall 13)
+        # read every attribute inside the block; after it they read as absent
         current = int(ds.attrs.get("cache_version", -1)) == CACHE_VERSION and not (
             stale(ds.attrs, inputs=inputs, sources=sources)
         )
@@ -524,8 +527,8 @@ XPCS_AVERAGINGS = ("pooled", "es")
 def _train_terms(hits, sums) -> dict[str, np.ndarray]:
     """The pooled sums' per-row lag terms placed on the hit trains, NaN where absent.
 
-    ``sums.rows`` are positions in ``hits.train_ids`` (CLAUDE.md pitfall 4: the
-    terms follow the train, not the row order of the sums).
+    ``sums.rows`` are positions in ``hits.train_ids``, so the terms follow the train,
+    not the row order of the sums.
     """
     shape = (hits.train_ids.size, *sums.on.shape[1:])
     out = {
@@ -562,14 +565,14 @@ def pool_g2(
     the dataset's own ``g2``, ``sigma_g2``, ``g2_paired``, ``baseline``, ``c2``,
     ``sigma``. Pool a selection (by time, droplet volume, ``kbar``, ...) with this;
     do not average ``train_g2_num / train_g2_den`` over trains, which is the mean of
-    noisy per-train ratios, not the ratio of sums (CLAUDE.md pitfall 8). The
-    two-time maps of a subset come from ``XpcsHits.ttcf(trains=...)``.
+    noisy per-train ratios, not the ratio of sums. The two-time maps of a subset come
+    from ``XpcsHits.ttcf(trains=...)``.
 
     :param trains: trainIds, by label; unusable ones are skipped as the reader does.
     :param skip_last: lags dropped from the end; ``None`` for the reader's default.
     :param n_blocks: jackknife blocks; ``None`` for the reader's default.
     :raises ValueError: `ds` has no per-train terms (an ``averaging="es"`` cache, or
-        one written before them), or a trainId is not a hit train.
+        an older one without them), or a trainId is not a hit train.
     """
     from analysis.common.status import FrameStatus
     from analysis.xpcs.result import (
@@ -666,7 +669,7 @@ def xpcs_run(
 
     ``train_g2_num``, ``train_g2_den``, ``train_baseline_num``, ``train_baseline_den``
     over (trainId, roi_q, lag_frame), pooled averaging only
-        Each hit train's lag terms of g2 and of its baseline, lags ``1 … P − 1``
+        Each hit train's lag terms of g2 and of its baseline, lags ``1 ... P - 1``
         (``lag_frame``, with ``lag_tau`` in seconds), the numerators and
         denominators `XpcsHits.g2` pools. NaN for an unusable train; the baseline
         terms are NaN for a usable train without a baseline. ``num / den`` is one
@@ -916,7 +919,8 @@ def _open_proc(run_dir):
 def _sum_job(args) -> tuple[int, np.ndarray, np.ndarray, int]:
     """Worker: one module's counts and valid-frame counts over a few trains."""
     run_dir, train_ids, modno = args
-    os.environ.setdefault("EXTRA_NUM_THREADS", "1")  # CLAUDE.md pitfall 3
+    # EXtra-data's threaded decompression is slower than the HDF5 path here
+    os.environ.setdefault("EXTRA_NUM_THREADS", "1")
     from extra_data import by_id
     from extra_data.components import AGIPD1M
 

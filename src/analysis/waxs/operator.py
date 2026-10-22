@@ -1,24 +1,16 @@
 """Geometry, the cached pyFAI engine and the q axis.
 
-**Why there is no sparse kernel here.** The AGIPD pass lifts pyFAI's CSC matrix
-out of the engine and integrates over photon hits, because its frames are
-0.7–1.8 % non-zero. JUNGFRAU frames are dense — 0.005 % of pixels are exactly
-zero and a fifth are negative — so this pass runs dense pyFAI per frame.
+JUNGFRAU frames are dense, unlike AGIPD's sparse photon hits, so this pass runs
+dense pyFAI per frame and carries no matrix of its own.
 
-**Why the dynamic mask is a NaN, not a ``mask=`` argument.** pyFAI keys its
-cached sparse matrix on a checksum of the mask, so a mask that changes per frame
-rebuilds the full-split CSC matrix every frame, which its own docstring calls
-"a very time consuming operation". Building the engine **once** with the ``.edf``
-static mask and carrying the per-frame mask as NaN in the data and variance
-arrays is several times faster and gives bit-identical sums: pyFAI's
-preprocessing drops a non-finite pixel from the numerator *and* the
-normalisation, which is the exact-denominator property AGIPD has to reconstruct
-sparsely.
-
-That option exists here and not there because JUNGFRAU frames are ``float32``.
-AGIPD's ``int16`` cannot carry NaN, which is what forced the sparse correction.
-:mod:`analysis.waxs.selftest` gates the equivalence on real frames so a change
-in pyFAI's NaN handling cannot pass silently.
+pyFAI keys its cached sparse matrix on a checksum of the mask, so a mask that
+changes per frame rebuilds the full-split matrix every frame. The engine is
+therefore built once with the ``.edf`` static mask, and the per-frame mask is
+carried as NaN in the ``float32`` data and variance. pyFAI drops a non-finite
+pixel from the numerator and the normalisation alike, so the sums are
+bit-identical to passing the mask. :mod:`analysis.waxs.selftest` checks that
+equivalence on real frames, so a change in pyFAI's NaN handling cannot pass
+silently.
 """
 
 from __future__ import annotations
@@ -53,18 +45,17 @@ class WavelengthMismatch(ValueError):
 class WaxsOperator:
     """The geometry, the static mask and the q axis they produce.
 
-    Deliberately small: unlike AGIPD's ``SparseOperator`` this carries no
-    matrix, because the matrix lives inside the pyFAI engine that
-    :func:`build_operator` returns alongside it. The PONI text is carried
-    verbatim so a worker — or a reader months later — can rebuild the identical
-    geometry from the output file alone.
+    It carries no matrix, which lives inside the pyFAI engine that
+    :func:`build_operator` returns beside it. The PONI text is carried verbatim
+    so a worker, or a later reader, can rebuild the identical geometry from the
+    output file alone.
     """
 
     q: np.ndarray  # float64 (npt,)   bin centres, cfg.unit
     static_bad: np.ndarray  # bool    (npix,)  non-zero = excluded, read-only
-    #: The same mask as ``static_bad``, 2-D and **writable**, for handing to
-    #: pyFAI. Built once and reused, so the hot loop neither copies per frame
-    #: nor passes pyFAI a read-only buffer.
+    #: The same mask as ``static_bad``, 2-D and writable, for handing to pyFAI,
+    #: whose kernels refuse a read-only buffer. Built once so the hot loop does
+    #: not copy it per frame.
     static_mask_2d: np.ndarray
     omega: np.ndarray  # float64 (npix,)  relative solid angle
     poni_text: str
@@ -80,7 +71,7 @@ class WaxsOperator:
 
     @property
     def q_populated(self) -> tuple[float, float]:
-        """The q range the kept pixels actually cover."""
+        """The q range of the bin centres."""
         return float(self.q.min()), float(self.q.max())
 
 
@@ -125,13 +116,12 @@ def build_operator(
 ) -> tuple[WaxsOperator, AzimuthalIntegrator]:
     """Load the PONI, build the cached engine and record the q axis.
 
-    :param poni_file: overrides ``cfg.poni_file``; the tests pass a synthetic
-        PONI written to a temporary directory.
+    :param poni_file: overrides ``cfg.poni_file``.
 
     :raises WavelengthMismatch: the PONI's wavelength and
         ``cfg.photon_energy_kev`` disagree by more than float32 precision. The
-        PONI carries its own wavelength and a mismatch means it was refined at
-        a different energy, so neither value may silently win: q scales with it.
+        PONI carries its own wavelength, and q scales with it, so neither value
+        may silently win.
     """
     path = Path(poni_file if poni_file is not None else cfg.poni_file or "")
     if not path.name:
@@ -159,10 +149,9 @@ def build_operator(
     # Writable and C-contiguous, because it is handed to pyFAI on every frame.
     mask_2d = np.array(static.bad.reshape(MODULE_SHAPE), dtype=bool, order="C")
 
-    # A zero frame and a zero variance: this call exists only to build and
-    # cache the sparse matrix and to read the bin centres off it. Two separate
-    # buffers, not one aliased twice, so pyFAI is never handed the same array
-    # as both signal and variance.
+    # This call only builds and caches the sparse matrix and reads the bin
+    # centres. Signal and variance are separate buffers so pyFAI is never handed
+    # one array as both.
     probe = ai.integrate1d(
         np.zeros(MODULE_SHAPE, dtype=np.float32),
         cfg.npt,

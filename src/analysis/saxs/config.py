@@ -50,10 +50,8 @@ DEFAULT_GEOMETRY_FILE = f"{_PROPOSAL_ROOT}/usr/geometry/geom_latest.geom"
 
 #: The single hand-maintained AGIPD pixel mask; non-zero = excluded.
 #:
-#: It is the mask the live DAMNIT context used for the most recent
-#: reintegration of the runs, and it covers both the generally bad pixels and
-#: the anisotropic low-q lobe (integrator I4, option (a)) — there is
-#: deliberately no second mask to keep in step with it. The older
+#: It covers both the generally bad pixels and the anisotropic low-q lobe.
+#: There is deliberately no second mask to keep in step with it. The older
 #: ``usr/Shared/IA/custom_agipd_mask.npy`` is superseded and must not be
 #: combined with this one. ``usr/masks`` is the same directory as
 #: ``/gpfs/exfel/u/usr/MID/202601/p010400/masks``.
@@ -62,21 +60,20 @@ DEFAULT_PIXEL_MASK_FILE = f"{_PROPOSAL_ROOT}/usr/masks/mask_2026-09-08_AGIPD_SAX
 #: Where the per-run output file is written.
 DEFAULT_OUTPUT_ROOT = f"{_PROPOSAL_ROOT}/scratch/agipd_saxs"
 
-#: Where the per-pixel window sums are written (context file §15).
+#: Where the per-pixel window sums are written.
 #:
 #: Not scratch: scratch does not survive the move to tape, and once proc is
 #: taped these sums are the only 2D record of a run left on disk.
 DEFAULT_PIXEL_SUMS_ROOT = f"{_PROPOSAL_ROOT}/usr/cached_files/agipd_pixel_sums"
 
-#: Where the per-frame photon statistics are written (context/xpcs-quality.md),
-#: beside the window sums and for the same reason.
+#: Where the per-frame photon statistics are written, beside the window sums
+#: and for the same reason.
 DEFAULT_PHOTON_STATS_ROOT = f"{_PROPOSAL_ROOT}/usr/cached_files/agipd_photon_stats"
 
 #: Fields the frame table's hash excludes. The shared operational set, plus the
-#: window-sum and photon-statistics fields: those go to separate files with
+#: window-sum and photon-statistics fields. Those go to separate files with
 #: hashes of their own, so none of them can change a number in
-#: ``agipd_saxs.h5`` — and adding them left the hash of every file already
-#: written unchanged.
+#: ``agipd_saxs.h5``.
 SAXS_OPERATIONAL_FIELDS: frozenset[str] = OPERATIONAL_FIELDS | {
     "pixel_sum_trains",
     "pixel_sums_root",
@@ -86,7 +83,7 @@ SAXS_OPERATIONAL_FIELDS: frozenset[str] = OPERATIONAL_FIELDS | {
 
 #: Beam centre in Fit2D pixel coordinates, agreed with the beamline scientist.
 #:
-#: These are **not** in the frame ``AGIPD_1MGeometry.to_pyfai_detector()``
+#: These are not in the frame ``AGIPD_1MGeometry.to_pyfai_detector()``
 #: produces, which puts the origin at the geometry origin so that PONI = 0 is
 #: the beam. They are in the frame of ``geom.to_distortion_array()``, whose
 #: origin is the corner of the assembled bounding box and whose coordinates are
@@ -103,10 +100,10 @@ SAXS_OPERATIONAL_FIELDS: frozenset[str] = OPERATIONAL_FIELDS | {
 DEFAULT_BEAM_CENTER_PX: float = 607.4598195630211
 DEFAULT_BEAM_CENTER_PY: float = 672.076693118667
 
-#: ``BadPixels`` bits seen in r0423 and r0426. Any
-#: other bit present in a run is a provenance flag and a warning, not a
-#: failure: every bit in these files marks an unusable pixel, so the blanket
-#: ``mask_bits`` stays correct, but an unrecorded bit must be looked at.
+#: ``BadPixels`` bits seen in the proc files of this proposal. Any other bit
+#: present in a run is a provenance flag and a warning, not a failure. Every
+#: bit in these files marks an unusable pixel, so the blanket ``mask_bits``
+#: stays correct, but an unrecorded bit must be looked at.
 EXPECTED_BITS: frozenset[int] = frozenset({0, 1, 7, 8, 9, 12, 13})
 
 
@@ -147,13 +144,14 @@ class AgipdSaxsConfig(PassConfigMembers):
     output_root: str = DEFAULT_OUTPUT_ROOT
     allow_incomplete: bool = False
     overwrite: bool = False
-    # ── per-pixel window sums (context file §15) ──────
+    # ── per-pixel window sums ──────
     #: Trains per window of per-pixel photon sums, or ``None`` for none. A
     #: window is a range of train ids from the run's first train, not a count
-    #: of trains. ``overwrite`` never applies to these: see §15.3.
+    #: of trains. ``overwrite`` never applies to these, because they are the
+    #: run's last 2D record once proc is taped.
     pixel_sum_trains: int | None = 10
     pixel_sums_root: str = DEFAULT_PIXEL_SUMS_ROOT
-    # ── per-frame photon statistics (context/xpcs-quality.md) ──────
+    # ── per-frame photon statistics ──────
     #: Histogram every frame per ring from the same read (``photon_stats``).
     #: ``overwrite`` never applies to these either.
     photon_stats: bool = True
@@ -216,7 +214,7 @@ class AgipdSaxsConfig(PassConfigMembers):
                 )
 
     def __getstate__(self) -> dict[str, Any]:
-        """Pickle by field name, not by position — see :mod:`analysis.common.config`."""
+        """Pickle by field name, so a field added later cannot shift the others."""
         return state_by_name(self)
 
     def __setstate__(self, state: Any) -> None:

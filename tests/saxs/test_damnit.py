@@ -1,10 +1,10 @@
-"""The DAMNIT-facing surface and the per-pulse reducer (P5).
+"""The DAMNIT-facing functions and the per-pulse reducer.
 
-The variable this backs runs once per run on a cluster node, and what it
-returns is what everyone downstream sees, so the grid's labelling is tested
-against a manual computation rather than against itself: a frame must land on
-the (train, pulse) slot its *stored* labels name, not the one its position
-implies (CLAUDE.md pitfall 4).
+The DAMNIT variable runs once per run on a cluster node, and everyone
+downstream reads what it returns, so the grid's labelling is tested against a
+manual computation rather than against itself. A frame must land on the
+(train, pulse) slot its *stored* labels name, not the one its position implies,
+because a dropped train shifts every later frame's position.
 """
 
 from __future__ import annotations
@@ -87,7 +87,7 @@ def test_every_frame_lands_on_the_slot_its_labels_name(finished):
 
 
 def test_a_slot_with_no_frame_is_zero_not_nan(finished):
-    """Context file §3 rule 7: a status code and zeros, never a NaN sentinel."""
+    """An empty slot holds zeros and a status count, never a NaN sentinel."""
     _, output = finished
     with h5py.File(output, "r+") as handle:
         handle["frames/status"][0] = FrameStatus.DATA_CHECK_FAILED
@@ -104,7 +104,7 @@ def test_a_slot_with_no_frame_is_zero_not_nan(finished):
 
 
 def test_unwritten_rows_are_counted_never_guessed_onto_a_slot(finished):
-    """An unprocessed row carries trainId 0 — it must not be placed anywhere."""
+    """An unprocessed row carries trainId 0, so it must not be placed anywhere."""
     _, output = finished
     with h5py.File(output, "r+") as handle:
         n = int(handle["trains/count"][0])
@@ -154,7 +154,7 @@ def test_chunking_does_not_change_the_grid(finished):
 
 # ── pooled: sigma ─────────────────────────────────────────────────────────────
 def test_pooled_carries_sigma(finished):
-    """σ(q) = sqrt(ΣV)/ΣN — the stored variance was unreachable before."""
+    """The pooled view carries σ(q) = sqrt(ΣV)/ΣN from the stored variance."""
     _, output = finished
     pooled = pooled_per_train(output)
     assert pooled["sigma"].dims == ("trainId", "q")
@@ -175,7 +175,7 @@ def test_pooled_carries_sigma(finished):
 
 
 def test_pooled_reads_from_the_file_alone(finished):
-    """Post hoc use (§9) has no plan object, only the output file."""
+    """Post hoc use has no plan object, only the output file."""
     _, output = finished
     assert pooled_per_train(output)["intensity"].shape[0] > 0
 
@@ -261,7 +261,7 @@ def _synthetic_grid(n_trains: int = 4, n_pulses: int = 6, npt: int = 5):
 
 
 def _axes(fig):
-    """``(plot axes, colour-bar axes)`` — matplotlib counts both in ``axes``."""
+    """Split ``fig.axes`` into ``(plot axes, colour-bar axes)``."""
     bars = [ax for ax in fig.axes if ax.get_label() == "<colorbar>"]
     return [ax for ax in fig.axes if ax not in bars], bars
 
@@ -274,7 +274,7 @@ def test_overview_figure_builds_from_the_grid_alone(finished):
     assert fig.axes[0].get_yscale() == "log"
     assert "nm" in fig.axes[0].get_xlabel()
 
-    # Both maps carry a colour bar, as the pipeline this replaces did.
+    # Both maps carry a colour bar.
     assert len(bars) == 2
 
 
@@ -340,15 +340,15 @@ def test_the_grid_survives_damnits_writer(finished, tmp_path):
     assert back["trainId"].dtype == np.uint64
     assert back.dims == ("trainId", "pulseId", "q")
     assert np.array_equal(back.values, grid.values)
-    # n_frames rides along as a coordinate, so it survives the round trip too.
+    # n_frames is a coordinate, so it survives the round trip too.
     assert np.array_equal(back["n_frames"].values, grid["n_frames"].values)
 
-    # The table cell must read like the old pipeline's, not "Dataset (930MB)".
+    # The table cell shows dtype and shape, not the dataset size.
     summary = Cell(grid).get_summary("agipd_saxs")
     assert summary == f"{grid.dtype}: {grid.shape}"
 
 
-# ── agipd_preprocessing and the agipd_saxs reader (user, 2026-10-14) ──────────
+# ── agipd_preprocessing and the agipd_saxs reader ─────────────────────────────
 def _roots(tmp_path):
     return {
         "output_root": str(tmp_path / "saxs"),
@@ -428,8 +428,8 @@ def test_the_reader_skips_a_run_without_a_frame_table(tmp_path):
 
 
 def test_trains_without_frames_do_not_fail_the_window_sums():
-    """r0423 (2026-10-14): one train of 3001 has no frames. The sums record it
-    as NO_FRAMES, which the pass treats as final, so the cell stays green."""
+    """A real run can hold a train with no frames. The sums record it as
+    NO_FRAMES, which the pass treats as final, so the cell stays green."""
     status = {
         "frames": {"OK": 465000},
         "window_sums": {"OK": 3000, "NO_FRAMES": 1},

@@ -1,38 +1,25 @@
-"""Photon counting of corrected JUNGFRAU frames, per ASIC (CLAUDE.md open task 18).
+"""Photon counting of corrected JUNGFRAU frames, per ASIC.
 
-Proc data are keV with a zero level that no correction removes (pitfall 23).
-W7 measured it on r0423 and r0370 (``context/jungfrau-photonising.md``):
-
-* it jumps 0.13–0.16 keV rms from train to train on jf1, the whole module
-  together, and 0.03–0.04 keV from frame to frame on jf2;
-* lit cells sit 0.06–0.17 keV above the same train's dark cells, depending on
-  the cell and rising with intensity, in shadowed pixels as much as in lit ones.
-
-So the level has to come from each frame itself: no dark cell and no per-run
-constant can stand in for it. Per frame and per 256 x 256 ASIC this module
-estimates it with p010646's estimator (``transfer_context/templates/
-jf_photon_count.py``, validated bit for bit against fxs ``--photons``), then
+Proc data are keV with a zero level that no correction removes. The level moves
+from train to train and between cells of one train, so it has to come from each
+frame itself. Per frame and per 256 x 256 ASIC this module estimates it, then
 counts ``clip(rint((x - level) / E), 0)``.
 
-**The estimator.** Over the ASIC's pixels minus its ``edge_px`` border, the
-median of the values below ``level_cut_kev``, then ``level_iterations`` times the
-mean of the values within ``±level_window_kev`` of the current estimate.
+The estimator works over the ASIC's pixels minus its ``edge_px`` border. It
+takes the median of the values below ``level_cut_kev``, then ``level_iterations``
+times the mean of the values within ``±level_window_kev`` of the current
+estimate. :attr:`PhotonCounting.level_pixels` picks which pixels feed it.
+``"all_good"`` takes every ``data.mask``-good finite pixel and ignores the static
+``.edf``, because pixels in a shadow are still good zero-level pixels.
+``"kept"`` restricts it to the pixels the ``.edf`` keeps.
 
-**Which pixels feed it** is :attr:`PhotonCounting.level_pixels`. ``"all_good"``,
-the default, takes every ``data.mask``-good finite pixel, the static ``.edf``
-ignored: shadowed pixels are good zero-level pixels, and W7 found the level they
-give agrees with the shadow alone to 0.004 keV while keeping >= 55 k pixels on
-every ASIC. ``"kept"`` restricts it to the pixels the ``.edf`` keeps.
+An ASIC with fewer than ``min_pixels`` usable pixels has no level, and its
+pixels are not counted at all rather than counted against a guess. At 1000
+pixels the window mean of 0.30 keV noise has a standard error near 0.01 keV.
 
-**An ASIC with fewer than** ``min_pixels`` **usable pixels has no level**, and
-its pixels are not counted at all rather than counted against a guess. 1000 is
-derived, not tuned: the window mean of n pixels of 0.30 keV noise has σ ≈
-0.30/√n = 0.0095 keV at n = 1000, which moves ≤ 0.1 % of the counts (W7: a
-0.1 keV level error moves 1 % of the one-photon pixels).
-
-**Reproducibility.** The level is estimated in float64 and stored as float32,
-and the counts are computed from the *stored* float32 level and the float32
-energy, so a reader can recount any frame from proc bit for bit.
+The level is estimated in float64 and stored as float32, and the counts are
+computed from the stored float32 level and the float32 energy, so a reader can
+recount any frame from proc bit for bit.
 """
 
 from __future__ import annotations
@@ -61,10 +48,10 @@ N_ASICS: int = 8
 LEVEL_PIXEL_SETS: tuple[str, ...] = ("all_good", "kept")
 
 _rows, _cols = np.indices(MODULE_SHAPE)
-#: The ASIC each pixel belongs to, flat: ``4 * row_block + column_block``, the
-#: order :func:`asic_view` produces. W7 checked the tiling against the
-#: ``NON_STANDARD_SIZE`` bit, which covers exactly rows 255–256 and columns
-#: 255–256, 511–512 and 767–768 of the proc layout.
+#: The ASIC each pixel belongs to, flat, ``4 * row_block + column_block``, in
+#: the order :func:`asic_view` produces. The tiling matches the
+#: ``NON_STANDARD_SIZE`` bit, which covers rows 255-256 and columns 255-256,
+#: 511-512 and 767-768 of the proc layout.
 ASIC_ID: np.ndarray = ((_rows // ASIC_SIZE) * 4 + _cols // ASIC_SIZE).reshape(-1)
 ASIC_ID.flags.writeable = False
 del _rows, _cols
@@ -72,7 +59,7 @@ del _rows, _cols
 
 @dataclass(frozen=True, slots=True)
 class PhotonCounting:
-    """The counting settings, all of them config fields and so in the hash."""
+    """The counting settings. All are config fields, so all enter the hash."""
 
     energy_kev: float
     level_cut_kev: float = 2.0
@@ -125,7 +112,7 @@ class PhotonCounting:
 
     @property
     def method(self) -> str:
-        """One line a reader can act on without this source to hand."""
+        """A one-line description of the method, stored in provenance."""
         return (
             f"per frame and 256x256 ASIC ({self.edge_px}-px edge left out), over "
             f"{self.level_pixels} pixels: level = median of values < "
@@ -166,9 +153,10 @@ def zero_levels(
     :param usable: which pixels may feed the estimate, same size as ``x``.
         Non-finite values must already be excluded here.
     :param counting: the estimator's settings.
-    :returns: ``(levels, n_pixels)``: float64 ``(8,)``, NaN for an ASIC with
-        fewer than ``min_pixels`` usable pixels or with no value below the cut
-        or inside the window; and int ``(8,)``, the usable pixels per ASIC.
+    :returns: ``(levels, n_pixels)``. ``levels`` is float64 ``(8,)``, NaN for
+        an ASIC with fewer than ``min_pixels`` usable pixels or with no value
+        below the cut or inside the window. ``n_pixels`` is int ``(8,)``, the
+        usable pixels per ASIC.
     """
     values = asic_view(np.asarray(x).reshape(MODULE_SHAPE), counting.edge_px)
     chosen = asic_view(np.asarray(usable).reshape(MODULE_SHAPE), counting.edge_px)
@@ -183,9 +171,8 @@ def zero_levels(
             continue
         estimate = float(np.median(below))
         for _ in range(counting.level_iterations):
-            # Exact, not an approximation: when the window ends below the cut,
-            # every value inside it is already in ``below``, which is a third
-            # smaller at r0423's occupancy and halves the cost.
+            # Exact: when the window ends at or below the cut, every value inside
+            # it is already in ``below``, which is smaller to search.
             fits = estimate + counting.level_window_kev <= counting.level_cut_kev
             pool = below if fits else pixels
             inside = pool[np.abs(pool - estimate) < counting.level_window_kev]
@@ -201,9 +188,9 @@ def count_photons(x: np.ndarray, levels: np.ndarray, energy: np.float32) -> np.n
     """``clip(rint((x - level) / E), 0)`` per pixel, in float32, flat.
 
     :param x: one frame, keV, any shape that flattens to the module.
-    :param levels: float32 ``(8,)``, one per ASIC; a NaN level gives NaN counts
+    :param levels: float32 ``(8,)``, one per ASIC. A NaN level gives NaN counts
         on its ASIC, which the caller excludes.
-    :param energy: the photon energy as float32 — the same value that is stored.
+    :param energy: the photon energy as float32, the same value that is stored.
     :returns: a new float32 array; NaN in ``x`` stays NaN.
     """
     flat = np.asarray(x, dtype=np.float32).reshape(-1)

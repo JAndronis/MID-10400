@@ -1,8 +1,8 @@
-"""Shared fixtures: synthetic EuXFEL ``raw/`` trees and canonical elogs.
+"""Fixtures shared by every suite.
 
-Everything here is filesystem-only — no EXtra-data, no HDF5 content — so the
-unit tests exercise the reader's pure paths (helpers, ``can_read``,
-``list_runs``, ``get_run_path``) without the EuXFEL stack installed.
+A content digest of a pass output file, a session-cached mock-run factory, the
+plan-status helper both plan suites use, and synthetic ``raw/`` trees and elogs.
+The heavy imports (h5py, EXtra-data) happen inside the fixtures that need them.
 """
 
 from __future__ import annotations
@@ -40,8 +40,8 @@ def raw_root(tmp_path: Path) -> Path:
     """A ``p010400`` root with raw/r0001, r0007, r0010 plus ignorable noise."""
     root = tmp_path / "p010400"
     _make_raw_tree(root, [1, 7, 10])
-    (root / "raw" / "scratch").mkdir()  # non-run directory → ignored
-    (root / "raw" / "r0003.txt").write_text("")  # not a directory → ignored
+    (root / "raw" / "scratch").mkdir()  # not a run directory, so ignored
+    (root / "raw" / "r0003.txt").write_text("")  # not a directory, so ignored
     return root
 
 
@@ -70,7 +70,7 @@ def write_elog() -> Callable[[Path, Iterable[Mapping[str, object]]], Path]:
 #: and so cannot be pinned: wall-clock, the machine, per-stage timings, and the
 #: digests of the synthetic input files the fixtures build. ``poni`` is in the
 #: list because pyFAI stamps the PONI it writes with the time it wrote it, so
-#: the fixture's bytes — and every sha256 taken over them — move every session.
+#: the fixture's bytes, and every sha256 taken over them, move every session.
 #: ``lock`` and ``lock_takeover`` name the process that held the output's lock.
 #: Everything else an output file carries is a function of its inputs.
 VOLATILE_ATTRS = frozenset(
@@ -104,14 +104,12 @@ def _h5_digest(path: Path, skip_attrs: frozenset[str] = VOLATILE_ATTRS) -> str:
 
     Datasets and attributes are visited in sorted-name order, so the digest is a
     function of the file's content alone and not of the order it was written in.
-    Absolute paths are reduced to their basename first, so that the recorded
-    config stays in the digest — it is the record of every result-affecting
-    field — without the fixtures' temporary directories entering it.
+    Absolute paths are reduced to their basename first, so the recorded config
+    (the record of every result-affecting field) stays in the digest without the
+    fixtures' temporary directories entering it.
 
-    :param path: the HDF5 file to digest.
     :param skip_attrs: attribute names to leave out, for values that differ
         between two runs of the same pass on the same input.
-    :returns: the hex digest.
     """
     import hashlib
 
@@ -144,7 +142,7 @@ def _h5_digest(path: Path, skip_attrs: frozenset[str] = VOLATILE_ATTRS) -> str:
 
 @pytest.fixture(scope="session")
 def h5_digest() -> Callable[..., str]:
-    """A canonical content digest of a pass output file — see :func:`_h5_digest`."""
+    """A canonical content digest of a pass output file (:func:`_h5_digest`)."""
     return _h5_digest
 
 
@@ -202,7 +200,7 @@ def memoised_run_factory(tmp_path_factory):
 
 @pytest.fixture
 def status_of():
-    """``plan.record(train_id).status`` — the assertion both plan suites make."""
+    """``plan.record(train_id).status``, the assertion both plan suites make."""
 
     def of(plan, train_id: int):
         return plan.record(train_id).status

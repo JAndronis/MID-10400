@@ -1,14 +1,15 @@
-"""The DAMNIT cells of the diagnostics: frames used (phase D), droplet videos (E).
+"""The DAMNIT cells of the diagnostics: frames used, droplet videos, photon
+statistics, the XPCS score and the run diagnostics figure.
 
 Each ``*_frames_used`` variable reads a pass's frame table straight from the
 path its config names. It never depends on the pass's DAMNIT variable, so it
-cannot relaunch the cluster job (CLAUDE.md pitfall 26). The cost is that a cell
-shows the file as it was when the cell ran. After a reprocess, refresh it with
-``damnit reprocess --match "frames used"`` (``--match`` compares titles, not
-names, in damnit 0.4.0).
+cannot relaunch the cluster job and put a second writer on the pass's file. The
+cost is that a cell shows the file as it was when the cell ran. After a
+reprocess, refresh it with ``damnit reprocess --match "frames used"``
+(``--match`` compares titles, not names).
 
 The context-file wrappers are an import plus a call, like the integrators'.
-DAMNIT's ``Cell`` and ``Skip`` are imported inside the function, so this module
+DAMNIT's ``Cell`` and ``Skip`` are imported inside the functions, so this module
 imports without DAMNIT.
 """
 
@@ -37,7 +38,7 @@ __all__ = [
     "xpcs_score_cell",
 ]
 
-#: Cell backgrounds (p010646's context, transfer_context/templates).
+#: Cell backgrounds.
 COLORS = {"good": "#33e32a", "warning": "#f2d40f", "error": "#ec0839"}
 
 #: The passes with a frame table, by the detector name the wrappers use.
@@ -83,11 +84,11 @@ def frames_used_cell(path: str | Path) -> Any:
     When not green, the count is followed by the code that decided the colour
     (the commonest failure on red, the commonest non-OK code on amber).
 
-    "busy" needs HDF5 file locking, and inside DAMNIT it is off: the context
-    imports ``extra_speckle``, whose ``xcca.tools`` sets
-    ``HDF5_USE_FILE_LOCKING=FALSE`` for the whole process. There a file being
-    written reads as it stands (amber, NOT_PROCESSED rows), or red if HDF5 trips
-    over it mid-write; refresh the cell once the pass has finished.
+    "busy" needs HDF5 file locking. Where locking is off (importing
+    ``extra_speckle`` sets ``HDF5_USE_FILE_LOCKING=FALSE`` for the whole
+    process), a file being written reads as it stands (amber, NOT_PROCESSED
+    rows), or red if HDF5 trips over it mid-write; refresh the cell once the
+    pass has finished.
 
     :raises Skip: no file, i.e. the pass has not written this run.
     """
@@ -130,7 +131,8 @@ def _name(code) -> str:
         return f"code {int(code)}"
 
 
-#: Threads preparing video frames in the DAMNIT job (explicit, pitfall 10).
+#: Threads preparing video frames in the DAMNIT job. Set explicitly, because the
+#: CPU count a process sees includes hyperthreads.
 VIDEO_WORKERS = 16
 
 
@@ -183,9 +185,6 @@ def droplet_first_image(run) -> Any:
         dims=("y", "x"),
         attrs={"trainId": train_id, "source": camera.CAMERA_SOURCE},
     )
-
-
-# ── photon statistics (agipd_preprocessing writes them; xpcs-quality.md) ──────
 
 
 def photon_statistics(proposal: int, run_no: int, saxs, xgm, transmission) -> Any:
@@ -242,7 +241,7 @@ def photon_statistics_overview(stats) -> Any:
 
     β_sf per ring against q, with the fixed reference contrast per ROI; the
     pooled P(k) of each ROI against the negative binomial at its β_sf and k̄;
-    k̄ per ring against q, with the 3e-3 photon/pixel/frame threshold.
+    k̄ per ring against q, with the `KBAR_MIN` threshold.
     """
     import matplotlib.pyplot as plt
 
@@ -318,9 +317,6 @@ def photon_statistics_overview(stats) -> Any:
     return fig
 
 
-# ── XPCS score and run diagnostics ────────────────────────────────────────────
-
-
 def xpcs_score_cell(proposal: int, run_no: int) -> Any:
     """The ``xpcs_score`` cell: hits, ROIs at k̄ ≥ 3e-3, best 30 s SNR.
 
@@ -384,7 +380,7 @@ def diagnostics_overview(proposal: int, run_no: int, saxs, xgm, transmission) ->
 
     SVD of the per-train curves (divided by the flux and the median curve)
     against the noise floor; χ² of each train against the run median; the
-    0.3–0.5 nm⁻¹ band against the flux, before and after dividing by it.
+    0.3-0.5 nm⁻¹ band against the flux, before and after dividing by it.
     Inputs as ``photon_statistics``: the frame table, and this run's hits from
     DAMNIT's values in memory.
     """

@@ -62,7 +62,7 @@ def test_the_subdirectory_itself_maps_to_its_proposal_form(proposal, tmp_path):
 
 
 def test_a_venv_python_keeps_its_name_and_so_its_venv(proposal, tmp_path):
-    """Resolving ``bin/python`` would run the bare interpreter (pitfall 22)."""
+    """Resolving ``bin/python`` would run the bare interpreter, outside the venv."""
     interpreter = tmp_path / "uv-python" / "python3.12"
     interpreter.parent.mkdir()
     interpreter.write_text("")

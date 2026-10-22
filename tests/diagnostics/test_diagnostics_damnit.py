@@ -1,4 +1,4 @@
-"""The ``*_frames_used`` cells (phase D): colour by status, Skip without a file.
+"""The ``*_frames_used`` cells: colour by status, Skip without a file.
 
 The cells read frame tables written by the shared writer (`diagnostics_fakes`),
 and DAMNIT's own ``Cell``, so what is checked is what ctxrunner would store.
@@ -80,9 +80,9 @@ def test_no_file_is_skipped(tmp_path):
 
 
 def test_a_file_another_process_writes_is_busy(tmp_path, monkeypatch):
-    # `import extra_speckle` turns HDF5 file locking off for the whole process
-    # (and DAMNIT's context imports it); HDF5 reads the variable at every open,
-    # so turn it back on for this reader and its writer.
+    # `import extra_speckle` turns HDF5 file locking off for the whole process,
+    # and another test may have imported it; HDF5 reads the variable at every
+    # open, so turn it back on for this reader and its writer.
     monkeypatch.setenv("HDF5_USE_FILE_LOCKING", "TRUE")
     path = table(tmp_path, np.zeros((2, 2), np.uint8))
     hold = (
@@ -155,7 +155,7 @@ def test_a_run_without_the_camera_is_skipped(tmp_path):
         droplet_video(run, 1, root=tmp_path)
 
 
-# ── photon statistics, XPCS score, overview (user, 2026-10-14) ────────────────
+# ── photon statistics, XPCS score, overview ───────────────────────────────────
 def test_the_statistics_overview_draws_three_panels(tmp_path):
     import matplotlib
 

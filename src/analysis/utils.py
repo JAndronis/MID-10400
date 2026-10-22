@@ -23,8 +23,8 @@ RHO_WATER_25C: float = 0.99705  # g/mL
 M_NACL: float = 58.44  # g/mol
 
 # Mass attenuation coefficients mu/rho [cm^2/g] at 9.04 keV, the photon energy the
-# SAXS pass integrates with; the XGM reports 9.00 keV (CLAUDE.md open task 15), where
-# they are ~1.3 % higher. xraydb 4.5.8 (Elam, Ravel & Sieber 2002); "protein" is
+# SAXS pass integrates with. The XGM's 9.00 keV is a setpoint; at 9.00 keV these would
+# be ~1.3 % higher. From xraydb 4.5.8 (Elam, Ravel & Sieber 2002); "protein" is
 # C5H8NO2S0.05 and the ferritin core is FeOOH, as in holoferritin_properties.
 MU_RHO_9P04_KEV: dict[str, float] = {
     "H2O": 7.1949,
@@ -33,7 +33,8 @@ MU_RHO_9P04_KEV: dict[str, float] = {
     "FeOOH": 143.142,
     "protein": 5.4658,
 }
-# Droplet camera pixel size: droplet_fit(px=13.9) in src/amore/context.py.
+# Droplet camera pixel size in mm. It must match the ``px=13.9`` (um) DAMNIT's
+# droplet_fit is given.
 DROPLET_PX_MM: float = 13.9e-3
 
 DB_VARIABLES = Literal[
@@ -280,11 +281,11 @@ def droplet_attenuation(
 def train_pulse_energy(raw, n_pulses: int) -> xr.DataArray:
     """XGM pulse energy [uJ] per train, averaged over the first `n_pulses` pulses.
 
-    Per train, not per frame, on purpose: at 2.26 MHz the per-pulse XGM reads the first
-    ~20 pulses of a train 15-20 % high while the detector's own signal per pulse is
-    flat (r370, r464), so dividing frame by frame writes that ramp into I(q). Two runs
-    with different pulse counts therefore share a flux scale only over the same pulse
-    ranks, which is what `n_pulses` fixes. A train missing any of those pulses is NaN
+    Per train, not per frame, because at 2.26 MHz the per-pulse XGM reads the first
+    ~20 pulses of a train high while the detector's own signal per pulse is flat, so
+    dividing frame by frame writes that ramp into I(q). Two runs with different pulse
+    counts therefore share a flux scale only over the same pulse ranks, which is what
+    `n_pulses` fixes. A train missing any of those pulses is NaN
     rather than an average over fewer.
 
     `raw` is a raw (or "all") DataCollection: the XGM is a control source, which proc
@@ -416,11 +417,10 @@ def deff_sq_to_volume(D2):
 
 
 def piecewise_D2(t, D0_sq, k1, k2, t_star):
-    """
-    Continuous piecewise-linear D^2(t):
-      t <= t_star : D0_sq - k1*t                (D2-law / evaporation regime)
-      t >  t_star : D0_sq - k1*t_star - k2*(t-t_star)   (post-evaporation regime)
-    k1, k2 are evaporation rate constants (>=0 for shrinking droplet).
+    """Continuous piecewise-linear D^2(t), with its break at `t_star`.
+
+    D^2 falls at rate `k1` up to `t_star` (the D^2-law evaporation regime) and at `k2`
+    after it. Both are >= 0 for a shrinking droplet.
     """
     t = np.asarray(t)
     branch1 = D0_sq - k1 * t
@@ -429,10 +429,9 @@ def piecewise_D2(t, D0_sq, k1, k2, t_star):
 
 
 def fit_D2_law(t, V, t_star_guess=None, bounds=None):
-    """
-    t : array of times
-    V : array of volumes (same length)
-    Returns fit params (D0_sq, k1, k2, t_star) and covariance.
+    """Fit `piecewise_D2` to volumes `V` at times `t`.
+
+    Returns `(popt, pcov)`, with `popt` = (D0_sq, k1, k2, t_star).
     """
     t = np.asarray(t, dtype=float)
     D2 = volume_to_deff_sq(np.asarray(V, dtype=float))

@@ -1,32 +1,32 @@
 #!/usr/bin/env python
-"""Install the repo's DAMNIT context into the live directory (open task 17e).
+"""Install the repo's DAMNIT context into the live directory.
 
 DAMNIT reads ``usr/Shared/amore/context.py``, not ``src/amore/context.py``, and
-nothing copies one to the other (CLAUDE.md pitfall 27). Others edit the live
-directory too, so an install must neither overwrite their change unseen nor
-leave DAMNIT with a context that does not evaluate. In order, this script:
+nothing copies one to the other. Others edit the live directory too, so an
+install must neither overwrite their change unseen nor leave DAMNIT with a
+context that does not evaluate. In order, this script:
 
 1. refuses a dirty ``src/amore`` (the commit recorded must be what is installed);
 2. reads the live ``context.py`` and ``analysis_helpers.py`` and their sha256;
-3. **guard**: the live files must be exactly what the last install left
+3. guard: the live files must be exactly what the last install left
    (``backups/installed.json``). The first time there is no record, so it
    shows the diff and requires ``--accept-live <id>``, where ``<id>`` names the
-   live state it printed — accepting a state that has since changed fails;
-4. evaluates the repo's context **and** the live one with ctxrunner, exactly as
-   DAMNIT does — ``<context_python> -m ctxrunner ctx`` in a scratch copy, with
-   the listener's own ``ctxsupport`` on ``PYTHONPATH`` — and fails unless the
+   live state it printed. Accepting a state that has since changed fails;
+4. evaluates the repo's context and the live one with ctxrunner the way DAMNIT
+   does (``<context_python> -m ctxrunner ctx`` in a scratch copy, with the
+   listener's own ``ctxsupport`` on ``PYTHONPATH``), and fails unless the
    pickled ``error_info`` is ``None``. ``ctx`` exits 0 even for a context that
    does not evaluate, so its exit status says nothing;
-5. **deploy gate**: the commit installed from must already be in the deploy
+5. deploy gate: the commit installed from must already be in the deploy
    clone (``usr/Software/MID-10400``), whose venv DAMNIT runs. Otherwise the new
    context would call code that is not there yet;
 6. only with ``--install``: writes a timestamped backup of both live files, the
    diff and the sha256s to ``backups/``, re-checks the live sha256, replaces
    each file atomically keeping its mode, and records what it installed.
 
-Never runs ``damnit read-context``, which adds columns to the shared database
-(pitfall 25); the database is only ever opened read-only, for two settings.
-Writes its report as JSON beside itself. Runs on a login node (~1 min).
+It never runs ``damnit read-context``, which adds columns to the shared
+database; it opens the database read-only, for two settings. Writes its report
+as JSON beside itself. Runs on a login node.
 
     python scripts/install_context.py                       # dry run
     python scripts/install_context.py --accept-live 1a2b3c4d5e6f

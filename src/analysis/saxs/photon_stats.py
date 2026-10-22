@@ -1,19 +1,18 @@
-"""Photon-count histograms per frame and ring: the XPCS quality product (Q1).
+"""Photon-count histograms per frame and ring, the XPCS quality product.
 
-Specification: ``context/xpcs-quality.md``. Written by the ``agipd_saxs`` pass from
-the same read of proc as the frame table and the window sums
-(``AgipdSaxsConfig.photon_stats``, on by default; user, 2026-10-14), or by
+Written by the ``agipd_saxs`` pass from the same read of proc as the frame table
+and the window sums (``AgipdSaxsConfig.photon_stats``, on by default), or by
 :func:`run_photon_stats` alone for a run whose other products are complete. For
-every frame and each of 17 narrow rings tiling the plain XPCS ROIs, over the
-frame's valid pixels:
+every frame and each narrow ring tiling the plain XPCS ROIs, over the frame's
+valid pixels:
 
     n_valid        valid pixels
     hist[k]        pixels with k photons, k = 0 … K; hist[K+1] = more than K
     s1 = Σ k,  s2 = Σ k(k − 1)      exact, whatever K is
-    max_k          the largest count, for the outlier rule (Q4)
+    max_k          the largest count, for the outlier rule
 
-Raw counts only (memory, cache-holds-raw-data-only): the per-pixel weights and
-the contrast are computed afterwards (`analysis.diagnostics.photon_stats`).
+Raw counts only: the per-pixel weights and the contrast are computed afterwards
+(`analysis.diagnostics.photon_stats`).
 
 The geometry, the static mask and each frame's bad pixels are the SAXS pass's
 own (`build_operator`, `build_static_bad`, `frame_bad`); a pixel belongs to the
@@ -72,12 +71,11 @@ __all__ = [
 log = logging.getLogger(__name__)
 
 FILE_NAME = "agipd_photon_stats.h5"
-#: Beside the per-pixel window sums: survives the move to tape (xpcs-quality §5).
+#: Beside the per-pixel window sums, so it survives the move to tape.
 DEFAULT_OUTPUT_ROOT = DEFAULT_PHOTON_STATS_ROOT
-#: Counts above this go to the overflow bin; s1 and s2 stay exact. The probe saw
-#: no count above 12 in any ring (r0423, r0450, 2026-10-13).
+#: Counts above this go to the overflow bin; s1 and s2 stay exact.
 K_MAX = 15
-#: Width of the rings that tile the plain XPCS ROIs [nm⁻¹] (xpcs-quality §4).
+#: Width of the rings that tile the plain XPCS ROIs [nm⁻¹].
 RING_WIDTH_NM = 0.025
 #: Bump when what a frame record holds changes.
 PHOTON_STATS_VERSION = 1
@@ -131,7 +129,7 @@ class PhotonStatsConfig:
         return cls(saxs=saxs, output_root=saxs.photon_stats_root)
 
     def __getstate__(self) -> dict[str, Any]:
-        """Pickle by field name (CLAUDE.md pitfall 20)."""
+        """Pickle by field name, so a field added later cannot shift the others."""
         return state_by_name(self)
 
     def __setstate__(self, state: Any) -> None:
@@ -188,7 +186,7 @@ def ring_labels(cfg: PhotonStatsConfig, geometry: Any = None) -> tuple[np.ndarra
     """Each pixel's ring (−1: none) in the SAXS pass's geometry, and the operator sha.
 
     The q of a pixel is that of its centre, from the same `build_operator` the
-    integrator uses (configured beam centre and pixel corners, pitfall 15).
+    integrator uses, with its beam centre and pixel corners.
     """
     from analysis.saxs.operator import build_operator, geometry_from_config
 
@@ -589,7 +587,7 @@ def run_photon_stats(
     For a run whose frame table and window sums are complete. Otherwise the
     ``agipd_saxs`` pass writes the statistics from its own read
     (``AgipdSaxsConfig.photon_stats``). A complete file is left untouched, and
-    the file is locked while written (CLAUDE.md pitfall 26).
+    the file is locked while written.
 
     :param geometry: an AGIPD geometry object instead of ``cfg.saxs.geometry_file``
         (the tests' synthetic one).

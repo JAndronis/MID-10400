@@ -4,7 +4,8 @@ Inputs are the ones the hit pass gets (``agipd_saxs``, ``xgm_intensity``,
 ``total_transmission`` as DAMNIT values in memory), so nothing here reads the
 run's own DAMNIT file mid-job. This module classifies itself rather than
 through ``analysis.xpcs.damnit.hit_set``, which keeps only the train ids.
-``Cell`` and ``Skip`` are imported inside the functions.
+``Cell`` is imported inside ``hit_summary_cell``, so importing this module does
+not import DAMNIT.
 """
 
 from __future__ import annotations
@@ -49,8 +50,9 @@ def hit_summary_cell(
 ) -> Any:
     """``'<n_hits> hits / <n_edge> edge / <n_off> off of N'``.
 
-    Green with hits, amber when the block is ambiguous, grey (a result, not a
-    failure) without a hit. The data is the classification summary as JSON.
+    Amber when the block is ambiguous, otherwise green with hits and grey
+    without (no hit is a result, not a failure). The data is the classification
+    summary as JSON.
     """
     import json
 
@@ -83,9 +85,12 @@ def hit_geometry_figure(
     droplet_fit: Any = None,
     **kwargs: Any,
 ):
-    """The figure of ``triage.geometry``; mesh runs get the map when ``run`` (DAMNIT's
-    raw run) has the hexapod, and the outline when ``droplet_fit`` carries a
-    ``radius`` and its ``pixel_size_um``."""
+    """The figure of ``triage.geometry.hit_geometry_figure`` for one run.
+
+    A mesh run gets the scan map when ``run`` (DAMNIT's raw run) has the
+    hexapod, and the droplet outline when ``droplet_fit`` carries a ``radius``
+    and its ``pixel_size_um``.
+    """
     from analysis.triage.geometry import hit_geometry_figure as figure
 
     found = classify_in_memory(proposal, run_no, saxs, xgm, transmission, **kwargs)

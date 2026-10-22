@@ -1,11 +1,11 @@
 """Droplet hits (`analysis.triage.classify`) against synthetic runs with known classes.
 
-The synthetic mesh block mimics the measured one (2026-10-14): a narrow off peak per
-run whose level drifts from run to run, hits ~1.3 dex above it, a thin continuum of
-edge trains between, partial overlaps carrying 15–60 % of a full hit's droplet
+The synthetic mesh block mimics a measured one: a narrow off peak per run whose
+level drifts from run to run, hits ~1.3 dex above it, a thin continuum of edge
+trains between, partial overlaps carrying 15 to 60 % of a full hit's droplet
 signal, hit fractions from 10 to 60 %, one run where the beam stayed on the droplet
-and one whose single level matches nothing. The hits' spread is r240's measured
-plateau width (robust σ 0.055 dex, 2026-10-18).
+and one whose single level matches nothing. The hits' spread of 0.05 dex is close
+to r240's measured plateau width (robust σ 0.055 dex).
 """
 
 from __future__ import annotations
@@ -171,7 +171,7 @@ def test_static_hits_find_long_and_short_absences():
     n = 3000
     x = np.linspace(-3.0, -2.6, n) + 0.02 * rng.standard_normal(n)
     out = np.zeros(n, dtype=bool)
-    # 60 and 150 trains: longer than half of §4.3's 51-train window, which misses them
+    # 60 and 150 trains: longer than half the 51-train running window, which misses them
     for start, length in ((500, 20), (1500, 60), (2200, 150)):
         out[start : start + length] = True
     x[out] -= 1.3

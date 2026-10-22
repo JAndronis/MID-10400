@@ -2,11 +2,10 @@
 
 Every pass pickles its config into a spawned pool, and both configs are frozen
 slots dataclasses, which ``dataclasses`` pickles *by position* unless told
-otherwise. A field added to either class then shifts every later field of a
-state pickled by an older import, silently: see :mod:`analysis.common.config`
-for the one that reached a real run. These tests pin the two properties that
-prevent it — the state is keyed by name, and a state whose names are not this
-class's is refused rather than partly applied.
+otherwise. A field added to either class then silently shifts every later
+field of a state pickled by an older import. These tests pin the two properties
+that prevent it: the state is keyed by name, and a state whose names are not
+this class's is refused rather than partly applied.
 """
 
 from __future__ import annotations
@@ -53,7 +52,7 @@ def field_names(cfg) -> list[str]:
 
 
 def test_the_state_is_keyed_by_name_not_by_position(cfg):
-    """The property the whole fix rests on: a name cannot shift, an index can."""
+    """A name cannot shift when a field is added; an index can."""
     state = cfg.__getstate__()
     assert isinstance(state, dict)
     assert sorted(state) == sorted(field_names(cfg))
@@ -67,10 +66,10 @@ def test_a_roundtrip_preserves_every_field(cfg):
 
 
 def test_a_state_missing_a_field_is_refused(cfg):
-    """The reported failure: the parent's class predates a field this one has.
+    """The parent's class predates a field this one has.
 
-    Filling it from its default would be the silent behaviour — the whole point
-    is that nobody knows what the older process meant by it.
+    Filling it from its default would hide the skew, and nobody knows what the
+    older process meant by it.
     """
     state = cfg.__getstate__()
     del state["min_modules"]
@@ -86,10 +85,10 @@ def test_a_state_carrying_an_unknown_field_is_refused(cfg):
 
 
 def test_a_positionally_pickled_state_is_refused(cfg):
-    """What a process running the pre-2026-09-14 module actually sends.
+    """A list of values with no names, as the dataclass default pickles a state.
 
-    A list of values with no names on it, which this class must not guess at
-    however plausibly its own field count happens to match.
+    This class must not guess at it, however plausibly its own field count
+    happens to match.
     """
     positional = [getattr(cfg, name) for name in field_names(cfg)]
     with pytest.raises(ConfigStateMismatch, match="pickled by position"):
@@ -97,11 +96,11 @@ def test_a_positionally_pickled_state_is_refused(cfg):
 
 
 def test_the_reported_shift_raises_instead_of_assigning_none(waxs):
-    """The exact 2026-09-14 skew, reproduced: 26 values arriving at 28 fields.
+    """A positional state two fields short raises rather than shifting.
 
-    Before the fix this assigned ``n_workers``' ``None`` to ``min_modules`` and
-    ``cell_sample_trains``' ``8`` to ``max_abs_kev``, and the only complaint was
-    a ``TypeError`` from inside ``extra_data``.
+    Assigned by position, every value after ``lit_gap_ratio`` would land on the
+    wrong field, and the only complaint would come from whichever library first
+    used one of them.
     """
     names = field_names(waxs)
     dropped = {"lit_gap_ratio", "read_noise_fallback_kev"}
@@ -119,8 +118,8 @@ def test_unpickling_revalidates(cfg):
 
     Without this a worker takes any value the parent's class would have refused
     and fails wherever that field is first used, in whatever library owns that
-    line — which is how ``min_modules=None`` surfaced as a ``TypeError`` inside
-    ``extra_data.components``.
+    line (``min_modules=None`` fails as a ``TypeError`` inside
+    ``extra_data.components``).
     """
     state = cfg.__getstate__() | {"min_modules": 0}
     with pytest.raises(ValueError, match="min_modules must be positive"):
@@ -132,7 +131,7 @@ def test_unpickling_revalidates(cfg):
 
 
 def test_a_config_is_still_hashable_and_comparable_after_a_roundtrip(cfg):
-    """The dataclass machinery is untouched; only the state encoding changed."""
+    """The by-name state leaves ``replace``, hashing and equality working."""
     back = pickle.loads(pickle.dumps(cfg))
     assert dataclasses.replace(back, run=424).run == 424
     assert back.config_hash() == cfg.config_hash()

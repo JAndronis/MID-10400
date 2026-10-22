@@ -5,9 +5,8 @@ by the train it belongs to, never by its position in an array: a dropped train
 would otherwise shift every later frame onto the wrong trainId.
 
 ``build_plan`` takes an optional ``DataCollection`` so callers can supply a run
-that is already open — or a mock one — instead of going through ``open_run``.
-Nothing here imports DAMNIT, so this module can back a reader outside DAMNIT
-later.
+that is already open, or a mock one, instead of going through ``open_run``.
+Nothing here imports DAMNIT.
 """
 
 from __future__ import annotations
@@ -84,9 +83,8 @@ def build_plan(cfg: AgipdSaxsConfig, dc: Any = None, control_dc: Any = None) -> 
             # No rows of its own; the offset is where the next train starts, so
             # the ledger stays monotonic. A train where *no* module wrote a
             # frame is NO_FRAMES; one where some but too few did is
-            # MISSING_MODULES. AGIPD1M cannot tell them apart — it drops both
-            # before frame_counts exists — so the per-module counts are
-            # consulted directly.
+            # MISSING_MODULES. AGIPD1M drops both before frame_counts exists,
+            # so the per-module counts tell them apart.
             status = (
                 FrameStatus.NO_FRAMES
                 if modules_present.get(train_id, 0) == 0
@@ -164,13 +162,12 @@ def run_checks(
 ) -> dict[str, Any]:
     """Provenance flags for the run.
 
-    None of these select frames in v1 (integrator I1); each is recorded and a
-    disagreement is flagged. Every check is best-effort: a missing source makes
-    the check unavailable, which is itself recorded, rather than failing the
-    run before any data is read.
+    None of these select frames. Each is recorded and a disagreement is
+    flagged. Every check is best-effort: a missing source records the check as
+    unavailable instead of failing the run before any data is read.
 
-    :param dc: a collection carrying the *control* sources — see
-        :func:`_open_control`. ``None`` records every check as unavailable.
+    :param dc: a collection carrying the *control* sources (see
+        :func:`_open_control`). ``None`` records every check as unavailable.
     :param cfg: when given, the photon-energy check compares the machine's
         nominal energy against ``cfg.photon_energy_kev``.
     """
@@ -211,14 +208,13 @@ def run_checks(
     def energy_check() -> dict[str, Any]:
         """The machine's nominal photon energy, against the configured one.
 
-        ``XGM.photon_energy_by_train`` returns **keV** already (it converts
+        ``XGM.photon_energy_by_train`` returns keV already (it converts
         ``pulseEnergy.wavelengthUsed``, in nm, and tags the result keV), so
         there is no eV to divide out.
 
-        No tolerance is invented here: the two are
-        called equal only within the float32 precision the XGM value carries,
-        and any wider gap is reported for a person to settle. It matters
-        because q scales with the energy, so a disagreement of x is a
+        The two are called equal only within the float32 precision the XGM
+        value carries, and any wider gap is reported for a person to settle.
+        q scales with the energy, so a relative disagreement of x is a
         disagreement of x in every q value this pass writes.
         """
         from extra.components import XGM

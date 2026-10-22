@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Which DAMNIT variables a ``damnit reprocess --match`` selects (not unit-tested).
+"""Which DAMNIT variables a ``damnit reprocess --match`` selects.
 
 ``--match`` is a case-insensitive substring of the variable *title*. This reads
 the titles off ``src/amore/context.py`` by AST (nothing is executed, no DAMNIT)

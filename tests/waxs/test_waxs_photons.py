@@ -1,9 +1,10 @@
 """Per-ASIC photon counting (``analysis.waxs.photons``), on synthetic frames.
 
-The estimator is p010646's; these pin what it must do here: recover a zero level
-per ASIC from the frame itself, count the photons that were put in, double them
-at half the energy, give no level rather than a guess where too few pixels
-remain, and be reproducible from the float32 values a file stores.
+The estimator is the template from proposal p010646. These tests pin what it
+must do here: recover a zero level per ASIC from the frame itself, count the
+photons that were put in, double them at half the energy, give no level rather
+than a guess where too few pixels remain, and be reproducible from the float32
+values a file stores.
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ from analysis.waxs.photons import (
 )
 
 E = 9.04
-NOISE = 0.30  # the pure pixel noise W7 measured on both detectors
+NOISE = 0.30  # keV, the per-pixel noise of both detectors
 OFFSETS = np.array([0.13, -0.04, 0.17, 0.06, -0.12, 0.10, 0.00, 0.21])
 
 
@@ -69,7 +70,7 @@ def test_a_level_per_asic_is_recovered_under_photons(counting):
 
 
 def test_the_level_follows_a_common_mode_jump(counting):
-    """jf1's 0.15 keV train-to-train jump: the frame's own level moves with it."""
+    """The frame's own level follows a train-to-train common-mode jump, as on jf1."""
     first, _ = frame(seed=1)
     second, _ = frame(seed=2, offsets=OFFSETS + 0.15)
     a, _ = zero_levels(first, everything(), counting)
@@ -97,7 +98,7 @@ def test_an_asic_with_nothing_below_the_cut_has_no_level(counting):
 
 
 def test_the_estimator_converges_by_three_iterations(counting):
-    """W7: iterations 3 and 10 differ by <= 0.0009 keV on real frames."""
+    """Three iterations suffice: ten move no level by as much as 1e-3 keV."""
     values, _ = frame(seed=4)
     three, _ = zero_levels(values, everything(), counting)
     ten, _ = zero_levels(
@@ -128,7 +129,7 @@ def test_the_photons_put_in_are_the_photons_counted(counting):
 
 
 def test_half_the_energy_counts_every_photon_twice(counting):
-    """The E/2 test (W7 measured 2.000–2.008 on real frames)."""
+    """Counting at E/2 doubles every count exactly."""
     values, truth = frame(seed=6, rate=1.5)
     levels = zero_levels(values, everything(), counting)[0].astype(np.float32)
     full = count_photons(values, levels, counting.energy_f4)

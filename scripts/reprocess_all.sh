@@ -1,5 +1,6 @@
 #!/bin/bash
-# Reprocess every run through DAMNIT after the pass outputs were deleted by hand.
+# Reprocess every run through DAMNIT: the detector passes, then the hit-train XPCS,
+# then the cells that read their files.
 #
 #   bash scripts/reprocess_all.sh launch [--dry-run] [-n CONCURRENT]
 #   bash scripts/reprocess_all.sh status
@@ -13,28 +14,28 @@
 #
 # Both launch and xpcs-hits pass --fresh: the companion caches (window sums, photon
 # histograms, the XPCS photon store) are moved aside with the outputs, so nothing
-# of an earlier generation is found complete and reused (user, 2026-10-19).
+# of an earlier generation is found complete and reused.
 #
 # launch   AGIPD, jf1 and jf2 for every run with a proc directory that DAMNIT
 #          knows, through `reprocess_safe.py start` (busy-run and lock checks; it
-#          builds the `--match` titles). Not `start all`: that lists the runs from
-#          the output directories, which are gone. -n caps the jobs DAMNIT runs at
-#          once (default: the database's `concurrent_jobs`).
+#          builds the `--match` titles). Not `start all`, which lists the runs from
+#          the output directories and so misses a run whose output is gone. -n caps
+#          the jobs DAMNIT runs at once (default: the database's `concurrent_jobs`).
 # status   `reprocess_safe.py status` over the same runs: complete / missing /
-#          INCOMPLETE per run and detector. (`check` needs the backups `start`
-#          makes; with the outputs deleted there are none.)
+#          INCOMPLETE per run and detector. `check` is left out: it needs the
+#          backups `start` makes, and an output deleted by hand has none.
 # refresh  once no DAMNIT job is left: the non-cluster cells that read the pass
 #          files instead of depending on them ("frames used", "XPCS score").
 #          Run with launch they would see no file yet.
 # xpcs-hits the hit-train XPCS pass (analysis.xpcs), through `reprocess_safe.py
 #          start -d xpcs`: it prints the AGIPD and XPCS status, then refuses
-#          unless every run's AGIPD output is complete, a job or lock is absent,
-#          and no backup is left; moves xpcs_hits.h5 aside (never the photon
-#          store). With RUNS, only those runs; without, every run above, so one
+#          unless every run's AGIPD output is complete, no job or lock is present,
+#          and no backup is left; moves xpcs_hits.h5 and the photon store aside.
+#          With RUNS, only those runs; without, every run above, so one
 #          run without a complete AGIPD file refuses all: name the runs then.
 #          Afterwards `reprocess_safe.py check RUNS -d xpcs`, then `cleanup`.
 #
-# Not unit-tested (CLAUDE.md working rule 7).
+# Not unit-tested, so check a change by running it.
 set -euo pipefail
 
 PROP=/gpfs/exfel/exp/MID/202601/p010400

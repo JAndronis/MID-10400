@@ -1,28 +1,28 @@
-"""One writer per output file: a lock file beside it (CLAUDE.md pitfall 26).
+"""One writer per output file, enforced by a lock file beside it.
 
 DAMNIT can launch a cluster variable twice for the same run: requesting a
 variable that depends on it starts it again while the first instance still
 runs. Two jobs then write one file. :func:`output_lock` makes the second one
 refuse instead.
 
-The lock is ``<output>.lock``, created with ``O_CREAT | O_EXCL`` — atomic on
-GPFS across nodes — and holding who took it: host, pid, user, Slurm job and
-time. A second process that finds it asks whether the holder is still alive:
+The lock is ``<output>.lock``, created with ``O_CREAT | O_EXCL`` (atomic on
+GPFS across nodes), and records who took it: host, pid, user, Slurm job and
+time. A second process that finds it decides whether the holder is still alive:
 
-* the holder ran in a Slurm job → ``squeue --clusters=all``. Listed and not
-  finished means alive. DAMNIT submits non-cluster variables to another cluster
+* a holder in another Slurm job is alive while ``squeue --clusters=all`` lists
+  it unfinished. DAMNIT submits non-cluster variables to another cluster
   (``solaris``), hence ``--clusters=all``;
-* the holder ran in *this* job, at an earlier ``SLURM_RESTART_COUNT`` → dead.
-  ``allcpu`` preempts and requeues jobs under the same job id (S4, 2026-10-14),
-  so a requeued job meets the lock its killed first attempt left; asking Slurm
+* a holder in *this* job at an earlier ``SLURM_RESTART_COUNT`` is dead. The
+  ``allcpu`` partition preempts and requeues jobs under the same job id, so a
+  requeued job meets the lock its killed first attempt left, and asking Slurm
   about its own id would only say it is running;
-* the holder ran outside Slurm on this host → whether its pid exists;
-* anything else cannot be checked from here, and is treated as alive.
+* a holder outside Slurm on this host is alive while its pid exists;
+* any other holder cannot be checked from here, and is treated as alive.
 
-An alive holder raises :class:`OutputBusy`. A dead one — a job that hit its
-time limit, a killed kernel — leaves a stale lock behind, because neither
-SIGKILL nor Slurm's SIGTERM runs ``finally`` blocks; that lock is taken over,
-logged, and recorded by the pass in the file's provenance.
+An alive holder raises :class:`OutputBusy`. A dead one (a job that hit its time
+limit, a killed kernel) leaves a stale lock behind, because neither SIGKILL nor
+Slurm's SIGTERM runs ``finally`` blocks. That lock is taken over, logged, and
+recorded by the pass in the file's provenance.
 
 ``squeue --clusters=all -j <id>`` exits 1 even when the job is running, since
 every other cluster answers "Invalid job id specified". The verdict therefore
@@ -166,10 +166,10 @@ class LockHolder:
     def parse(cls, text: str) -> LockHolder | None:
         """The holder a lock file names, or ``None`` if it names none.
 
-        Only ``host``, ``pid`` and ``token`` are required — they are what the
-        liveness check and the release need — so that a lock written by another
-        version of this module is still judged on its holder, not taken for an
-        abandoned one.
+        Only ``host``, ``pid`` and ``token`` are required, because the liveness
+        check and the release need nothing else. A lock written by another
+        version of this module is then still judged on its holder instead of
+        being taken for an abandoned one.
         """
         try:
             record = json.loads(text)
@@ -221,11 +221,11 @@ class OutputLock:
 def slurm_job_state(job_id: str) -> str | None:
     """The state Slurm reports for a job, or ``None`` once it has forgotten it.
 
-    Slurm forgets a finished job ``MinJobAge`` after it ends (90 s on Maxwell),
-    so ``None`` and a finished state mean the same thing to a caller.
+    Slurm forgets a finished job ``MinJobAge`` after it ends, so ``None`` and a
+    finished state mean the same thing to a caller.
 
     :raises JobStateUnknown: ``squeue`` failed for any reason other than not
-        knowing the job, so the job's state is unknown — not absent.
+        knowing the job, so the job's state is unknown, not absent.
     """
     command = [
         "squeue",

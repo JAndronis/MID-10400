@@ -2,16 +2,17 @@
 
 Each ring's baseline-subtracted ``c2`` is fitted with ``β exp(−2 (Γτ)^α) + b``
 (errors ``sigma``), β fixed at the ring's reference contrast
-(`analysis.triage.xpcs.REFERENCE_BETA`, the τ → 0 intercept of r450 and r493-496)
+(`analysis.triage.xpcs.REFERENCE_BETA`, the τ → 0 intercept on reference runs)
 and Γ, α and b free and bounded. With β free the fit degenerates wherever part of
 the decay lies below the first lag: β, Γ and α trade off and α runs to its floor.
-Fixed, contrast lost before the first lag reads as a fast Γ. ``beta_mode="bounded"``
-fits β too, in [0, the reference's p84]: β is then the amplitude of the decay inside
-the lag window and 1 − β/β_ref the fraction of the contrast gone before the first lag.
+With β fixed, contrast lost before the first lag reads as a fast Γ.
+``beta_mode="bounded"`` fits β too, in [0, the reference's p84]. β is then the
+amplitude of the decay inside the lag window, and 1 − β/β_ref the fraction of the
+contrast gone before the first lag.
 
-τ = 1/Γ is the KWW relaxation time, not the mean one, τ Γ(1/α)/α. This is not
-`analysis.xpcs.figures.fit_g2`, the DAMNIT column's: that is one unweighted joint fit
-over all rings, so one ring that does not converge fails them all.
+τ = 1/Γ is the KWW relaxation time; the mean one is τ Γ(1/α)/α. The DAMNIT
+column uses `analysis.xpcs.figures.fit_g2` instead, one unweighted joint fit over
+all rings, where one ring that does not converge fails them all.
 """
 
 from __future__ import annotations

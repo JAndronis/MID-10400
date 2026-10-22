@@ -1,6 +1,6 @@
 """Droplet series: which run boundaries start a new droplet, and per-run metrics.
 
-One scripted history covers every case the spec names (context/run-triage.md §4.2):
+One scripted history covers every boundary case the series rule distinguishes:
 evaporation across runs, a pause, a run without a fit, a small fit glitch upwards,
 a top-up injection, a fresh injection, a calibration run in between, a noisy small
 droplet, a change of sample and a jump inside a run.
@@ -159,7 +159,7 @@ def test_the_jump_cut_holds_its_designed_false_count_on_clean_runs():
     for _ in range(1000):
         lv = np.linspace(0.3, 0.2, N) + rng.normal(0.0, 0.004, N)
         false += in_run_jump(lv, run_noise(lv))[1] > cut
-    assert false / 1000 * 10 <= 0.15  # design 0.1; measured 0.085 when written
+    assert false / 1000 * 10 <= 0.15  # designed for 0.1; this seed gives 0.085
 
 
 def test_centre_jitter_is_in_micrometres(history):

@@ -6,11 +6,11 @@ SAXS folder. A droplet's usable hit trains (every train of a static run that hit
 droplet, the "on" trains of a mesh run) are split into contiguous t/t* windows
 WINDOW_WIDTH wide, t* the SAXS notebook's (`analysis.cache.droplet_timeline` of the
 droplet's runs, checked against its ``curves.nc``). Per window the trains of all its
-runs are pooled: g2 by `analysis.cache.pool_g2`, the two-time map by summing each
+runs are pooled, g2 by `analysis.cache.pool_g2` and the two-time map by summing each
 run's `XpcsHits.pooled_sums` before dividing (photon-weighted, as `XpcsHits.ttcf`).
 The pooled windows are saved in the droplet's folder (``xpcs_windows.nc``, with what
-they were made from), so a refit or a new figure reads them in seconds; a file made
-from other inputs is refused, ``--refresh`` pools again.
+they were made from), so a refit or a new figure need not pool again. A file made
+from other inputs is refused, and ``--refresh`` pools again.
 
 Each ring's baseline-subtracted c2 is fitted with `analysis.xpcs.kww.fit_rings`: a KWW
 ``β exp(−2(Γτ)^α) + b`` with β fixed at the ring's reference contrast
@@ -86,8 +86,8 @@ from analysis.droplets import (
 from analysis.plotting import DROPLET_COLOURS, KIND_COLOURS
 from analysis.xpcs.kww import BASE_BOUNDS, GAMMA_BOUNDS, STRETCH_BOUNDS, fit_rings
 
-# t/t* bin width (user, 2026-10-21): the SAXS blocks are 0.13-0.18 apart, so a window
-# pools one to two of them
+# t/t* bin width. The SAXS blocks are 0.13-0.18 apart in t/t*, so a window pools one
+# or two of them.
 WINDOW_WIDTH = 0.25
 # what xpcs_windows.nc holds; a change to the pooling or the file's layout bumps it
 WINDOWS_SCHEMA = 1
@@ -104,8 +104,8 @@ def outdir(droplet):
 def load_droplet(droplet, db):
     """Every usable hit train of `droplet`'s runs with its g2 lag terms, t/t* and
     ferritin concentration, plus each run's results file and the timeline attributes.
-    Runs may differ in pulses per train (s370: 350 in r370-378, 155 in r379-381), so
-    the lag terms stay per run; the pulse period and the rings must agree.
+    Runs may differ in pulses per train, so the lag terms stay per run. The pulse
+    period and the rings must agree.
     Returns (parts by run, t_over_tstar, ferritin, run_of_train, paths, info)."""
     import numpy as np
     import xarray as xr
@@ -266,7 +266,7 @@ def saved_windows(droplet, db, refresh=False, matched=False):
     """`pool_windows` of `droplet`, from ``xpcs_windows.nc`` in its folder
     (``xpcs_windows_matched.nc`` for the `matched` windows) when that exists, else
     pooled and saved there (``refresh`` pools again). Windows differ in
-    lags and frames where their runs' patterns differ (s370), so the file pads them
+    lags and frames where their runs' pulse patterns differ, so the file pads them
     with NaN: ``c2``, ``sigma``, ``g2``, ``baseline`` over (window, roi_q, lag) with
     their ``tau`` over (window, lag), ``ttc`` (float32) over (window, roi_q, frame_1,
     frame_2). It records what it was made from: WINDOWS_SCHEMA, WINDOW_WIDTH, the
@@ -295,7 +295,7 @@ def saved_windows(droplet, db, refresh=False, matched=False):
     path = outdir(droplet) / f"xpcs_windows{'_matched' if matched else ''}.nc"
     if path.exists() and not refresh:
         with xr.open_dataset(path, engine="h5netcdf") as ds:
-            # every attribute read inside the block (CLAUDE.md pitfall 13)
+            # read every attribute inside the block, while the file is still open
             stale = cache.stale(ds.attrs, inputs=inputs, sources=sources)
             if stale:
                 raise ValueError(
@@ -688,7 +688,7 @@ def make_figures(droplet, windows, info):
         (axs[0, 2], "stretch", r"KWW $\alpha$", True),
     ):
         for r in range(n_rings):
-            # the visible contrast is a measurement, not a fit: shown wherever fitted
+            # the visible contrast is measured, so it is drawn for every fitted ring
             ok = np.array(
                 [
                     (w[2].resolved if only_resolved else ok)[r]

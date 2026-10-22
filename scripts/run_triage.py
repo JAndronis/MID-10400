@@ -1,38 +1,38 @@
 #!/usr/bin/env python
-"""Run triage for p010400 (context/run-triage.md).
+"""Triage the runs of p010400 for the move to tape.
 
-T1, ``--phase inventory``:
+``--phase inventory``:
 * one row per run from DAMNIT's database and files: class, effective sample,
   sizes, and which products exist
 * the droplet series, and per-run droplet metrics
-* the §9 T1 acceptance checks
+* acceptance checks against the series, fresh-droplet boundaries, volume jumps
+  and raw total already known
 
-T2a, ``--phase xpcs``:
-* the analytical XPCS SNR (§4.6) per run and 30 s slice
-* β from `REFERENCE_BETA`, one table for every run (user, 2026-10-13); the median
-  over β-eligible runs and the reference runs' re-measurement are reported beside it
+``--phase xpcs``:
+* the analytical XPCS SNR per run and 30 s slice
+* β from ``REFERENCE_BETA``, one table for every run; the median over
+  β-eligible runs and the reference runs' re-measurement are reported beside it
 * the noise check ρ
-* by default only on the T2a acceptance runs; ``--runs all`` takes every static and
+* by default only on ``XPCS_ACCEPTANCE``; ``--runs all`` takes every static and
   silica run with a hit-train XPCS results file (``--xpcs-root``)
 
-T2b, ``--phase classify``:
+``--phase classify``:
 * droplet hits for every mesh, static and reference run (``analysis.triage.classify``):
   mesh train classes per attenuator-and-sample block, out-of-beam trains of the rest
 * each block's cut and each run's counts, flags and WAXS check, with their sources
 * checks: r318 against lowq_report's own hit rule, the runs that must come out
-  ambiguous (r68–69, r140) and all-on (r309–311)
+  ambiguous (r68-69, r140) and all-on (r309-311)
 
 The XPCS phase reads the hit-train results files and raw; the rest, DAMNIT and raw.
-All read-only.
-Nothing is written next to them.
+All read-only, and nothing is written next to them.
 
     python scripts/run_triage.py --phase inventory
     python scripts/run_triage.py --phase xpcs --workers 8
     python scripts/run_triage.py --phase classify --workers 16
 
 Writes run_triage_<phase>_<stamp>.json beside this script, or at --json, plus a CSV
-of the per-run rows next to it. Not unit-tested (CLAUDE.md rule 7): check a change
-by running it.
+of the per-run rows next to it. Scripts are not unit-tested, so check a change by
+running it.
 """
 
 from __future__ import annotations
@@ -85,7 +85,7 @@ from analysis.triage.xpcs import (  # noqa: E402
 )
 from analysis.xpcs.config import DEFAULT_XPCS_ROOT  # noqa: E402
 
-#: §9 T1: series the notebooks and the user already established, as run lists.
+#: Droplet series established by hand, as run lists; the inventory must find each.
 KNOWN_SERIES: dict[str, list[int]] = {
     "r443-452": list(range(443, 453)),
     "r464-466 buffer": [464, 465, 466],
@@ -97,15 +97,15 @@ KNOWN_SERIES: dict[str, list[int]] = {
     "r390-393": list(range(390, 394)),
     "r308-337": list(range(308, 338)),
 }
-#: §4.2 known cases.
+#: Run pairs known to start a fresh droplet, and runs known to hold a volume jump.
 KNOWN_FRESH = [(143, 144)]
 KNOWN_JUMPS = [463, 466]
-#: §3.1, raw total over every run.
+#: Raw data over every run, in TB, which the inventory must reproduce.
 RAW_TOTAL_TB = 994.8
-#: §9 T2a: early and late static droplets of each sample, crystallised r425/426, and
+#: Early and late static droplets of each sample, crystallised r425/426, and
 #: enough late, slow runs that β has several eligible runs per ROI.
 XPCS_ACCEPTANCE = [370, 398, 400, 410, 423, 425, 426, 441, 450, 451, 495]
-#: §4.6 noise check: ρ within twice the jackknife's own relative uncertainty.
+#: Noise check: ρ within twice the jackknife's own relative uncertainty.
 RHO_TOLERANCE = 2 * float(np.sqrt(1 / (2 * (N_BLOCKS - 1))))
 
 
@@ -368,9 +368,10 @@ def _signals(run: int):
 
 
 def _r318_against_lowq(classes, tids) -> dict:
-    """lowq_report cell 17's own rule on r318, train by train, against our classes.
+    """lowq_report's own hit rule on r318, train by train, against our classes.
 
-    Its rule: hit ⇔ water (0.85–0.95 nm⁻¹) per flux > 2 × the median at the lowest Z.
+    A train is a hit when its water band (0.85-0.95 nm^-1) per flux exceeds twice
+    the band's median over the trains at the lowest Z.
     """
     import extra_data as ed
     import h5py
@@ -453,7 +454,7 @@ def classify_phase(args) -> dict[str, Any]:
         },
         "all_on_as_expected": {
             # the beam never left the droplet: no off train, and at most 1 % of the
-            # trains below a full hit's overlap (§4.4, 2026-10-18)
+            # trains below a full hit's overlap
             r: bool(by_run.loc[r, "n_on"] > 0 and by_run.loc[r, "n_off"] == 0
                     and by_run.loc[r, "n_edge"]
                     <= 0.01 * (by_run.loc[r, "n_on"] + by_run.loc[r, "n_edge"]))

@@ -1,4 +1,4 @@
-"""Per-pixel photon sums per window of trains (context file §15).
+"""Per-pixel photon sums per window of trains.
 
 For every window of ``cfg.pixel_sum_trains`` trains, and every pixel
 ``(module, slow, fast)``:
@@ -15,9 +15,9 @@ applied: no static mask, no seams, no normalisation. That is
 window's member trains, bit for bit.
 
 A window is a range of *train ids* from the run's first train, never a count of
-trains, so a dropped or failed train cannot shift a later window (CLAUDE.md
-pitfall 4). A train is summed whole or not at all; one that is left out is
-recorded with the status that left it out.
+trains, so a dropped or failed train cannot shift a later window. A train is
+summed whole or not at all; one that is left out is recorded with the status
+that left it out.
 
 The kernel and :class:`BlockSums` run in the workers, on the frames the pass has
 already decompressed. :class:`PixelSumWriter` runs in the parent, which adds the
@@ -125,7 +125,7 @@ def pixel_sums_hash(cfg: Any, detector_name: str) -> str:
     """sha256 over :data:`HASH_FIELDS`, with the detector name as resolved.
 
     Geometry, beam centre, photon energy, ``npt`` and every mask are left out:
-    none of them changes a stored count (CLAUDE.md pitfall 12).
+    none of them changes a stored count.
     """
     payload = {name: getattr(cfg, name) for name in HASH_FIELDS}
     payload["detector_name"] = detector_name
@@ -150,7 +150,7 @@ class WindowSpec:
             raise ValueError(f"a run has at least one window, got {self.count}")
 
     def __getstate__(self) -> dict[str, Any]:
-        """Pickle by field name — CLAUDE.md pitfall 20."""
+        """Pickle by field name, so a field added later cannot shift the others."""
         return state_by_name(self)
 
     def __setstate__(self, state: Any) -> None:
@@ -307,7 +307,8 @@ class PixelSumWriter:
     window is final, except one that lost trains to ``WORKER_ERROR``: such an
     error says nothing about the data, so opening the file again reopens that
     window and the run rebuilds it from scratch. The file is never truncated:
-    ``cfg.overwrite`` applies to the frame table only (context file §15.3).
+    ``cfg.overwrite`` applies to the frame table only, because the window sums
+    cannot be rebuilt once proc is on tape.
     """
 
     def __init__(self, handle: h5py.File, windows: WindowSpec) -> None:
@@ -328,8 +329,8 @@ class PixelSumWriter:
         """Mark every window holding a ``WORKER_ERROR`` train for a rebuild.
 
         Only memory changes: the file keeps the old window, consistent with its
-        own train statuses, until the rebuilt one replaces it — so a run that
-        dies part-way leaves it exactly as it found it.
+        own train statuses, until the rebuilt one replaces it. A run that dies
+        part-way leaves the file exactly as it found it.
         """
         lost = np.unique(
             self._window_of_train[self._status == FrameStatus.WORKER_ERROR]
@@ -350,7 +351,7 @@ class PixelSumWriter:
     ) -> PixelSumWriter:
         """Open the run's window-sums file, creating it if needed.
 
-        :raises ConfigHashMismatch: the file was written under another hash —
+        :raises ConfigHashMismatch: the file was written under another hash,
             even with ``cfg.overwrite``. Remove it by hand if that is meant.
         :raises SchemaMismatch: the file lacks a dataset this writer stores.
         :raises ValueError: the run's train table or windows have changed.
@@ -509,8 +510,8 @@ class PixelSumWriter:
         """Add one block's partial sums, and write every window it completes.
 
         :raises ValueError: the result carries a train that is not the block's,
-            or files it under the wrong window — a programming fault, never a
-            data condition.
+            or files it under the wrong window. That is a programming fault,
+            never a data condition.
         """
         trains = set(block.train_ids)
         for index, partial in result.pixel_partials.items():
@@ -645,8 +646,8 @@ def windows_for_trains(source: Any, train_ids: Iterable[int]) -> list[int]:
     """The windows whose member trains are exactly ``train_ids``.
 
     :raises ValueError: a train is not in the run, was not summed, or the
-        trains are not a union of whole windows — the message names the windows
-        that cover them, so a caller can choose those instead.
+        trains are not a union of whole windows. The message names the
+        windows that cover them, so a caller can choose those instead.
     """
     requested = sorted({int(t) for t in train_ids})
     if not requested:
@@ -768,7 +769,7 @@ def detector_sums(
     Dataset. Give exactly one of:
 
     :param train_ids: trains that must be exactly a union of whole windows.
-    :param windows: window indices — see :func:`window_table`.
+    :param windows: window indices, as :func:`window_table` lists them.
     :param root: ``cfg.pixel_sums_root`` the pass wrote under.
     :param path: the file itself, instead of ``root`` and ``run_nr``.
     """

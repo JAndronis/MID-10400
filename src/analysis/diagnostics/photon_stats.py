@@ -1,4 +1,4 @@
-"""Single-frame contrast and photon-statistics checks (context/xpcs-quality.md §2).
+"""Single-frame contrast and photon-statistics checks.
 
 Reads the per-frame ring records of `analysis.saxs.photon_stats` and computes, for
 any set of frames (a run's hits, a 30 s slice, a quarter of the pulse train):
@@ -8,16 +8,15 @@ any set of frames (a run's hits, a 30 s slice, a quarter of the pulse train):
 per ring, or per XPCS ROI by summing over its rings. W1 = Σw and W2 = Σw² over
 the ring's valid pixels, w each pixel's run-mean count relative to its ring (from
 the window sums); without weights W1 = W2 = n_valid, which reads β high by the
-ring's intensity spread w_cv². The W are taken over each memory cell's base mask
-(§2.1), which moves 1 + β by ≤ 1e-4. σ by jackknife over contiguous blocks of
-trains.
+ring's intensity spread w_cv². The W are taken over each memory cell's base mask,
+which moves 1 + β by ≤ 1e-4. σ by jackknife over contiguous blocks of trains.
 
 The negative-binomial shape checks: 2·P0·P2/P1² = 1 + β and
 3·P1·P3/(2·P2²) = (1 + 2β)/(1 + β), with Poisson errors from the counts. They are
 taken on the pooled histogram, so they also carry the spread of k̄ between frames
-and between pixels: R3 is lifted by ⟨m⟩⟨m³⟩/⟨m²⟩² over frames, 1.02–1.04 on whole
-runs, which alone is worth 15–30σ (xpcs-quality §7.1). So ``r3_z`` records the raw
-ratios; it is not a speckle test over many frames. Pixels far out in the tail (hot
+and between pixels: R3 is lifted by ⟨m⟩⟨m³⟩/⟨m²⟩² over frames, which on a whole
+run alone is worth many σ. So ``r3_z`` records the raw ratios; it is not a speckle
+test over many frames. Pixels far out in the tail (hot
 pixels) inflate Σk(k − 1) and with it β, so the low orders read below.
 
 Nothing here alters the stored counts.
@@ -147,8 +146,7 @@ def run_weights(
     """`ring_weights` for one run: its ring map, window sums and masks.
 
     :param trains: build the per-pixel means from the windows whose trains all lie
-        in ``trains`` (a mesh run's hits, xpcs-quality §5.1); None for every
-        written window.
+        in ``trains`` (a mesh run's hits); None for every written window.
     :param masks_path: the SAXS pass's ``masks.npz`` (per-cell base masks).
     """
     from analysis.saxs.masks import load_masks

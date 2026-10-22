@@ -1,23 +1,15 @@
 """The NaN-equivalence gate.
 
-The AGIPD self-test compares a sparse kernel against pyFAI. Here both sides are
-pyFAI, so that comparison would be an identity check. This gate has content
-instead: it is the correctness argument for the whole design in
-:mod:`analysis.waxs.operator`.
-
-The **reference** masks each frame the obvious way — every excluded pixel
-passed as ``integrate1d(mask=)`` — which is correct and slow, because pyFAI
-rebuilds its sparse matrix whenever the mask checksum changes. The
-**production** path builds the matrix once with the static mask and carries the
-rest as NaN. Both integrate the same photon counts, so the gate tests that
-equivalence and nothing else. Measured on r0423 (keV), the two agree exactly. If
-a future pyFAI changes how non-finite values are preprocessed, that equivalence
-is the thing that breaks, and this gate is what catches it before a whole run is
-integrated.
-
-The reference runs on its own ``AzimuthalIntegrator``, rebuilt from the
-operator's PONI text, so that hammering it with per-frame masks never evicts
-the production engine's cached matrix.
+This gate checks the design in :mod:`analysis.waxs.operator`. The reference
+path passes every excluded pixel of a frame as ``integrate1d(mask=)``, which is
+correct and slow, because pyFAI rebuilds its sparse matrix whenever the mask
+changes. The production path builds the matrix once with the static mask and
+carries the rest as NaN. Both integrate the same photon counts, so the gate
+tests that equivalence and nothing else. A pyFAI change in how non-finite
+values are preprocessed would break it, and this gate catches that before a run
+is integrated. The reference runs on its own ``AzimuthalIntegrator``, rebuilt
+from the operator's PONI text, so its per-frame masks never evict the
+production engine's cached matrix.
 """
 
 from __future__ import annotations
@@ -44,8 +36,8 @@ __all__ = [
     "run_selftest",
 ]
 
-#: The two paths were measured to agree exactly; this leaves room for a
-#: different summation order without leaving room for a different answer.
+#: The two paths agree exactly on real frames. This leaves room for a different
+#: summation order and none for a different answer.
 TOLERANCE = 1e-9
 
 
@@ -78,8 +70,8 @@ def reference_frame(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """``(signal, normalization, variance)`` with ``excluded`` passed as ``mask=``.
 
-    :param photons: float32 counts, flat; values under ``excluded`` are ignored
-        and replaced by zero, so the mask is genuinely what removes them.
+    :param photons: float32 counts, flat. Values under ``excluded`` are replaced
+        by zero, so the mask alone removes them.
     :param excluded: flat bool, the pixels to leave out.
     """
     counts = np.where(excluded, np.float32(0), np.asarray(photons, np.float32))
@@ -88,7 +80,7 @@ def reference_frame(
         op.npt,
         method=op.method,
         unit=op.unit,
-        # A fresh writable array, never a read-only view of the operator's.
+        # A fresh writable array, because pyFAI refuses a read-only mask.
         mask=np.ascontiguousarray(excluded.reshape(MODULE_SHAPE)),
         variance=counts.copy().reshape(MODULE_SHAPE),
     )
@@ -115,10 +107,9 @@ def compare_frame(
 ) -> tuple[float, float, float]:
     """Relative difference in S, N and V between the two paths, on one frame.
 
-    Both paths integrate the *same* counted frame — the one
-    :func:`~analysis.waxs.integrate.prepare_frame` produces — so the comparison
-    is the NaN-versus-mask equivalence and nothing else. Whether the counts
-    themselves are right is W4's gate B, against an independent estimator.
+    Both paths integrate the same counted frame, the one
+    :func:`~analysis.waxs.integrate.prepare_frame` produces, so the comparison
+    tests the NaN-versus-mask equivalence and not the counts themselves.
 
     :raises SelfTestFailed: the two paths disagree about which bins are
         populated at all, which no tolerance would catch.

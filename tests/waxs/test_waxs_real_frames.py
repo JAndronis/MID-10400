@@ -1,31 +1,28 @@
-"""The W2 gate, kept as a test: real r0423 frames, both detectors.
+"""Real r0423 frames from both detectors, through the integrator.
 
 ``data/`` is not committed (it is facility data), so this skips wherever the
 exported train is absent. Where it is present, it is the only place the pass is
-exercised on real JUNGFRAU values — dense float32 keV with a negative tail and
-a 75.9 % / 84.4 % static mask — rather than on the mock's synthetic ones.
+exercised on real JUNGFRAU values (dense float32 keV with a negative tail and a
+static mask over most of the module) rather than on the mock's.
 
 The exported files are one train of r0423 (2637695397) read as
 
     JUNGFRAU(run, detector_name=f"MID_EXP_JF500K{n}")
         .select_trains(...).get_array("data.adc").squeeze("module")
 
-**Two things the export cannot speak to, and this file must not pretend it can.**
+The export has two limits.
 
-*It carries no ``data.memoryCell``.* The lit *array positions* are 0–7, but the
-cell ids those positions hold are 0–6 and 15 (measured on the cluster,
-``EXPECTED_LIT_CELLS``). Anything here that classifies cells is therefore about
-positions, and says so.
+It carries no ``data.memoryCell``. The lit array positions are 0-7, but the cell
+ids those positions hold are 0-6 and 15 (``EXPECTED_LIT_CELLS``). Anything here
+that classifies cells is therefore about positions, and says so.
 
-*``proc_mask_jf2_r423.nc`` is a copy of jf1's mask* — ``module=1``, byte-identical
-to the jf1 export. It is the same mix-up as §6 O3, which was fixed for the data
-and not for the mask. So jf2's ``data.mask`` assertions are skipped here until it
-is re-exported; the cluster, with the right mask, flags **all** of jf2's extreme
-pixels, which is the opposite of what this file once recorded.
+``proc_mask_jf2_r423.nc`` is a byte-identical copy of jf1's mask export
+(``module=1``). So jf2's ``data.mask`` assertions are skipped until it is
+re-exported.
 
-The geometry is *not* real either: the PONI files live on GPFS, so a synthetic
-one is used and the q values here mean nothing. What is tested is the frame
-arithmetic and the masks, neither of which depends on where the beam centre is.
+The geometry is synthetic too: the PONI files live on GPFS, so the q values here
+mean nothing. What is tested is the frame arithmetic and the masks, neither of
+which depends on where the beam centre is.
 """
 
 from __future__ import annotations
@@ -127,8 +124,8 @@ def test_the_lit_array_positions_are_the_first_eight(real):
 
     Feeding ``arange(16)`` as the cell ids makes this a statement about where
     the lit frames sit in the array, which is 0-7. What cell ids they carry is
-    a different question, and the answer is 0-6 and 15 — see the module
-    docstring. Reading one off the other is CLAUDE.md pitfall 4.
+    a different question, and the answer is 0-6 and 15. Reading one off the
+    other would label frames with the wrong cell.
     """
     cfg, op, ai, data, mask, detector = real
     positions = np.arange(16, dtype=np.uint16)
@@ -137,13 +134,12 @@ def test_the_lit_array_positions_are_the_first_eight(real):
     result = accumulator.finalise()
 
     assert result.lit == tuple(range(8))
-    # The margin that makes the threshold safe, on positions: >40 % against
-    # <0.1 %, four orders of magnitude either side of it.
+    # The two populations sit far apart: above 40 % against below 0.1 %.
     assert result.lit_fraction[:8].min() > 0.40
     assert result.lit_fraction[8:].max() < 0.001
 
-    # Positions 0-7 are consecutive, so the run-invariant shape check is happy
-    # with them - which is the point: it cannot catch a pitfall-4 mix-up.
+    # Positions 0-7 are consecutive, so the run-invariant shape check passes.
+    # It cannot catch positions read as cell ids.
     result.check_structure(16)
     # ...and so this set is *not* the expected one, which is about cell ids.
     from analysis.waxs.cells import UnexpectedLitCells
@@ -165,7 +161,7 @@ def test_the_read_noise_is_recovered(real):
 
 
 def test_the_nan_path_equals_the_reference_on_real_frames(real):
-    """The W2 gate. Measured exact on both detectors, all 500 bins."""
+    """The NaN path equals the per-frame-mask reference exactly, in every bin."""
     cfg, op, ai, data, mask, detector = real
     counting = PhotonCounting.from_config(cfg)
     # Array positions 0-7, which is where the lit frames are in the export.
@@ -196,24 +192,21 @@ def test_a_real_frame_integrates_to_something_sensible(real):
     assert (result.normalization > 0).all()
     assert result.energy_valid > 0
     assert result.n_photons > 0
-    # W7: every ASIC keeps >= 55 k usable pixels, so none lacks a level.
+    # Every ASIC keeps far more usable pixels than min_pixels, so none lacks a
+    # level.
     assert result.n_level_missing == 0
     assert np.abs(result.asic_level).max() < 0.5
-    # jf2's extreme pixels sit under the .edf, so the kept maximum is modest.
+    # Every extreme pixel sits under the .edf, so the kept maximum is modest.
     assert result.max_kev < 100
     assert result.n_bad_pixels == int(bad.sum())
 
 
 def test_the_value_check_catches_extremes_the_static_mask_would_have_hidden(real):
-    """§3 D6′, restated: the check is insurance, and it excludes rather than fails.
+    """Without the ``.edf``, the value check excludes extreme pixels, not frames.
 
-    This file once claimed jf2 carried extreme pixels ``data.mask`` missed. It
-    does not: that came from comparing jf2's data against jf1's mask (see the
-    module docstring). On the cluster every extreme pixel on both detectors is
-    flagged. What survives is the weaker, still-worth-having statement: strip
-    the ``.edf`` away and the value check is what stops a 1.8e5 keV pixel
-    reaching a q bin — now by dropping the pixel, not the frame, because on
-    r0480 dropping frames cost 473 of them for a median of 3 pixels each.
+    In the export every extreme pixel sits under the ``.edf``. Strip it away and
+    the value check is what stops such a pixel reaching a q bin, by dropping the
+    pixel and keeping the frame.
     """
     cfg, op, ai, data, mask, detector = real
     from analysis.waxs.integrate import extreme_pixels

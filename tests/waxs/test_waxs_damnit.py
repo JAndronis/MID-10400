@@ -46,8 +46,8 @@ def test_the_grid_is_what_damnit_stores(grid, cfg):
     assert grid.name == "intensity"
     assert grid.dtype == np.float32
     assert "n_frames" in grid.coords
-    # Small enough that the per-frame grid is the obvious thing to store:
-    # 3000 trains x 8 cells x npt 500 is 48 MB, against 0.93 GB for AGIPD.
+    # Small enough to store the per-frame grid: 3000 trains x 8 cells x npt
+    # 500 of float32 is 48 MB.
     assert grid.nbytes < 10_000_000
 
 
@@ -64,7 +64,7 @@ def test_the_grid_survives_damnits_netcdf_round_trip(grid, tmp_path):
 
 
 def test_the_damnit_variable_runs_at_the_stored_npt(monkeypatch):
-    """836 of 839 stored files are npt 200; the variable must build that config."""
+    """The stored files are at npt 200, so the variable must build that config."""
     seen = []
     monkeypatch.setattr(
         "analysis.waxs.run.run_jungfrau_waxs", lambda cfg, **kwargs: seen.append(cfg)
@@ -77,7 +77,7 @@ def test_the_damnit_variable_runs_at_the_stored_npt(monkeypatch):
 
 
 def test_jungfrau_waxs_does_not_swallow_an_incomplete_run(monkeypatch):
-    """Failing loudly needs no code here — only that nothing catches it."""
+    """Failing loudly needs no code here, only that nothing catches the error."""
     from analysis.common.writer import IncompleteRun
 
     def boom(cfg, **kwargs):
@@ -91,7 +91,7 @@ def test_jungfrau_waxs_does_not_swallow_an_incomplete_run(monkeypatch):
 
 # ── the overview ─────────────────────────────────────────────────────────────
 def test_the_overview_draws_both_detectors_as_separate_traces(grid):
-    """§6 O5: two traces, never a concatenation."""
+    """Two traces, never a concatenation."""
     figure = damnit.overview_figure(grid, grid)
     curve_axes = figure.axes[0]
     assert len(curve_axes.lines) == 2
@@ -109,7 +109,7 @@ def test_the_overview_marks_the_overlap(grid):
 
 
 def test_the_overview_shows_the_fitted_scale(grid):
-    """§6 O5: jf2 is drawn on jf1's scale, and by how much is on the figure."""
+    """jf2 is drawn on jf1's scale, and the figure states the factor."""
     figure = damnit.overview_figure(grid, grid)
     note = " ".join(t.get_text() for t in figure.axes[0].texts)
     assert "scale" in note and "overlap" in note
@@ -190,7 +190,7 @@ def test_the_file_readers_return_the_same_thing_as_the_pass(
     assert set(pooled.data_vars) == {"intensity", "sigma", "n_frames"}
 
 
-# ── jungfrau_preprocessing and the per-detector readers (user, 2026-10-14) ────
+# ── jungfrau_preprocessing and the per-detector readers ─────────────────────
 def _colour(cell) -> str:
     return "#" + bytes(cell.background).hex()
 

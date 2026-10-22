@@ -1,10 +1,10 @@
 """The names DAMNIT stores the analysis products under.
 
-A DAMNIT ``Group`` names its variables ``<group>.<var>``, so the AGIPD and
-JUNGFRAU columns became ``agipd.saxs``, ``jungfrau.jf1`` and so on in
-``src/amore/context.py``. Runs processed before that still hold the flat names,
-until they are reprocessed, so a reader asks `stored` which of the two a file
-carries instead of hardcoding one.
+A DAMNIT ``Group`` names its variables ``<group>.<var>``, such as
+``agipd.saxs`` and ``jungfrau.jf1``. A results file written under the flat
+names (``agipd_saxs``, ``jungfrau_waxs_jf1``) keeps them until its run is
+reprocessed, so a reader asks `stored` which of the two a file carries instead
+of hardcoding one.
 """
 
 from __future__ import annotations

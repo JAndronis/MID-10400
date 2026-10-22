@@ -129,7 +129,8 @@ class TrainSums:
 
 
 def good_pixels(photons: TrainPhotons, rings: Rings, policy: MaskPolicy) -> np.ndarray:
-    """Envelope pixels a train correlates: in a ring and not flagged in any frame."""
+    """Envelope pixels a train correlates: in a ring and, under ``ANY_FRAME``,
+    not flagged in any frame."""
     good = rings.label >= 0
     if policy is MaskPolicy.ANY_FRAME:
         good &= ~photons.flagged_any(rings.label.size)

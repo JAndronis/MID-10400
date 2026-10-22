@@ -1,4 +1,4 @@
-"""The old ``xpcs_offline`` figures and columns, reproduced from the hit store.
+"""extra-speckle's ``xpcs_offline`` figures and columns, reproduced from the hit store.
 
 What is pinned is what a reader of the figure or the column sees: the numbers
 (against the sums and the stored photons, independently recomputed), the
@@ -362,7 +362,7 @@ def test_the_outlier_figure_leaves_out_the_pixels_flagged_in_every_train():
 
 
 def test_an_empty_q_bin_is_drawn_although_its_ratio_is_nan():
-    """No photons in a bin is 0/0, not a flagged pixel (r1, no beam)."""
+    """No photons in a bin, as in a run without beam, is 0/0 and not a flagged pixel."""
     from dataclasses import replace
 
     det = synthetic_detector(np.random.default_rng(3), n=400)

@@ -1,4 +1,4 @@
-"""Small statistics the triage derives its thresholds with (context/run-triage.md §5).
+"""Small statistics the triage derives its thresholds with.
 
 No threshold in the triage is a constant. Each one is either a multiple-testing cut,
 which fixes the expected number of false positives over the whole triage, or the
@@ -31,7 +31,7 @@ MAD_TO_SIGMA = 1.4826
 #: JASA 88:1273): a MAD from n values is as precise as a standard deviation from
 #: 0.37 n, which sets the degrees of freedom of a statistic studentised by it.
 MAD_EFFICIENCY = 0.37
-#: Expected false positives over a whole family of tests (§5): 0.1, so a flag raised
+#: Expected false positives over a whole family of tests. At 0.1, a flag raised
 #: anywhere in the triage is very unlikely to be noise.
 EXPECTED_FALSE = 0.1
 

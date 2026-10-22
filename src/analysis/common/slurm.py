@@ -1,15 +1,12 @@
-"""Submitting node scripts to SLURM, and the proposal's canonical paths.
+"""Submitting a command to SLURM as one job, and the proposal's canonical paths.
 
-The node scripts submit themselves: without ``--local`` each run becomes one
-job, whose batch script calls the same script again with ``--local``. This
-module holds the parts of that which can be tested without a cluster — the
-path rewriting, the batch script, the ``sbatch`` call behind an injectable
-runner, the per-run failure ledger and the command-line surgery.
-``scripts/_common.py`` holds the argparse glue.
+Everything here can be tested without a cluster: the path rewriting, the batch
+script, the ``sbatch`` call behind an injectable runner, the per-run failure
+ledger and the command-line rewriting.
 
 Nothing here calls ``srun``. On a whole-node partition ``srun`` without
-``-n 1`` starts one copy per CPU group (CLAUDE.md pitfall 28); a batch script
-with one task runs the command exactly once.
+``-n 1`` starts one copy per CPU group, while a batch script with one task runs
+the command exactly once.
 """
 
 from __future__ import annotations
@@ -50,15 +47,14 @@ PROPOSAL_SUBDIRS = ("usr", "proc", "raw", "red", "scratch")
 
 #: The partition DAMNIT submits this proposal's cluster variables to: the
 #: ``slurm_partition`` key of ``usr/Shared/amore/runs.sqlite``'s ``metameta``
-#: table (checked 2026-10-13). It mixes node classes — 2 × 10 to 2 × 64 cores —
-#: so a benchmark that must be comparable with an earlier one passes
-#: ``constraint``.
+#: table. It mixes node classes with different core counts, so a benchmark that
+#: must be comparable with an earlier one passes ``constraint``.
 DEFAULT_PARTITION = "allcpu"
 
 #: Hardware threads per core on every ``allcpu`` node (``sinfo -p allcpu -o
-#: %z`` gives ``S:C:2`` for every node class, 2026-10-13). SLURM counts CPUs as
-#: threads, so a job that needs N physical cores asks for 2N CPUs: asked for
-#: 36, it may be given a 2 × 10-core node and its 36 workers 20 cores.
+#: %z`` gives ``S:C:2``). SLURM counts CPUs as threads, so a job that needs N
+#: physical cores asks for 2N CPUs. Asking for N could put N workers on N/2
+#: cores.
 THREADS_PER_CORE = 2
 
 #: What ``sbatch`` accepts as ``--time``: ``MM``, ``MM:SS``, ``HH:MM:SS``,
@@ -74,18 +70,18 @@ def prop_path(path: str | os.PathLike[str], root: Path = PROPOSAL_ROOT) -> str:
     """``path`` made absolute, written in the proposal's canonical form.
 
     The proposal's subdirectories are symlinks, so a resolved path names a
-    storage tier (``/gpfs/exfel/u/usr/…``, ``/gpfs/exfel/d/proc/…``) rather
+    storage tier (``/gpfs/exfel/u/usr/...``, ``/gpfs/exfel/d/proc/...``) rather
     than the proposal. A batch script written with those, or with a private
     alias such as ``~/p010400``, works only for as long as the data stay where
     they are and only for whoever can follow the alias.
 
     The parent directories are resolved and the final component is kept as
-    given: a venv's ``bin/python`` is a symlink to the interpreter it was
-    built from, and resolving it would drop the venv (CLAUDE.md pitfall 22).
+    given, because a venv's ``bin/python`` is a symlink to the interpreter it
+    was built from, and resolving it would drop the venv.
 
     :param path: any path; relative ones are taken from the working directory.
     :param root: the proposal directory, in its ``/gpfs/exfel/exp`` form.
-    :returns: ``<root>/<subdir>/…`` for a path inside one of the proposal's
+    :returns: ``<root>/<subdir>/...`` for a path inside one of the proposal's
         subdirectories, otherwise the path with its parents resolved.
     """
     given = Path(os.path.abspath(path))
@@ -119,12 +115,11 @@ def batch_script(
     :param name: the job name, also the log's subject.
     :param log_dir: where ``slurm-<jobid>.out`` goes; it must exist when the
         job starts, which :func:`submit` sees to.
-    :param cpus: physical cores for the one task — the worker count of the
+    :param cpus: physical cores for the one task, the worker count of the
         command. The job asks for ``cpus * threads_per_core`` CPUs, which is
         what makes SLURM pick a node with that many cores. ``allcpu`` hands
-        over the whole node either way (``select/linear``): the task's affinity
-        is every CPU of the node, not the ones asked for (probed 2026-10-13 on a
-        Gold 6140 and an EPYC 9374F node with ``--cpus-per-task=36``).
+        over the whole node either way (``select/linear``), so the task's
+        affinity is every CPU of the node, not the ones asked for.
     :param limit: the time limit, in any form ``sbatch --time`` accepts.
     :param partition: defaults to DAMNIT's.
     :param after: job id(s) that must succeed first. A job that fails cancels
@@ -265,7 +260,7 @@ def run_each[T](
     One bad run is not a reason to lose the others in a multi-run job; nor is
     it a reason for the job to report success.
 
-    :param work: returns an exit status, as a script's ``main`` does — ``0`` or
+    :param work: returns an exit status, as a script's ``main`` does. ``0`` or
         ``None`` is success, anything else a failure. An exception is logged
         with its traceback and counted as a failure. ``KeyboardInterrupt``
         still stops the loop.

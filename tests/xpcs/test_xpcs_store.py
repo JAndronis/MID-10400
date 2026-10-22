@@ -120,7 +120,7 @@ def test_the_base_is_what_more_than_half_the_samples_flag():
     b = (cells, [np.array([2, 3, 5]), np.array([1, 2, 3]), np.array([8])])
     c = (cells, [np.array([2, 3]), np.array([2]), np.array([9])])
     base = FlagBase.from_samples([a, b, c])
-    # cell 4 appears in 6 frames: pixel 2 in 5, 3 in 4, 1 in 3, 5 in 1
+    # cell 4 appears in 6 frames: pixel 2 in 6, 3 in 5, 1 in 3, 5 in 1
     assert base.of_cell(4).tolist() == [2, 3]
     assert base.of_cell(9).tolist() == [8]
     assert base.cells.tolist() == [4, 9]

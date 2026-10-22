@@ -1,11 +1,9 @@
-"""The DAMNIT surface for the JUNGFRAU WAXS pass.
+"""The functions behind the JUNGFRAU WAXS DAMNIT variables.
 
-Thin on purpose: DAMNIT ``exec``s its variable file into a dict, so a function
-defined there cannot be pickled to the workers this pass spawns. The context
-file holds only the decorated wrappers; everything they call lives here.
-
-One variable per detector, because the pass is per detector, plus an
-overview that draws both.
+DAMNIT ``exec``s its context file into a dict, so a function defined there
+cannot be pickled to the workers this pass spawns. The context file holds only
+the decorated wrappers, and everything they call lives here. There is one
+variable per detector, plus a combined curve and an overview that use both.
 """
 
 from __future__ import annotations
@@ -43,13 +41,10 @@ __all__ = [
 
 log = logging.getLogger(__name__)
 
-#: Where the DAMNIT variables depart from the config defaults. Kept here rather
-#: than in the context file, so that a script judging DAMNIT's files
-#: (``scripts/reprocess_safe.py``) builds the config DAMNIT builds.
-#:
-#: ``npt`` 200: 836 of the 839 files under ``scratch/jungfrau_waxs`` were written
-#: at 200 on 2026-09-14, by a live context that passed it; kept on 2026-10-13
-#: (open task 17d). The config default stays 500, which W4 was run at.
+#: Where the DAMNIT variables depart from the config defaults. Kept here and not
+#: in the context file, so that a script judging DAMNIT's files
+#: (``scripts/reprocess_safe.py``) builds the config DAMNIT builds. ``npt`` 200
+#: matches the stored DAMNIT outputs.
 DAMNIT_OVERRIDES: dict[str, Any] = {"npt": 200}
 
 
@@ -67,16 +62,16 @@ def damnit_config(
 def jungfrau_waxs(proposal: int, run_no: int, detector: str, **overrides: Any) -> Any:
     """Integrate one detector's run and return the ``(trainId, cellId, q)`` grid.
 
-    A partial result is never returned: ``IncompleteRun`` propagates. The value
-    check is the exception — it drops the offending pixel and keeps the frame,
-    so an affected frame's ring bin reads low and a reader should filter on
-    ``frames/n_extreme_pixels`` before treating that bin quantitatively.
+    A partial result is never returned, ``IncompleteRun`` propagates. The value
+    check drops an extreme pixel and keeps the frame, so that frame's ring bin
+    reads low. Filter on ``frames/n_extreme_pixels`` before using that bin
+    quantitatively.
 
-    :returns: the grid, or ``None`` for a run with no lit memory cell — no beam
-        is a result, not a failure, and the evidence is logged at WARNING.
-    :raises IncompleteRun: a frame did not reach ``OK``. A frame with *every*
-        pixel excluded is tolerated by default; pass
-        ``allow_data_check_failures=False`` to refuse instead.
+    :returns: the grid, or ``None`` for a run with no lit memory cell (no beam),
+        with the evidence logged at WARNING.
+    :raises IncompleteRun: a frame did not reach ``OK``. A frame with every
+        pixel excluded is tolerated by default. Pass
+        ``allow_data_check_failures=False`` to refuse it.
     """
     from analysis.waxs.run import run_jungfrau_waxs
 
@@ -95,10 +90,11 @@ def preprocess(
 ) -> Any:
     """The ``jungfrau_preprocessing`` cell: each detector's pass, one after the other.
 
-    A detector whose file is complete is answered from it without writing
-    (CLAUDE.md pitfall 26). A run with no lit cell writes no file and reads
-    "dark". A failure on one detector does not stop the other; it turns the
-    cell red, and the reader of that detector says what is wrong.
+    A detector whose file is complete is answered from it without writing, so
+    a relaunched variable cannot truncate a finished file. A run with no lit
+    cell writes no file and reads "dark". A failure on one detector does not
+    stop the other. It turns the cell red, and the reader of that detector says
+    what is wrong.
 
     :returns: a ``Cell``: per detector its outcome (JSON) and a one-line summary.
     """
@@ -155,12 +151,12 @@ def jungfrau_waxs_from_file(
 ) -> Any:
     """A ``jungfrau_waxs_jf*`` column: the ``(trainId, cellId, q)`` grid, from the file.
 
-    Written by ``jungfrau_preprocessing``; this only reads it.
+    ``jungfrau_preprocessing`` writes the file and this only reads it.
 
-    :raises Skip: no file — a dark run, or a failed pass (the preprocessing
+    :raises Skip: no file, from a dark run or a failed pass (the preprocessing
         cell says which).
-    :raises IncompleteRun: some frame is not ``OK``, other than the tolerated
-        ``DATA_CHECK_FAILED`` (a frame with every pixel excluded), as the pass.
+    :raises IncompleteRun: some frame is not ``OK``, other than a
+        ``DATA_CHECK_FAILED`` frame the config tolerates, as in the pass.
     """
     import h5py
     from damnit.context import Skip
@@ -199,21 +195,17 @@ def pooled_from_file(path: str | Path) -> Any:
 def combined_curve(jf1: Any, jf2: Any, *, method: str = "wls") -> Any:
     """One I(q) from both detectors, jf2 scaled onto jf1 over their overlap.
 
-    Returns a DataArray rather than a Dataset so DAMNIT renders it in the table
-    as its dtype and shape; ``sigma`` and ``source`` ride along as non-dimension
-    coordinates, and the fitted scaling is in ``attrs``.
+    Returns a DataArray, which DAMNIT renders in the table by dtype and shape.
+    ``sigma`` and ``source`` are non-dimension coordinates and the fitted
+    scaling is in ``attrs``. ``source`` is 0 where only jf1 contributes, 1
+    where only the scaled jf2 does, and 2 in the overlap.
 
-    ``source`` is 0 where only jf1 contributes, 1 where only the scaled jf2
-    does, and 2 in the overlap, so a reader can always tell which detector a
-    point came from.
+    Returns ``None`` when either detector produced nothing, as in a run with no
+    beam. The per-detector variables already report that, so this does not
+    raise and stop a reprocess.
 
-    Returns ``None`` when either detector produced nothing — a run with no beam
-    gives no I(q) on either, and there is nothing to combine. The per-detector
-    variables say the same thing on their own, so this stays quiet rather than
-    raising and taking a reprocess down with it.
-
-    :raises NoOverlap: the two populate no shared q range. That is a geometry
-        problem, not a plotting one, so it is not swallowed.
+    :raises NoOverlap: the two populate no shared q range, which is a geometry
+        problem.
     :raises analysis.waxs.combine.UnitsMismatch: one grid counts keV and the
         other photons.
     """
@@ -262,13 +254,10 @@ def overview_figure(
 ) -> Any:
     """Both detectors as two traces, with their overlap visible.
 
-    Deliberately **not** a concatenation. After masking the two populate
-    11.5-23.7 and 9.8-18.5 nm⁻¹, so they overlap over roughly 11.5-18.5 — wide
-    enough to be a genuine cross-check on the two PONIs, and the place any
-    normalisation mismatch between the detectors would show. Pooling them onto a
-    common grid needs both ``N`` arrays on the same absolute scale, which is
-    untested and involves different solid-angle coverage and different masks; do
-    that only once the two traces are seen to agree.
+    The second trace is scaled onto the first over their shared q range and the
+    factor is printed, so a normalisation or shape mismatch between the
+    detectors stays visible. The lower panels map I(q) per train for each
+    detector.
 
     :param jf1: the DataArray from :func:`jungfrau_waxs` for jf1, or ``None``.
     :param jf2: the same for jf2. Either may be missing, so the overview still
@@ -280,7 +269,7 @@ def overview_figure(
     grids = [
         (label, g) for label, g in zip(labels, (jf1, jf2), strict=True) if g is not None
     ]
-    # Two traces on one axis, one scaled onto the other: only in one unit.
+    # Two traces scaled onto one axis must share a unit.
     units = [units_of(grid) for _, grid in grids]
     if len(units) == 2:
         require_same_units(*units)
@@ -295,14 +284,11 @@ def overview_figure(
         try:
             q, curve, sigma = mean_curve(grid)
         except ValueError:
-            # A run where nothing reached OK. The map panel says so; the curve
-            # panel simply has one fewer trace.
+            # A run where nothing reached OK. The map panel says so and the
+            # curve panel has one fewer trace.
             continue
         curves.append((label, q, curve, sigma))
 
-    # The second detector is drawn on the first's scale, fitted over the
-    # overlap, so the two traces are directly comparable. The reference keeps
-    # its own values; only the other moves, and by how much is on the figure.
     scaling = None
     if len(curves) == 2:
         (_, q_ref, i_ref, s_ref), (_, q_other, i_other, s_other) = curves
@@ -321,9 +307,8 @@ def overview_figure(
     for index, (label, q, curve, _) in enumerate(curves):
         scaled = scaling is not None and index == 1
         factor = scaling.factor if scaled else 1.0
-        # Always label the factor when one was applied, including 1: a reader
-        # must be able to tell a scaled trace from an unscaled one without
-        # inferring it from the value.
+        # Label the factor whenever one was applied, even 1, so a scaled trace
+        # is distinguishable from an unscaled one.
         suffix = f" x {factor:.4g}" if scaled else ""
         ax1.plot(q, curve * factor, label=f"{label}{suffix}", lw=1.2)
 

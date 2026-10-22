@@ -1,4 +1,4 @@
-"""The row model over a mock JUNGFRAU run (WAXS context file §7, W3)."""
+"""The row model over a mock JUNGFRAU run."""
 
 from __future__ import annotations
 
@@ -59,7 +59,7 @@ def test_a_train_with_no_entry_is_no_frames(cfg, mock_run_factory, operator, sta
 
 
 def test_a_dropped_train_does_not_shift_rows(cfg, mock_run_factory, operator):
-    """CLAUDE.md pitfall 4: the run has a gap, the rows must not slide."""
+    """The run has a gap, and the rows after it must not slide onto other trains."""
     run, dc = mock_run_factory(train_ids=(10000, 10001, 10003, 10004))
     op, _ = operator
     det = open_detector(cfg, dc)
@@ -81,7 +81,7 @@ def test_a_block_never_straddles_a_gap(cfg, mock_run_factory, operator):
 
 
 def test_an_empty_lit_set_plans_no_rows_rather_than_refusing(cfg, mock_run_factory):
-    """A run that saw no beam is not a broken run; 43 of the proposal's are.
+    """A run that saw no beam is a valid run with no rows, not a broken one.
 
     ``run_jungfrau_waxs`` returns before it ever gets here on such a run, but
     the plan itself must not refuse one: whether an empty set is worth
@@ -116,9 +116,9 @@ def test_multi_entry_trains_are_refused(cfg, mock_run_factory):
         build_plan(cfg, (0, 1), dc=dc, control_dc=dc, det=det)
 
 
-# ── source names, from lsxfel on the r0423 proc files (§6 O1) ────────────────
+# ── source names, as lsxfel reports them for proc files ──────────────────────
 def test_the_corrected_source_is_the_one_selected(pipeline):
-    """Corrected data uses /CORR/ since 2026/1; /DET/ survives as a soft link."""
+    """Corrected data use /CORR/; the /DET/ name remains only as a soft link."""
     assert pipeline.det.detector_name == "MID_EXP_JF500K1"
     assert list(pipeline.det.source_to_modno) == [
         "MID_EXP_JF500K1/CORR/JNGFR01:daqOutput"
@@ -128,9 +128,9 @@ def test_the_corrected_source_is_the_one_selected(pipeline):
 def test_the_legacy_det_alias_is_not_a_second_module(pipeline):
     """The alias *is* in instrument_sources, and must not be read as a module.
 
-    ``DataCollection.instrument_sources`` includes legacy names — only
-    ``detector_sources`` subtracts them — so ``_source_matches`` really does see
-    it. What keeps it out is that ``_source_corr_pat`` matches ``/CORR/`` alone.
+    ``DataCollection.instrument_sources`` includes legacy names (only
+    ``detector_sources`` subtracts them), so ``_source_matches`` does see it.
+    What keeps it out is that ``_source_corr_pat`` matches ``/CORR/`` alone.
     If a future EXtra-data widened that pattern, ``modno_to_source`` would
     collapse two sources onto one module number and the constructor's own
     assertion would fire; this pins the behaviour before that.

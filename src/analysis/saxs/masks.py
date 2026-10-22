@@ -2,26 +2,24 @@
 
 Three things are combined here:
 
-1. **The static mask.** ASIC seams OR'd with the single hand-maintained pixel
+1. The static mask. ASIC seams OR'd with the single hand-maintained pixel
    mask, which covers both the generally bad pixels and the anisotropic low-q
-   lobe (integrator I4, option (a)). There is deliberately only one such file:
-   two overlapping masks would have to be kept in step with each other.
-   ``image.mask`` never sets ``NON_STANDARD_SIZE``, so the double-width
-   ASIC-edge pixels are unflagged in the data and must come from
-   ``agipd_asic_seams()``.
-2. **The per-cell base mask.** The static bits in ``image.mask`` are per memory
-   cell (4.05 % always flagged, 0.022 % varying), so a majority vote over a few
-   sampled trains gives each cell a base mask and a precomputed denominator
-   ``D = Σ c·Ω``. Because every statically-bad pixel votes on every sample, the
-   base mask is always a superset of the static mask; this is asserted, not
-   assumed.
-3. **The per-frame correction.** ``sparse.integrate_frame`` corrects ``D`` by
-   only the pixels where a frame disagrees with its cell, in either direction,
-   so the result is exact rather than approximate.
+   lobe. There is deliberately only one such file: two overlapping masks would
+   have to be kept in step with each other. ``image.mask`` never sets
+   ``NON_STANDARD_SIZE``, so the double-width ASIC-edge pixels are unflagged in
+   the data and must come from ``agipd_asic_seams()``.
+2. The per-cell base mask. The static bits in ``image.mask`` are per memory
+   cell, so a majority vote over a few sampled trains gives each cell a base
+   mask and a precomputed denominator ``D = Σ c·Ω``. Because every
+   statically-bad pixel votes on every sample, the base mask is always a
+   superset of the static mask; this is asserted, not assumed.
+3. The per-frame correction. ``sparse.integrate_frame`` corrects ``D`` by only
+   the pixels where a frame disagrees with its cell, in either direction, so
+   the result is exact.
 
 This module does not import EXtra-data. It consumes mask samples handed to it
-by the caller — the train selection and the ``image.mask`` read belong to the
-plan and the worker — which also keeps it testable without data.
+by the caller (the train selection and the ``image.mask`` read belong to the
+plan and the worker), which also keeps it testable without data.
 """
 
 from __future__ import annotations
@@ -61,7 +59,7 @@ __all__ = [
 MODULE_SHAPE = (512, 128)
 STACKED_SHAPE = (16, 512, 128)
 #: Shapes a stored pixel mask may have. ``(8192, 128)`` is the flattened pixel
-#: order module × ss × fs, which is how the earlier prototype stored it.
+#: order module × ss × fs.
 ACCEPTED_MASK_SHAPES = (STACKED_SHAPE, MODULE_SHAPE, (16 * 512, 128))
 
 
@@ -72,7 +70,7 @@ def load_pixel_mask(path: str | Path) -> np.ndarray:
     Accepts ``(16, 512, 128)``, ``(512, 128)`` (one module, broadcast over all
     sixteen) and ``(8192, 128)``.
 
-    :raises ValueError: unaccepted shape, or a mask that excludes every pixel —
+    :raises ValueError: unaccepted shape, or a mask that excludes every pixel,
         which would leave nothing to integrate and is always a mistake.
     :raises TypeError: a non-boolean, non-integer dtype, which would make the
         non-zero convention ambiguous.
@@ -163,7 +161,7 @@ class BaseMaskAccumulator:
 
     The caller feeds one train at a time; ``finalise`` turns the votes into base
     masks and denominators. Votes are uint8, so a cell may be sampled at most
-    255 times — far above the ``base_mask_trains`` default of 8.
+    255 times.
     """
 
     def __init__(
@@ -188,7 +186,7 @@ class BaseMaskAccumulator:
 
         :param mask: ``(16, n_frames, 512, 128)`` uint32 ``BadPixels`` field.
         :param cell_ids: ``(n_frames,)`` memory-cell id per frame, from
-            ``cell_id_coordinates()`` — never inferred from array position.
+            ``cell_id_coordinates()``, never inferred from array position.
         """
         mask = np.asarray(mask)
         cell_ids = np.asarray(cell_ids)
@@ -233,9 +231,9 @@ class BaseMaskAccumulator:
 
         for index, cell in enumerate(cells.tolist()):
             count = self._counts[cell]
-            # Strict majority. Written as ``votes > count // 2`` rather than
-            # ``votes * 2 > count`` is identical for every integer count,
-            # and it cannot overflow the uint8 vote array.
+            # Strict majority. ``votes > count // 2`` equals
+            # ``votes * 2 > count`` for every integer count, and cannot
+            # overflow the uint8 vote array.
             voted = self._votes[cell] > count // 2
             if (self._static.bad & ~voted).any():
                 raise AssertionError(

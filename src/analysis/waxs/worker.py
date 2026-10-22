@@ -1,19 +1,15 @@
 """Per-block read and frame loop for one JUNGFRAU detector.
 
-One single-threaded worker per core, spawned. The worker owns nothing but its
-own reads: it rebuilds the operator from the config — a PONI load plus one
-sparse-matrix build, tens of milliseconds, once per process — and checks the
-result's sha256 against the parent's, so no engine has to be pickled.
+One single-threaded spawned worker per core. Each worker rebuilds the operator
+from the config once per process and checks its sha256 against the parent's,
+so no engine has to be pickled. Thread limits come from the parent's
+environment. ``MultimodKeyData.ndarray`` takes no ``decompress_threads``
+argument, so this read path has no threaded decompression to disable.
 
-Thread limits are inherited from the parent's environment. Note that
-``MultimodKeyData.ndarray`` takes no ``decompress_threads`` argument — that is
-AGIPD's ``XtdfImageMultimodKeyData`` — so this read path has no threaded
-decompression to disable.
-
-**All sixteen cells are read and the lit ones selected in memory.** EXtra-data's
-``roi=`` would read only the lit cells, but it slices the *array* axis while the
-lit set is defined by ``data.memoryCell`` values, and the proc chunk layout spans
-all sixteen cells per chunk, so it would save no I/O.
+All sixteen cells are read and the lit ones selected in memory. EXtra-data's
+``roi=`` slices the array axis while the lit set is defined by
+``data.memoryCell`` values, and one proc chunk spans all sixteen cells, so it
+would save no I/O.
 """
 
 from __future__ import annotations
@@ -61,12 +57,12 @@ def init(
 ) -> None:
     """Process initializer: rebuild the operator, open the run.
 
-    The photon-counting settings are rebuilt from ``cfg`` too: they are config
+    The photon-counting settings are rebuilt from ``cfg`` too. They are config
     fields, so a worker cannot count with anything the hash does not cover.
 
-    :param operator_sha256: what the parent built. A worker whose geometry or
-        static mask differs — a mask file replaced mid-run, say — must not
-        quietly integrate against a different q axis.
+    :param operator_sha256: the parent's operator hash. A worker whose geometry
+        or static mask differs, for example after a mask file was replaced
+        mid-run, raises instead of integrating against a different q axis.
     """
     set_thread_env()
 
@@ -183,9 +179,8 @@ def process_block(block: Block) -> BlockResult:
 
     Every frame's identity comes from the reader: the train from
     ``train_id_coordinates()`` and the cell from ``data.memoryCell``, never from
-    array position. ``JUNGFRAU.cell_ids()`` is deliberately
-    not used — it reads the first train only and asserts the rest match, which
-    is an assumption this pass has not verified for this beamtime.
+    array position. ``JUNGFRAU.cell_ids()`` is not used because it reads the
+    first train only and assumes the rest match.
 
     A train whose labels disagree with the plan, or which is missing one of the
     lit cells, is marked ``LABEL_MISMATCH`` and none of its frames integrated.
@@ -244,9 +239,9 @@ def process_block(block: Block) -> BlockResult:
 
         positions = {int(cell): index for index, cell in enumerate(cells.tolist())}
         if len(positions) != cells.size or not set(lit) <= set(positions):
-            # Repeated or missing memory cells: the rows this train owns cannot
-            # be filled by label, and guessing by position is what pitfall 4
-            # forbids.
+            # Repeated or missing memory cells, so the rows this train owns cannot
+            # be filled by label. Filling them by array position could put a
+            # frame on the wrong cell.
             result.status[rows] = FrameStatus.LABEL_MISMATCH
             continue
         if expected != len(lit):
@@ -262,8 +257,8 @@ def process_block(block: Block) -> BlockResult:
             result.train_id[row] = train_id
             result.cell_id[row] = cell
             values = frame_data[position]
-            # The frame's own exclusion, kept apart from the static mask: the
-            # zero level is estimated over .edf-masked pixels as well.
+            # Kept apart from the static mask because the zero level can be
+            # estimated over .edf-masked pixels as well.
             dynamic = (frame_mask[position].reshape(-1) & bits) != 0
             try:
                 frame_result = integrate_frame(
@@ -276,10 +271,9 @@ def process_block(block: Block) -> BlockResult:
                     timings=timings,
                 )
             except DataCheckFailed:
-                # This means every pixel was excluded, not that the frame
-                # carried a wild value: those are masked and counted. The row is
-                # still filled with what evidence there is, because a status on
-                # its own explains nothing.
+                # Every pixel was excluded. Extreme values alone are masked and
+                # counted, not raised. The row still records the maxima and the
+                # bad-pixel count, so the status can be explained.
                 bad = dynamic | op.static_bad
                 result.status[row] = FrameStatus.DATA_CHECK_FAILED
                 reaching, checked = frame_maxima(values, bad, op.static_bad)

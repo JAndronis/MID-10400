@@ -3,8 +3,7 @@
 The hash gates resume and gates reopening a file. Covering a field that cannot
 change a stored number makes two identical results look incompatible; failing to
 cover one that can makes two *different* results look interchangeable. Both
-directions are pinned here, for both configs, because the first was found only
-when the DAMNIT variables refused a file the acceptance script had just written.
+directions are pinned here, for both configs.
 """
 
 from __future__ import annotations
@@ -81,23 +80,18 @@ def waxs(geometry):
     )
 
 
-# ── the case that actually broke ─────────────────────────────────────────────
 def test_a_worker_count_does_not_change_a_waxs_hash(waxs):
-    """``w4_acceptance`` passes n_workers=36; the DAMNIT variable does not.
-
-    Those two produced different hashes, so the variable refused the file the
-    acceptance run had just written and validated.
-    """
+    """Two runs differing only in ``n_workers`` must be able to share a file."""
     explicit = dataclasses.replace(waxs, n_workers=36)
     default = dataclasses.replace(waxs, n_workers=None)
     assert explicit.config_hash() == default.config_hash()
 
 
 def test_pinning_the_lit_cells_does_not_change_a_waxs_hash(waxs):
-    """``expected_lit_cells`` only *gates*, so by pitfall 12 it stays out.
+    """``expected_lit_cells`` only *gates*, so it stays out of the hash.
 
     It refuses a run whose measured pattern is not the pinned one, and it does
-    that before the output file is opened — so it can never change a value in
+    that before the output file is opened. So it can never change a value in
     ``/frames``, and pinning it for a reprocess must not invalidate the files
     written without it.
     """
@@ -109,8 +103,8 @@ def test_pinning_the_lit_cells_does_not_change_a_waxs_hash(waxs):
 def test_tolerating_data_check_failures_does_not_change_a_waxs_hash(waxs):
     """It decides whether the pass raises *after* the file is finished.
 
-    Every row is identical either way, so a run that tolerated 473 failing
-    frames and a strict rerun of the same run must be able to share a file.
+    Every row is identical either way, so a run that tolerated failing frames
+    and a strict rerun of the same run must be able to share a file.
     """
     strict = dataclasses.replace(waxs, allow_data_check_failures=False)
     assert strict.allow_data_check_failures != waxs.allow_data_check_failures
@@ -131,11 +125,11 @@ def test_the_lit_thresholds_do_move_a_waxs_hash(waxs):
 
 
 def test_overwrite_does_not_change_a_hash(waxs):
-    """The perverse one: a file written with overwrite=True could never match.
+    """A file written with ``overwrite=True`` must match an ordinary later run.
 
     ``open_or_create`` compares the stored hash against the *current* config's,
-    so a run that had to force its way over an old file produced a file the next
-    ordinary run refused, every time.
+    so a hash that covered ``overwrite`` would make the next ordinary run refuse
+    every file a forced run wrote.
     """
     forced = dataclasses.replace(waxs, overwrite=True)
     assert forced.config_hash() == waxs.config_hash()
@@ -188,7 +182,7 @@ def test_result_affecting_fields_move_the_agipd_hash(agipd, field, value):
     ("field", "value"), [("pixel_sum_trains", 50), ("pixel_sums_root", "/tmp/x")]
 )
 def test_the_window_sum_fields_leave_the_agipd_hash_alone(agipd, field, value):
-    """The window sums are a separate file with a hash of their own (§15.3).
+    """The window sums are a separate file with a hash of their own.
 
     So neither field can change a number in ``agipd_saxs.h5``, and adding them
     must not refuse a file written before they existed.
@@ -234,7 +228,7 @@ def test_result_fields_excludes_exactly_the_operational_set(waxs):
     # The default is the shared six...
     assert set(result_fields(waxs)) == names - OPERATIONAL_FIELDS
     # ...and what the hash actually uses is the config's own set, which for
-    # this pass is one wider.
+    # this pass is wider.
     assert set(result_fields(waxs, waxs.operational_fields)) == (
         names - WAXS_OPERATIONAL_FIELDS
     )
@@ -274,8 +268,8 @@ def test_the_stored_file_says_which_fields_the_hash_covers(waxs, tmp_path):
         recorded = json.loads(handle["provenance"].attrs["config_operational_fields"])
         stored = json.loads(handle["provenance"].attrs["config"])
     # The set the *config* excludes, not the shared constant: the JUNGFRAU pass
-    # excludes one more, and a provenance record that claimed otherwise would
-    # be worse than none.
+    # excludes more, and a provenance record that claimed otherwise would be
+    # worse than none.
     assert set(recorded) == set(waxs.operational_fields)
     assert set(recorded) == set(OPERATIONAL_FIELDS) | {
         "expected_lit_cells",

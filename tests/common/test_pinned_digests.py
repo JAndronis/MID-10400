@@ -2,10 +2,9 @@
 
 ``config_hash`` gates resume and gates reopening a stored file, and
 ``operator_sha256`` gates whether a worker will use one. A change to either
-refuses every ``.h5`` already on scratch — they are not recomputed, they are
-compared. The literals here were captured before the cleanup refactor began, so
-a red assertion in this module means the refactor altered something it claimed
-only to rearrange.
+refuses every stored ``.h5``, since stored files are compared, not recomputed.
+A red assertion here means a change moved something it claimed only to
+rearrange; a deliberate change updates the literal in the same commit.
 
 The configs are built with no input files, so every value below is a function of
 the field names and their defaults alone, with nothing read off disk.
@@ -37,10 +36,6 @@ SAXS_FIELDS = (
     "pixel_sum_trains", "pixel_sums_root", "photon_stats", "photon_stats_root",
 )  # fmt: skip
 
-# Photon counting (CLAUDE.md open task 18, 2026-10-13) added the seven fields
-# from count_energy_kev to level_min_pixels. They change every stored number,
-# so the hash below moved with them, deliberately: keV files are reprocessed,
-# never resumed.
 WAXS_FIELDS = (
     "proposal", "run", "detector", "detector_name", "first_modno", "poni_file",
     "static_mask_file", "photon_energy_kev", "npt", "method", "unit",
@@ -82,7 +77,7 @@ def test_waxs_config_hash_is_unchanged():
 
 
 # ── operator digests ──────────────────────────────────────────────────────────
-# The two passes hash different payloads under different key names — saxs carries
+# The two passes hash different payloads under different key names: saxs carries
 # ``sdd_m`` and a beam centre, waxs ``dist_m``, ``unit`` and the static mask. A
 # shared "normalisation" of the two would move both digests, which is why each is
 # pinned separately.
@@ -161,11 +156,10 @@ def test_waxs_operator_sha256_is_unchanged():
 
 
 # ── export surface ────────────────────────────────────────────────────────────
-# What other modules are entitled to import by name. Pinned because three of
-# these are known to have drifted from what the module actually defines, and a
-# refactor that moves imports around must show that drift rather than inherit it.
-# Unlike the hashes above, this pin is meant to be edited — but deliberately, in
-# a commit that says which export moved and why.
+# What other modules are entitled to import by name. A change that moves imports
+# around must show a drift between ``__all__`` and the module's definitions rather
+# than inherit it. Unlike the hashes above, this pin is meant to be edited, in a
+# commit that says which export moved and why.
 EXPECTED_ALL: dict[str, tuple[str, ...]] = {
     "analysis.common.config": (
         "OPERATIONAL_FIELDS", "ConfigStateMismatch", "PassConfigMembers",
@@ -184,9 +178,6 @@ EXPECTED_ALL: dict[str, tuple[str, ...]] = {
         "Block", "RunPlan", "TrainRecord", "build_blocks",
         "evenly_spaced",
     ),
-    # UNFINISHED, GATING_PACKAGES, OperatorMismatch and version_changes added
-    # for open task 17 (pass integrity): resume retries WORKER_ERROR, and
-    # refuses a file integrated by another operator or pyFAI.
     "analysis.common.status": (
         "UNFINISHED", "DataCheckFailed", "FrameStatus",
     ),
@@ -196,13 +187,6 @@ EXPECTED_ALL: dict[str, tuple[str, ...]] = {
         "as_handle", "config_payload", "per_label", "pooled_per_train",
         "q_centers", "status_counts", "version_changes",
     ),
-    # METHOD, NPIX, SHAPE and DEFAULT_OUTPUT_ROOT were missing here while
-    # three modules imported them by name; the pass-throughs are gone.
-
-    # DEFAULT_PIXEL_SUMS_ROOT and SAXS_OPERATIONAL_FIELDS added for the window
-    # sums (context file §15); the operator, masks and frame table are unchanged.
-    # DEFAULT_PHOTON_STATS_ROOT likewise for the photon statistics (S4,
-    # context/xpcs-quality.md), whose two fields the frame table's hash excludes.
     "analysis.saxs.config": (
         "AgipdSaxsConfig", "DEFAULT_BEAM_CENTER_PX",
         "DEFAULT_BEAM_CENTER_PY", "DEFAULT_GEOMETRY_FILE",
@@ -218,14 +202,11 @@ EXPECTED_ALL: dict[str, tuple[str, ...]] = {
         "FrameResult", "denominator", "frame_data_status", "gather",
         "integrate_frame",
     ),
-    # No longer re-exports the common exceptions: callers import them from
-    # analysis.common.writer, where they are defined.
-
     "analysis.saxs.writer": (
         "AgipdSaxsWriter", "per_pulse",
     ),
-    # Photon counting split the per-frame path into prepare and integrate, so
-    # the self-test can integrate one counted frame both ways.
+    # The per-frame path is split into prepare and integrate, so the self-test
+    # can integrate one counted frame both ways.
     "analysis.waxs.integrate": (
         "ErrorModel", "FrameResult", "PreparedFrame", "extreme_pixels",
         "frame_maxima", "integrate_frame", "integrate_prepared",
@@ -242,8 +223,6 @@ EXPECTED_ALL: dict[str, tuple[str, ...]] = {
         "WaxsOperator", "WavelengthMismatch", "build_operator",
         "operator_sha256",
     ),
-    # Same rule as the AGIPD writer.
-
     # The units every reader checks before combining two files.
     "analysis.waxs.writer": (
         "KEV", "PHOTONS", "JungfrauWaxsWriter", "file_units", "per_cell",

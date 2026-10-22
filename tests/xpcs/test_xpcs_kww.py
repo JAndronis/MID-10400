@@ -1,3 +1,5 @@
+"""The per-ring KWW fit, on g2 curves made from the model itself."""
+
 import numpy as np
 import pytest
 import xarray as xr

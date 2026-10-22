@@ -1,14 +1,14 @@
 """Lit-cell selection and the readout-noise measurement.
 
-Both come off the same sampled trains, so they share one streaming accumulator:
-a cell is *lit* if a useful fraction of its kept pixels holds at least half a
-photon, and the readout noise is the spread of the *dark* cells, which hold none.
+Both come off the same sampled trains, so they share one streaming accumulator.
+A cell is lit if enough of its kept pixels hold more than
+``cfg.lit_threshold_kev``. The readout noise is the spread of the dark cells,
+which hold no photons.
 
-Which cells are lit is not fixed between runs — the proposal used four readout
-patterns — so the pass gates on the *shape* instead: every valid pattern is a
-run of consecutive memory cells mod 16, which :func:`is_storage_cell_sequence`
-checks. The cell ids come from the reader, never from a frame's array position,
-which is a different sequence.
+Which cells are lit changes between runs, so the pass gates on the shape of the
+set. Every valid pattern is a run of consecutive memory cells mod 16, which
+:func:`is_storage_cell_sequence` checks. The cell ids come from the reader,
+never from a frame's array position, which is a different sequence.
 """
 
 from __future__ import annotations
@@ -42,8 +42,7 @@ class ImplausibleLitCells(UnexpectedLitCells):
     """The measured lit cells are not a storage-cell sequence.
 
     A JUNGFRAU reads consecutive storage cells mod 16, so any other shape means
-    the classification is wrong rather than that the run is unusual. Raised
-    rather than logged: a tripwire that returns quietly is not a tripwire.
+    the classification is wrong, whatever the run.
     """
 
 
@@ -53,12 +52,11 @@ def split_lit_dark(
     """Split per-cell lit fractions into lit and dark.
 
     :param fraction: one lit fraction per cell, in cell order.
-    :param floor: a cell below this is dark. Placed in the empty multiplicative
-        band that separates the two populations.
+    :param floor: a cell at or below this fraction is dark.
     :param gap_ratio: among the cells that clear the floor, a step larger than
         this splits them again, so an attenuated run still separates on the
         step rather than on the absolute level.
-    :returns: a boolean lit mask, and the ratio of the step it cut at —
+    :returns: a boolean lit mask, and the ratio of the step it cut at, or
         ``None`` when every cell above the floor was kept.
     """
     order = np.argsort(fraction)[::-1]
@@ -93,8 +91,8 @@ class CellClassification:
     read_noise_kev: float | None
     read_noise_samples: int
     #: The step :func:`split_lit_dark` cut at, or ``None`` when it kept every
-    #: cell above the floor. Recorded so a marginal split is visible rather
-    #: than having to be re-derived from ``lit_fraction``.
+    #: cell above the floor. Recorded so a marginal split is visible without
+    #: re-deriving it from ``lit_fraction``.
     gap_ratio: float | None = None
 
     def summary(self) -> dict[str, object]:
@@ -113,11 +111,11 @@ class CellClassification:
     def check_structure(self, n_cells: int) -> None:
         """Fail when the measured set is not a storage-cell sequence.
 
-        Unlike :meth:`check_expected`, which pins one named set, this holds for
-        every run — including one whose pattern nobody has looked at yet.
+        Unlike :meth:`check_expected`, which pins one named set, this applies
+        to every run, including one with a pattern not seen before.
 
         :raises ImplausibleLitCells: the shape is impossible for a JUNGFRAU
-            readout, so the classification — not the run — is what is wrong.
+            readout, so the classification is wrong.
         """
         if is_storage_cell_sequence(self.lit, n_cells):
             return
@@ -136,14 +134,14 @@ class CellClassification:
         }
 
     def check_expected(self, expected: tuple[int, ...]) -> None:
-        """Fail loudly when the measured set is not the pinned one.
+        """Fail when the measured set is not the pinned one.
 
-        Only reached when a caller pinned ``cfg.expected_lit_cells``, which is
-        how a reprocess refuses a run whose pattern has drifted;
-        :meth:`check_structure` is the check that runs unconditionally.
+        Called only when ``cfg.expected_lit_cells`` is pinned, which is how a
+        reprocess refuses a run whose pattern has drifted.
+        :meth:`check_structure` runs unconditionally.
 
-        :raises UnexpectedLitCells: an unnoticed change in the cell pattern
-            would halve or double I(q) with nothing in the output saying so.
+        :raises UnexpectedLitCells: the sets differ. An unnoticed change in the
+            cell pattern would scale I(q) with nothing in the output saying so.
         """
         if self.lit != tuple(expected):
             fractions = self._fractions()
@@ -160,9 +158,8 @@ class CellClassification:
 class CellAccumulator:
     """Streaming per-cell statistics over sampled trains.
 
-    The caller feeds one train at a time; :meth:`finalise` turns the totals into
-    a :class:`CellClassification`. Everything accumulates in float64, so the
-    number of sampled trains is not bounded by the accumulator.
+    The caller feeds one train at a time and :meth:`finalise` turns the totals
+    into a :class:`CellClassification`. Sums accumulate in float64.
     """
 
     def __init__(self, cfg: JungfrauWaxsConfig, static_bad: np.ndarray) -> None:
@@ -182,8 +179,7 @@ class CellAccumulator:
         :param data: ``(n_cells, 512, 1024)`` float32 keV.
         :param mask: ``(n_cells, 512, 1024)`` uint32 ``BadPixels``.
         :param cell_ids: ``(n_cells,)`` memory-cell id per frame, read from
-            ``data.memoryCell`` — never inferred from array position, which is
-            a different sequence.
+            ``data.memoryCell``. Array position is a different sequence.
         """
         data = np.asarray(data)
         mask = np.asarray(mask)
@@ -252,12 +248,12 @@ class CellAccumulator:
         """Pooled standard deviation over the dark cells' kept pixels.
 
         The dark cells hold no photons, so their spread is the readout noise
-        alone, which is why it is worth measuring per run rather than hardcoding.
+        alone.
 
         :returns: the noise in keV and the number of pixels it came from, or
-            ``(None, 0)`` when the run reads all 16 cells and so has no dark
-            one. That is not an error here — :func:`analysis.waxs.run._error_model`
-            falls back to ``cfg.read_noise_fallback_kev``.
+            ``(None, 0)`` when there is no dark cell, as in a run that reads all
+            16. :func:`analysis.waxs.run._error_model` then falls back to
+            ``cfg.read_noise_fallback_kev``.
         """
         total = sum(self._kept[c] for c in dark)
         if not dark or total < 2:

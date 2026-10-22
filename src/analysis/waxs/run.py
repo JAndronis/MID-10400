@@ -3,16 +3,13 @@
 The parent builds the geometry, measures the cell pattern and the readout
 noise, gates on the self-test, then fans blocks out to spawned single-threaded
 workers and writes their results itself. The workers count photons per ASIC
-before integrating (:mod:`analysis.waxs.photons`), so the file stores photons;
-the readout noise is kept as a diagnostic. Nothing in the hot loop depends on the
-XGM, transmission or background.
+before integrating (:mod:`analysis.waxs.photons`), so the file stores photons.
+Nothing here depends on the XGM, transmission or background, and each detector
+gets its own config, pass and file.
 
-The two detectors never meet here: each gets its own config, its own pass and
-its own file, and they are combined only at the plot.
-
-A run whose file is already complete is answered from it and nothing is written
-(CLAUDE.md pitfall 26); otherwise the pass holds a lock on the file for as long
-as it writes it.
+A run whose file is already complete is answered from it with nothing written,
+so a relaunched job cannot truncate a finished file. Otherwise the pass holds a
+lock on the file for as long as it writes it.
 """
 
 from __future__ import annotations
@@ -66,12 +63,9 @@ log = logging.getLogger(__name__)
 def _no_lit_cells(cfg: JungfrauWaxsConfig, classification: CellClassification) -> None:
     """Log why a run produced nothing, and return nothing.
 
-    Every run goes down the same path: measure the cells, integrate the lit
-    ones. When none are lit there are no frames, so there is no I(q) — that is
-    the honest result for a run that saw no beam, not a failure, and 43 of the
-    proposal's runs are like that. Raising here would make a whole DAMNIT
-    reprocess fall over on runs that are simply dark, so it logs the evidence
-    and returns ``None`` instead.
+    When no cell is lit there are no frames and so no I(q), which is the result
+    for a run that saw no beam. Raising would stop a bulk DAMNIT reprocess on
+    dark runs, so this logs the evidence and returns ``None``.
     """
     brightest = max(
         zip(classification.cells, classification.lit_fraction, strict=True),
@@ -109,33 +103,31 @@ def run_jungfrau_waxs(
     :param run_dir: directory the workers open the run from, instead of
         resolving ``cfg.proposal``/``cfg.run``.
     :param pool_factory: builds the executor. Defaults to
-        :func:`analysis.common.cpu.default_pool`; injecting it lets the
-        broken-pool and worker-error paths be exercised without killing real
-        processes or putting test hooks in ``worker``.
+        :func:`analysis.common.cpu.default_pool`. Injecting it lets tests
+        exercise the broken-pool and worker-error paths without real processes.
     :param reduce: which reduction to return, one of :data:`REDUCERS`. The
         output file is identical either way.
 
     :returns: the reduction named by ``reduce``, or ``None`` when the run has no
-        lit memory cell at all — see :func:`_no_lit_cells`.
+        lit memory cell (:func:`_no_lit_cells`).
     :raises analysis.waxs.cells.ImplausibleLitCells: the measured cell pattern
         is not a storage-cell sequence, so the classification is wrong.
     :raises analysis.waxs.cells.UnexpectedLitCells: ``cfg.expected_lit_cells``
         is pinned and the measured pattern is not it.
     :raises analysis.waxs.selftest.SelfTestFailed: the NaN path and the
         per-frame-mask reference disagree.
-    :raises IncompleteRun: some frame carries a *blocking* status and
-        ``cfg.allow_incomplete`` is False. ``DATA_CHECK_FAILED`` is not one by
-        default — see :func:`_blocking` and ``cfg.allow_data_check_failures`` —
-        but it is logged and recorded either way. The output file is written and
-        closed first whatever happens, so the ledger explains it.
+    :raises IncompleteRun: some frame carries a blocking status (:func:`_blocking`)
+        and ``cfg.allow_incomplete`` is False. ``DATA_CHECK_FAILED`` is not
+        blocking by default, but it is logged and recorded either way. The output
+        file is written and closed first, so its frame table explains the raise.
     :raises analysis.common.lock.OutputBusy: another process is writing the
         file.
     :raises analysis.common.writer.OperatorMismatch: the file was integrated by
         another operator or pyFAI, so it cannot be resumed.
 
     A file that is already complete (:func:`analysis.waxs.complete.is_complete`)
-    is answered from, with nothing written, unless ``cfg.overwrite``; it raises
-    on the same terms as a full pass would.
+    is answered from with nothing written, unless ``cfg.overwrite``. It raises
+    on the same terms as a full pass.
     """
     if reduce not in REDUCERS:
         raise ValueError(f"reduce must be one of {REDUCERS}, got {reduce!r}")
@@ -146,8 +138,8 @@ def run_jungfrau_waxs(
     started = time.perf_counter()
     output_path = Path(output_path) if output_path is not None else cfg.output_file
 
-    # The operator first: it reads only the PONI and the static mask, and the
-    # completeness check needs its sha256.
+    # The operator comes first because it reads only the PONI and the static
+    # mask, and the completeness check compares against it.
     setup: dict[str, float] = {}
     with phase(setup, "operator"):
         op, ai = build_operator(cfg, poni_file)
@@ -355,8 +347,8 @@ def _integrate(
             reduced = out.per_cell()
 
     if data_check:
-        # Never silent, whether or not it raises: a tolerated loss is still a
-        # loss, and it is not necessarily an unbiased one.
+        # Logged whether or not it raises, because a tolerated loss of pixels
+        # can still bias the result.
         log.warning(
             "r%d %s: the value check excluded %d pixels across %d frames and "
             "refused %d outright (%s)",
@@ -378,8 +370,8 @@ def _integrate(
 def _blocking(cfg: JungfrauWaxsConfig, summary: dict[str, int]) -> dict[str, int]:
     """The non-``OK`` statuses that stop the run finishing.
 
-    ``DATA_CHECK_FAILED`` is a property of the data, not a failure of the pass,
-    so ``cfg.allow_data_check_failures`` decides. Everything else blocks.
+    ``DATA_CHECK_FAILED`` is a property of the data, so
+    ``cfg.allow_data_check_failures`` decides. Everything else blocks.
     """
     tolerated = {FrameStatus.OK.name}
     if cfg.allow_data_check_failures:
@@ -417,18 +409,12 @@ def _error_model(
     """sigma_read, in order of precedence: configured, measured, fallback.
 
     An explicit ``cfg.read_noise_kev`` wins outright. Otherwise the run's own
-    dark cells are measured, which is the preferred source. A run that reads
-    every storage cell has no dark cell and falls back to
-    ``cfg.read_noise_fallback_kev``, the per-detector median over the runs that
-    do. ``ErrorModel.source`` records which of the three it was, so a stored file
-    never has to be guessed at and can be selected against.
+    dark cells are measured. A run that reads every storage cell has no dark
+    cell and falls back to ``cfg.read_noise_fallback_kev``.
+    ``ErrorModel.source`` records which of the three it was.
 
-    There is no fourth branch that raises: ``JungfrauWaxsConfig`` resolves
-    ``read_noise_fallback_kev`` in ``__post_init__``, so it is never ``None`` by
-    the time a config exists. Resolving it there rather than here is what keeps
-    the number actually used inside ``config_hash`` — filled in at this point, a
-    change to the constant would let resume merge blocks computed at two
-    different sigma_read.
+    The fallback is never ``None`` here because ``JungfrauWaxsConfig`` resolves
+    it in ``__post_init__``, which keeps the value used inside ``config_hash``.
     """
     if cfg.read_noise_kev is not None:
         return ErrorModel(

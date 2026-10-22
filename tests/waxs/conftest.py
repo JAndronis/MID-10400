@@ -1,9 +1,9 @@
 """Fixtures for the JUNGFRAU WAXS pass.
 
-Everything here runs without Maxwell and without the real PONI or ``.edf``: the
-geometry is a synthetic PONI written to a temporary directory, the way the SAXS
+Everything here runs without Maxwell and without the real PONI or ``.edf``.
+The geometry is a synthetic PONI written to a temporary directory, as the SAXS
 fixtures use a synthetic ``AGIPD_1MGeometry``. The real-data gate that needs
-``data/`` is in ``test_real_frames.py`` and skips when the files are absent.
+``data/`` is in ``test_waxs_real_frames.py`` and skips when the files are absent.
 """
 
 from __future__ import annotations
@@ -34,11 +34,11 @@ NPT = 64
 
 @pytest.fixture(scope="session")
 def geometry_files(tmp_path_factory):
-    """A synthetic PONI and static ``.edf`` mask **per detector**.
+    """A synthetic PONI and static ``.edf`` mask per detector.
 
-    Per detector rather than shared, because the config refuses a ``jf1.poni``
-    handed to a jf2 run — integrating one detector's frames through the other's
-    geometry is the mix-up that produces a plausible I(q) and no error.
+    One set per detector because the config refuses a ``jf1.poni`` handed to a
+    jf2 run. Integrating one detector's frames through the other's geometry
+    gives a plausible I(q) and no error.
     """
     directory = tmp_path_factory.mktemp("waxs-geometry")
     files = {}
@@ -104,8 +104,8 @@ def cfg(geometry_files, tmp_path):
 def mock_run_factory(memoised_run_factory):
     """Mock JUNGFRAU runs, cached by resolved signature.
 
-    Each is 135 MB of dense float32 that lives until the session ends, so the
-    caching is what keeps the suite's disk use bounded.
+    A filled default run is about 135 MB of dense float32 that lives until the
+    session ends, so the cache keeps the suite's disk use bounded.
     """
     return memoised_run_factory(write_mock_run, "waxs-mockrun")
 
@@ -119,7 +119,7 @@ def operator(cfg):
 
 @pytest.fixture
 def model():
-    """The readout-noise record a file stores — a diagnostic, not the variance."""
+    """The readout-noise record a file stores, a diagnostic and not the variance."""
     from analysis.waxs.integrate import ErrorModel
 
     return ErrorModel(0.32, PHOTON_KEV, "configured")

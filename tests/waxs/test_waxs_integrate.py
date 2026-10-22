@@ -1,10 +1,10 @@
 """The per-frame path and the NaN-equivalence gate.
 
-The gate is the correctness argument for the whole design: the production path
+The gate is the correctness argument for the whole design. The production path
 builds pyFAI's sparse matrix once with the static mask and carries every other
 exclusion as NaN, and it has to give the same answer as the obvious slow path
-that passes them to ``integrate1d(mask=)`` each frame. Since photon counting,
-both paths integrate the same counted frame.
+that passes them to ``integrate1d(mask=)`` each frame. Both paths integrate the
+same counted frame.
 """
 
 from __future__ import annotations
@@ -95,7 +95,7 @@ def test_the_counts_are_the_photons_that_were_put_in(operator, counting):
 
 
 def test_the_variance_is_poisson_and_never_negative(operator, counting):
-    """An almost-empty frame drove keV variances negative; counts cannot."""
+    """Counts carry a Poisson variance, so even an almost-empty frame stays >= 0."""
     op, ai = operator
     rng = np.random.default_rng(3)
     values = rng.normal(-0.5, 0.32, MODULE_SHAPE).astype(np.float32)
@@ -190,7 +190,7 @@ def test_the_nan_path_equals_the_per_frame_mask_reference(operator, counting):
 
 
 def test_the_production_path_never_rebuilds_the_matrix(operator, counting):
-    """The whole reason for the NaN: a changing mask evicts pyFAI's cache."""
+    """A per-frame mask would rebuild pyFAI's sparse matrix, hence the NaN path."""
     op, ai = operator
     for seed in range(4):
         values, _, dynamic = make_frame(op, seed=seed)
@@ -252,7 +252,7 @@ def test_the_selftest_catches_a_broken_nan_path(operator, counting, monkeypatch)
 
 # ── the data check ───────────────────────────────────────────────────────────
 def test_a_non_finite_kept_pixel_is_excluded_not_fatal(operator, counting):
-    """The exclusions are NaN, so a NaN in the data is indistinguishable."""
+    """Exclusions travel as NaN, so a NaN in the data is excluded like them."""
     op, ai = operator
     values, _, dynamic = make_frame(op)
     pixel = np.flatnonzero(~union(op, dynamic))[0]
@@ -265,11 +265,11 @@ def test_a_non_finite_kept_pixel_is_excluded_not_fatal(operator, counting):
 
 
 def test_an_extreme_kept_pixel_is_excluded_not_fatal(operator, counting):
-    """§3 D6′: r0480 lost 473 frames of 126 230 good pixels over a median of 3.
+    """An extreme kept pixel is excluded and the frame still integrates.
 
-    They were NaCl Bragg spots from the evaporating droplet, so the loss tracked
-    crystallisation — the frames the run exists to record. Excluded *before*
-    counting, so the value never reaches a level or a count.
+    Failing the frame would lose every good pixel in it, and such pixels (salt
+    Bragg spots from an evaporating droplet) track crystallisation. The pixel is
+    excluded before counting, so its value never reaches a level or a count.
     """
     op, ai = operator
     values, _, dynamic = make_frame(op)
@@ -288,9 +288,9 @@ def test_an_extreme_kept_pixel_is_excluded_not_fatal(operator, counting):
 def test_excluding_an_extreme_pixel_equals_masking_it_by_hand(operator, counting):
     """The exclusion is the same act the two masks already perform.
 
-    Not "close to": the pixel joins the excluded set and takes the NaN path, and
-    the level estimator ignores a value that far above its cut, so the sums must
-    be bit-identical to passing the pixel as masked in the first place.
+    The pixel joins the excluded set and takes the NaN path, and the level
+    estimator ignores a value that far above its cut, so the sums must be
+    bit-identical to passing the pixel as masked in the first place.
     """
     op, ai = operator
     values, _, dynamic = make_frame(op)
@@ -337,17 +337,17 @@ def test_an_extreme_pixel_under_the_static_mask_is_not_this_frames_problem(
     assert not extreme_pixels(values, union(op, dynamic), 1e3).any()
     result = integrate_frame(ai, op, counting, values, dynamic, max_abs_kev=1e3)
     assert result.n_extreme_pixels == 0
-    # ... and it is a level pixel the estimator simply ignores.
+    # ... and as a level pixel the estimator ignores it.
     assert np.abs(result.asic_level - OFFSETS).max() < 0.005
 
 
 def test_the_two_maxima_separate_a_masked_wild_pixel_from_a_live_one(operator):
-    """r0480: the pair is the evidence a ``DATA_CHECK_FAILED`` row must carry.
+    """The two maxima tell a wild pixel kept out of the sums from a live one.
 
-    D6 tests the pixels the static mask keeps while the integrator sees the
-    union, so a wild pixel that ``data.mask`` flags fails the frame without
-    being able to change a stored number. ``max_kev`` ordinary beside a huge
-    ``max_kev_static`` is exactly that case, and nothing else produces it.
+    ``max_kev`` covers the pixels that reach the integrator and
+    ``max_kev_static`` those the static mask keeps. An ordinary ``max_kev``
+    beside a huge ``max_kev_static`` means the wild value never reached a
+    stored number.
     """
     op, _ = operator
     values, _, dynamic = make_frame(op)
@@ -374,7 +374,7 @@ def test_a_live_wild_pixel_shows_in_both_maxima(operator):
 
 
 def test_a_non_finite_value_propagates_into_the_maxima(operator):
-    """No separate column for "why": a NaN maximum is the reason itself."""
+    """A NaN maximum records the reason itself, so no separate column is needed."""
     op, _ = operator
     values, _, dynamic = make_frame(op)
     bad = union(op, dynamic)

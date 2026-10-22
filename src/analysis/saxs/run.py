@@ -6,15 +6,14 @@ itself. Nothing in the hot loop depends on XGM, transmission or background
 corrections: those are applied afterwards, to the stored sums.
 
 Three files come out of one read: the frame table (``agipd_saxs.h5``), the
-per-pixel window sums (``agipd_pixel_sums.h5``, context file §15) and the
-per-frame photon statistics (``agipd_photon_stats.h5``,
-``context/xpcs-quality.md``). Only the incomplete ones are opened: a run whose
+per-pixel window sums (``agipd_pixel_sums.h5``) and the per-frame photon
+statistics (``agipd_photon_stats.h5``). Only the incomplete ones are opened: a run whose
 frame table is complete gets its sums or statistics without the frame table,
 the operator or the masks being written again. :func:`run_pixel_sums` writes
 only the sums.
 
 Both entry points first ask whether their output is already complete, and if it
-is, answer from the file and write nothing (CLAUDE.md pitfall 26). Otherwise they
+is, answer from the file and write nothing. Otherwise they
 hold a lock on every file they write for as long as they write it, so a second
 DAMNIT job on the same run refuses rather than writing alongside.
 """
@@ -73,10 +72,10 @@ __all__ = [
     "run_pixel_sums",
 ]
 
-#: What ``run_agipd_saxs`` may return. ``pooled`` is the per-train I(q) of
-#: ``per_pulse`` is the (trainId, pulseId, q) grid, which is
-#: what the DAMNIT variable stores; ``none`` skips the reduction for a caller
-#: that only wants the file written.
+#: What ``run_agipd_saxs`` may return. ``pooled`` is the pooled per-train I(q);
+#: ``per_pulse`` is the (trainId, pulseId, q) grid, which is what the DAMNIT
+#: variable stores; ``none`` skips the reduction for a caller that only wants
+#: the file written.
 REDUCERS = ("pooled", "per_pulse", "none")
 
 log = logging.getLogger(__name__)
@@ -111,7 +110,7 @@ def run_agipd_saxs(
         injecting it lets the broken-pool and worker-error paths be exercised
         without killing real processes or putting test hooks in ``worker``.
     :param reduce: which reduction to return, one of :data:`REDUCERS`. The
-        output file is identical either way — this only chooses what is read
+        output file is identical either way. This only chooses what is read
         back out of it before returning.
     :param pixel_sums_path: where the window sums go. ``None`` puts them
         beside ``output_path`` when that is given, else at
@@ -142,9 +141,8 @@ def run_agipd_saxs(
 
     # Before any pool exists, so spawned children inherit it.
     set_thread_env()
-    # Wall time is an acceptance criterion, so it is
-    # recorded in provenance rather than left to whoever launched the job. It
-    # spans the plan, the self-test, the pool and the writer.
+    # Wall time is recorded in provenance rather than left to whoever launched
+    # the job. It spans the plan, the self-test, the pool and the writer.
     started_at = time.time()
     started = time.perf_counter()
 
@@ -483,19 +481,19 @@ def run_pixel_sums(
     pixel_sums_path: Path | None = None,
     pool_factory: Callable[..., Any] | None = None,
 ) -> Path:
-    """Write only the per-pixel window sums of a run (context file §15.4).
+    """Write only the per-pixel window sums of a run.
 
     For runs whose frame table already exists: this never opens
     ``agipd_saxs.h5`` and builds no operator, masks or self-test, since nothing
-    is integrated, so a frame table written under another config — another
-    ``npt``, say — neither blocks it nor is touched by it. A rerun resumes,
+    is integrated, so a frame table written under another config (another
+    ``npt``, say) neither blocks it nor is touched by it. A rerun resumes,
     doing only the windows not yet written.
 
     :param dc: an already-open ``DataCollection``; ``None`` opens the proc run.
     :param run_dir: directory the workers open the run from.
     :param pixel_sums_path: the file; ``None`` is ``cfg.pixel_sums_file``.
     :param pool_factory: builds the executor, as for :func:`run_agipd_saxs`.
-    :returns: the file written — or, when it was already complete, the file
+    :returns: the file written or, when it was already complete, the file
         left untouched.
     :raises IncompleteRun: a train with rows was left out and
         ``cfg.allow_incomplete`` is False.
@@ -508,8 +506,8 @@ def run_pixel_sums(
     started = time.perf_counter()
     path = Path(pixel_sums_path) if pixel_sums_path else cfg.pixel_sums_file
 
-    # ``overwrite`` never applies to the window sums (context file §15.3), so
-    # neither does it bypass this.
+    # ``overwrite`` never applies to the window sums, so it does not bypass
+    # this check either.
     if not lock_path(path).exists() and not window_sums_reasons(path, cfg):
         return _sums_from_file(cfg, path)
     with output_lock(path) as lock:

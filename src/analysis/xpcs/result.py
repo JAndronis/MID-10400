@@ -1,16 +1,14 @@
 """``xpcs_hits.h5``: the per-train integer sums, and the reader that turns them into g2.
 
-Everything in the file is derived from the photon store and the hit set, so
-changed inputs rebuild it (the previous file kept as ``xpcs_hits.prev.h5``)
-rather than refuse. Rows are the hit set's, in order, and are addressed by
-position: a train that gave no photons has a status and zero sums.
-
-The file holds exact integers only. Every float is made here, from sums that
-pool in any order: the pooled estimates divide summed numerators by summed
-denominators (a ratio of sums, CLAUDE.md pitfall 8), and a quantity with no
+The file is derived from the photon store and the hit set, so changed inputs
+rebuild it (the previous file kept as ``xpcs_hits.prev.h5``) rather than refuse.
+Rows are the hit set's, in order, addressed by position; a train that gave no
+photons has a status and zero sums. The file holds exact integers only, and
+every float is made by the reader. The pooled estimates divide summed numerators
+by summed denominators, so they pool in any order, and a quantity with no
 photons behind it is NaN, never 1. ``Averaging.ES`` is extra-speckle's mean of
-per-train ratios with its ``norm == 0 -> 1`` rule and k-bar filter, kept for
-comparison.
+per-train ratios, with its rule that a zero norm counts as 1 and its k-bar
+filter, kept for comparison.
 """
 
 from __future__ import annotations
@@ -62,8 +60,9 @@ __all__ = [
 
 log = logging.getLogger(__name__)
 
-#: 2: the outlier mask (``outlier/``) and its applied labels in ``rings/label``.
-#: 3: ``rings/bounds_nm`` ``(R, 2)`` replaces the contiguous ``rings/edges_nm``.
+#: Layout version; a file with another one is rebuilt. This layout stores the
+#: outlier mask under ``outlier/``, the labels with it applied in ``rings/label``,
+#: and the ring bounds as ``rings/bounds_nm`` ``(R, 2)``.
 SCHEMA = 3
 GZIP = {"compression": "gzip", "compression_opts": 1, "shuffle": True}
 
@@ -180,7 +179,6 @@ class ResultWriter:
         handle.create_group("provenance")
         handle.flush()
 
-    # ── resume ───────────────────────────────────────────────────────────────
     def block_complete(self, block: Block) -> bool:
         rows = [self._row(block, t) for t in block.train_ids]
         status = self._f["hits/status"][rows]
@@ -189,7 +187,6 @@ class ResultWriter:
     def _row(self, block: Block, train_id: int) -> int:
         return block.frames_for(train_id)[0]
 
-    # ── writing ──────────────────────────────────────────────────────────────
     def write_block(self, block: Block, result: Any) -> None:
         for sums in result.sums:
             self._write(self._row(block, sums.train_id), sums)
@@ -244,8 +241,8 @@ class ResultWriter:
     def finalise(self, provenance: dict[str, Any]) -> None:
         """Record provenance, read the file back from disk, then mark it finalised.
 
-        :raises UnreadableOutput: a dataset did not read back (a full quota on
-            2026-10-20); the file is removed rather than finalised.
+        :raises UnreadableOutput: a dataset did not read back (a full disk quota
+            does this); the file is removed rather than finalised.
         """
         group = self._f["provenance"]
         for key, value in provenance.items():
@@ -264,8 +261,8 @@ class ResultWriter:
         except OSError as error:
             failures = [f"fsync: {error!r}"]
         if failures:
-            # Its rows say OK, so a resume would only finalise it again: a rerun
-            # must rebuild it from the store instead.
+            # Its rows say OK, so a resume would finalise it again unchanged.
+            # Removing it makes a rerun rebuild it from the store.
             path.unlink()
             raise UnreadableOutput(
                 f"{path} did not read back and was removed; a rerun rebuilds it "
@@ -354,9 +351,9 @@ def _identity(path: Path) -> dict[str, Any] | None:
 def result_reasons(path: str | Path, hits: HitSet, merge_hash: str) -> Completeness:
     """Why the results file at ``path`` is not complete; reasons empty if it is.
 
-    Read-only, so a complete run is answered from the file with nothing written
-    (CLAUDE.md pitfall 26). The prelude is not compared here: it is a function of
-    the store and the hit set, and the merge hash already names the config.
+    Read-only, so a complete run is answered from the file with nothing written.
+    The prelude is not compared: it is a function of the store and the hit set,
+    and the merge hash already names the config.
     """
     path = Path(path)
     if not path.exists():
@@ -382,26 +379,23 @@ def result_reasons(path: str | Path, hits: HitSet, merge_hash: str) -> Completen
         return Completeness(path, (f"unreadable: {error!r}",))
 
 
-# ── the reader ────────────────────────────────────────────────────────────────
-
 #: The clock pulse ids count in: the 1.3 GHz master over 288, 4.5139 MHz, as
 #: ``XrayPulses.bunch_repetition_rate`` reports it and extra-speckle's
 #: ``convert_pulse_to_mhz`` uses it. A pulse-id step of 2 is 443.1 ns.
 BASE_CLOCK_HZ = 1.3e9 / 288
-#: extra-speckle's k-bar threshold. No source for it has been found in this
-#: repository, so it is offered only in the ``Averaging.ES`` view.
+#: extra-speckle's k-bar threshold. It has no known source, so it is offered
+#: only in the ``Averaging.ES`` view.
 ES_KBAR_MIN = 3e-3
 #: extra-speckle's ``reduce_ttcf(mask_noisy=True, nan_thresh=0.025)``: a ring is
 #: left out of g2 when more than this share of its (frame, frame) map is NaN. The
 #: pipeline's ``mask_noisy`` defaults to True; offered only in the ES view.
 ES_NAN_THRESH = 0.025
-#: extra-speckle drops the last lags of g2 unless that would leave fewer than 20.
+#: Lags extra-speckle drops from the end of g2, when 20 or more frames remain.
 SKIP_LAST_LAGS = 10
-#: Jackknife blocks (``analysis.triage.xpcs.N_BLOCKS``).
+#: Jackknife blocks, as ``analysis.triage.xpcs.N_BLOCKS``.
 N_BLOCKS = 50
 #: Largest relative disagreement between the pulse pattern's repetition rate and
-#: a DAMNIT ``rep_rate`` before the lag axis is refused. DAMNIT's own figure
-#: (2.2569 MHz) agrees with the pattern to better than 0.1 %.
+#: a DAMNIT ``rep_rate`` before the lag axis is refused.
 REP_RATE_RTOL = 0.01
 #: Rows read at a time when pooling.
 CHUNK = 16
@@ -477,7 +471,7 @@ class PooledSums:
 
 
 def _diagonal_sums(matrix: np.ndarray, lags: np.ndarray, both: bool = False):
-    """Sum of each ``lags`` diagonal over the last axis pair (and of ``−lag``)."""
+    """Sum of each ``lags`` diagonal of the last two axes, plus ``−lag`` if ``both``."""
     if lags.size == 0:
         return np.zeros((*matrix.shape[:-2], 0))
     return np.stack(
@@ -585,7 +579,6 @@ class XpcsHits:
             self.n_frames = int(f.attrs["n_frames"])
             self.attrs: dict[str, Any] = {k: v for k, v in f.attrs.items()}
 
-    # ── what is in it ────────────────────────────────────────────────────────
     def outlier(self) -> tuple[OutlierMask, np.ndarray] | None:
         """The applied pixel-outlier mask and the ring labels before it; None if off."""
         with h5py.File(self.path, "r") as handle:
@@ -596,8 +589,8 @@ class XpcsHits:
 
     @property
     def roi_q(self) -> np.ndarray:
-        """Ring centres in Å⁻¹, the unit DAMNIT's ``roi_q`` uses (ring numbers
-        for rings that came from a masks file)."""
+        """Ring centres in Å⁻¹, the unit of DAMNIT's ``roi_q``; ring numbers for
+        rings from a masks file."""
         if not len(self.bounds_nm):
             return np.arange(self.n_rings, dtype=np.float64)
         return self.bounds_nm.mean(axis=1) / 10.0
@@ -649,7 +642,6 @@ class XpcsHits:
             n_with_baseline=int((self.usable & self.has_off).sum()),
         )
 
-    # ── reading the sums ─────────────────────────────────────────────────────
     def _rows(self, trains: np.ndarray | None, *, baseline: bool = False) -> np.ndarray:
         """Row numbers of the usable trains in ``trains`` (all when ``None``)."""
         wanted = self.usable & (self.has_off if baseline else True)
@@ -679,7 +671,6 @@ class XpcsHits:
                     },
                 )
 
-    # ── pooled maps ──────────────────────────────────────────────────────────
     def pooled_sums(
         self,
         trains: np.ndarray | None = None,
@@ -762,7 +753,7 @@ class XpcsHits:
         that ``c2`` subtracts like from like. Anything with no photons behind it
         is NaN.
 
-        ``Averaging.ES``: each train normalised on its own (``norm == 0 → 1``),
+        ``Averaging.ES``: each train normalised on its own (a zero norm is 1),
         entries with k-bar under ``kbar_min`` set to NaN, then the mean over
         trains. ``kbar_min`` is extra-speckle's unsourced default; ``None``
         disables the filter.
@@ -809,8 +800,8 @@ class XpcsHits:
         """extra-speckle's per-train normalisation of a chunk (``convert_TTCF``).
 
         :returns: ``(raw, off, kbar)``; ``off`` is NaN for a train with no
-            baseline. ``norm == 0 → 1`` as there, which turns a frame with no
-            photons into a 0 entry rather than an undefined one.
+            baseline. A zero norm counts as 1, as there, which turns a frame
+            with no photons into a 0 entry rather than an undefined one.
         """
         cnt, cnt_pair = c["cnt"], c["cnt_pair"]
         with np.errstate(invalid="ignore", divide="ignore"):
@@ -857,7 +848,6 @@ class XpcsHits:
         dataset.attrs["kbar_min"] = -1.0 if kbar_min is None else kbar_min
         return dataset
 
-    # ── per train ────────────────────────────────────────────────────────────
     def kbar(self, trains: np.ndarray | None = None) -> xr.DataArray:
         """Mean photons per pixel per frame and ring, ``(trainId, frame, roi_q)``."""
         rows = self._rows(trains)
@@ -910,7 +900,6 @@ class XpcsHits:
             {"TTCF_raw": (dims, raw_all), "TTCF_off": (dims, off_all)}, coords=coords
         )
 
-    # ── g2 ───────────────────────────────────────────────────────────────────
     def lags(self, skip_last: int = SKIP_LAST_LAGS) -> np.ndarray:
         """Lags (in frames) g2 is evaluated at: extra-speckle's ``1 … P − 1 − skip``."""
         return lag_frames(self.n_frames, skip_last)
@@ -988,7 +977,6 @@ class XpcsHits:
         mean = self.ttcf(Averaging.ES, trains, kbar_min)["c2"].values
         roi_q = self.roi_q
         if nan_thresh is not None:
-            # reduce_ttcf: np.isnan(ring map).sum() > nan_thresh * map size
             noisy = np.isnan(mean).sum(axis=(1, 2)) > nan_thresh * mean[0].size
             mean, roi_q = mean[~noisy], roi_q[~noisy]
         diag = np.stack(
@@ -1012,7 +1000,6 @@ class XpcsHits:
             attrs={"averaging": "es", "period_s": period},
         )
 
-    # ── for the triage ───────────────────────────────────────────────────────
     def diagonals(
         self, kbar_min: float | None = None, trains: np.ndarray | None = None
     ):
@@ -1097,10 +1084,10 @@ def pooled_g2(
     binned: bool = True,
     n_blocks: int = N_BLOCKS,
 ) -> xr.Dataset:
-    """The pooled g2 Dataset of per-row lag terms, as `XpcsHits.g2` makes it.
+    """The pooled g2 Dataset of per-row lag terms, as ``XpcsHits.g2`` makes it.
 
     ``on, den_on, off, den_off`` are ``(rows, rings, P − 1)`` over the lags
-    ``1 … P − 1`` (`PooledSums`); ``lags`` picks the columns used. A row without a
+    ``1 … P − 1`` (``PooledSums``); ``lags`` picks the columns used. A row without a
     baseline has ``has_off`` False and its baseline terms are not read. Rows pool
     as a ratio of sums, and the jackknife blocks are contiguous in row order.
     """
@@ -1168,6 +1155,6 @@ def read(
     :param rep_rate_mhz: DAMNIT's ``rep_rate``. When given, a pulse pattern that
         implies another repetition rate refuses to make a lag axis.
     """
-    del proposal  # one proposal per repository today; the path carries the run
+    del proposal  # the output root belongs to one proposal
     path = Path(output_root) / "xpcs_hits" / f"r{run:04d}" / "xpcs_hits.h5"
     return XpcsHits(path, rep_rate_mhz)

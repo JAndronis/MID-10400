@@ -42,7 +42,7 @@ def config_for(proposal: int, run_no: int, **overrides: Any) -> AgipdSaxsConfig:
     :param overrides: any :class:`AgipdSaxsConfig` field. The geometry file,
         the pixel mask and the photon energy all enter ``config_hash``, so
         overriding one means the run will not resume into an output file
-        written without it — which is the intended behaviour, not a limitation.
+        written without it.
     """
     return AgipdSaxsConfig(proposal=proposal, run=run_no, **overrides)
 
@@ -51,9 +51,9 @@ def agipd_saxs(proposal: int, run_no: int, **overrides: Any) -> Any:
     """Integrate a whole run and return ``I(q)`` per ``(trainId, pulseId)``.
 
     The per-frame sums stay under ``cfg.output_root``; what comes back is the
-    intensity grid DAMNIT stores. DAMNIT's own ``run`` object is not used — it
-    would be a proc-only collection, leaving every check in ``plan.run_checks``
-    unavailable — so the pass opens proc and raw itself.
+    intensity grid DAMNIT stores. DAMNIT's own ``run`` object is not used,
+    because it would be a proc-only collection and leave every check in
+    ``plan.run_checks`` unavailable. The pass opens proc and raw itself.
 
     :raises IncompleteRun: some frame did not reach ``OK``. Deliberately not
         caught: a partial I(q) that looks whole is worse than a failed variable.
@@ -70,7 +70,7 @@ def preprocess(proposal: int, run_no: int, **overrides: Any) -> Any:
 
     Writes whichever of the frame table, the window sums and the photon
     statistics are not complete yet, from one read (``run_agipd_saxs``), and
-    answers a complete run from its files without writing (CLAUDE.md pitfall 26).
+    answers a complete run from its files without writing.
     Every column that shows one of these products reads it from its file.
 
     Failures are a red cell rather than an exception, so the readers still run
@@ -201,10 +201,9 @@ def pooled_from_file(path: str | Path) -> Any:
 def overview_figure(grid: Any, title: str = "") -> Any:
     """Three-panel I(q) overview: mean curve, per-pulse map, per-train map.
 
-    The two maps go through ``extra.utils.imshow2``, which is what the old
-    ``agipd_iq_overview`` used: for a DataArray it hands off to xarray's own
-    ``plot.imshow``, so the colour bar and the real train and pulse ids on the
-    axes come from the array's coordinates rather than being drawn by hand.
+    The two maps go through ``extra.utils.imshow2``. For a DataArray it hands
+    off to xarray's own ``plot.imshow``, so the colour bar and the real train
+    and pulse ids on the axes come from the array's coordinates.
 
     :param grid: the DataArray from :func:`agipd_saxs` or
         :func:`per_pulse_from_file`.
@@ -213,10 +212,9 @@ def overview_figure(grid: Any, title: str = "") -> Any:
     from extra.utils import imshow2
     from matplotlib.gridspec import GridSpec
 
-    # Slots holding no frame are stored as zeros;
-    # NaN is what makes xarray's mean skip them and what imshow2 leaves blank.
-    # The copy is skipped when every slot holds a frame — the usual case, and
-    # ~0.9 GB of it.
+    # Slots holding no frame are stored as zeros. NaN is what makes xarray's
+    # mean skip them and what imshow2 leaves blank. The copy, as large as the
+    # grid, is skipped when every slot holds a frame, which is the usual case.
     present = grid["n_frames"] > 0
     intensity = grid if bool(present.all()) else grid.where(present)
 

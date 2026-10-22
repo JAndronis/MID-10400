@@ -27,7 +27,7 @@ def test_importing_threadenv_pulls_in_nothing_heavy():
 
 
 def test_every_library_in_the_stack_is_pinned(monkeypatch):
-    """OpenBLAS included: the scripts pinned it while the library did not."""
+    """``set_thread_env`` sets every variable to one thread, OpenBLAS included."""
     for name in THREAD_ENV:
         monkeypatch.delenv(name, raising=False)
     set_thread_env()

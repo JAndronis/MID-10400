@@ -1,4 +1,4 @@
-"""One row per run: what it is, how big, and which DAMNIT products exist (§3, §4.1).
+"""One row per run: what it is, how big, and which DAMNIT products exist.
 
 Reads DAMNIT's sqlite and the per-run HDF5 files, both read-only. The sqlite is
 opened through a ``mode=ro`` URI, so not even a journal is written beside it. A
@@ -36,10 +36,10 @@ __all__ = [
 ]
 
 DAMNIT_ROOT = Path("/gpfs/exfel/exp/MID/202601/p010400/usr/Shared/amore")
-#: r1–42 were commissioning (user, 2026-10-01): inventoried, never analysed.
+#: Runs r1-42 were commissioning. They are inventoried, never analysed.
 COMMISSIONING_LAST_RUN = 42
-#: The stray-light geometry changed between these two runs (memory,
-#: saxs-background-subtraction); runs strictly between them are undetermined.
+#: The stray-light geometry changed between these two runs. Runs strictly
+#: between them are undetermined.
 STRAY_LIGHT_LAST_BEFORE, STRAY_LIGHT_FIRST_AFTER = 433, 443
 #: The sqlite columns the inventory reads. Everything else in ``runs`` is a preview.
 RUN_COLUMNS = (
@@ -70,8 +70,8 @@ def read_run_table(sqlite_path: Path) -> pd.DataFrame:
     """DAMNIT's ``runs`` table, `RUN_COLUMNS` only, sorted by run, opened read-only."""
     uri = f"file:{Path(sqlite_path)}?mode=ro"
     query = f"SELECT {', '.join(RUN_COLUMNS)} FROM runs ORDER BY run"
-    # Many DAMNIT jobs write runs.sqlite at once; wait for the lock (seconds, not
-    # sqlite's default of 5) instead of failing the hit rule of a run.
+    # Many DAMNIT jobs write runs.sqlite at once. Wait up to 300 s for the lock
+    # (sqlite's default is 5 s) rather than fail the hit rule of a run.
     with closing(sqlite3.connect(uri, uri=True, timeout=300.0)) as con:
         return pd.read_sql(query, con)
 
@@ -79,7 +79,7 @@ def read_run_table(sqlite_path: Path) -> pd.DataFrame:
 def parse_run_length(text: str | None) -> float:
     """DAMNIT's ``H:MM:SS`` run length in seconds; NaN when absent.
 
-    Absent arrives as None or, through pandas, as a float NaN (r332, whose
+    Absent arrives as None or, through pandas, as a float NaN (when DAMNIT's
     ``run_length`` variable errored).
     """
     if text is None or (isinstance(text, float) and np.isnan(text)) or text == "":
@@ -89,7 +89,7 @@ def parse_run_length(text: str | None) -> float:
 
 
 def classify(run: int, run_type: str | None, scan_type: str | None, sample: str) -> str:
-    """The run's class (§3.1). The first rule that matches wins."""
+    """The run's class. The first rule that matches wins."""
     run_type, scan_type = str(run_type or ""), str(scan_type or "")
     if run_type.startswith(("Calibration", "Dark")):
         return "calib_dark"
@@ -114,7 +114,7 @@ def stray_light_era(run: int) -> str:
 
 
 def jf_block(cells) -> str | None:
-    """The JUNGFRAU readout block from the lit cells DAMNIT kept (§4.1)."""
+    """The JUNGFRAU readout block from the lit cells DAMNIT kept."""
     if cells is None:
         return None
     cells = sorted({int(c) for c in np.asarray(cells).ravel()})
@@ -177,7 +177,7 @@ def file_facts(path: Path) -> dict:
 def build_inventory(
     runs: pd.DataFrame, damnit_root: Path = DAMNIT_ROOT, proposal: int = 10400
 ) -> pd.DataFrame:
-    """The §4.1 inventory, one row per run of `runs` (as `read_run_table` returns)."""
+    """The inventory, one row per run of `runs` (as `read_run_table` returns)."""
     rows = []
     for rec in runs.itertuples(index=False):
         run = int(rec.run)

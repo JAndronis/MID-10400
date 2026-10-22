@@ -73,8 +73,7 @@ def load_extra_speckle_module(relative: str):
     """A file of the installed extra_speckle, loaded without importing the package.
 
     ``import extra_speckle`` imports its XCCA tools, which switch HDF5 file
-    locking off for the whole process (CLAUDE.md pitfall 29); the kernel file
-    needs only numpy.
+    locking off for the whole process. The kernel file needs only numpy.
     """
     spec = importlib.util.find_spec("extra_speckle")
     if spec is None or not spec.submodule_search_locations:
@@ -191,7 +190,7 @@ def any_flagged(flags: list[np.ndarray], n_env: int) -> np.ndarray:
 
 
 def es_chain(trains_dense, trains_flags, rings, sparse=False):
-    """extra-speckle's own loop (calc_xpcs.py, dense path) over a chain of trains."""
+    """extra-speckle's calc_xpcs.py loop over a chain of trains, dense or sparse."""
     kernel = load_extra_speckle_module("xpcs/kernel.py")
     n_frames, n_env = trains_dense[0].shape
     n_rings = rings.n_rings

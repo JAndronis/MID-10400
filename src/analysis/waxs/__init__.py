@@ -1,12 +1,9 @@
-"""JUNGFRAU WAXS loader and integrator — the ``jungfrau_waxs`` DAMNIT variables.
+"""JUNGFRAU WAXS loader and integrator behind the ``jungfrau_waxs`` DAMNIT variables.
 
-See ``context/jungfrau-waxs-integrator.md`` for the design, which is written as
-a delta against ``context/agipd-saxs-integrator.md``. Two of its decisions were
-amended by measurement during implementation and the modules that carry them
-say so: the per-frame mask is a NaN rather than an ``integrate1d(mask=)``
-argument (:mod:`analysis.waxs.operator`), and frames are counted as photons per
-ASIC before they are integrated (:mod:`analysis.waxs.photons`, CLAUDE.md open
-task 18), with a Poisson variance. :mod:`analysis.waxs.combine` puts the two
+The per-frame mask is carried as NaN in the data rather than passed as
+``integrate1d(mask=)`` (:mod:`analysis.waxs.operator`). Frames are counted as
+photons per ASIC before they are integrated, with a Poisson variance
+(:mod:`analysis.waxs.photons`). :mod:`analysis.waxs.combine` puts the two
 detectors on one scale by fitting a factor over their overlap, and refuses to
 mix a keV file with a photon one.
 """

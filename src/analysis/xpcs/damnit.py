@@ -1,14 +1,14 @@
 """The DAMNIT-facing surface of the hit-train XPCS pass.
 
-Everything the ``xpcs_hits_*`` variables need lives here, not in
-``src/amore/context.py``: DAMNIT ``exec``s that file into a dict, so a function
-defined there cannot be pickled to the workers the pass spawns. A wrapper in the
-context file is a docstring, one import and a call.
+Everything the ``xpcs.*`` DAMNIT variables need lives here, not in the context
+file. DAMNIT ``exec``s that file into a dict, so a function defined there cannot
+be pickled to the workers the pass spawns. A wrapper in the context file is a
+docstring, one import and a call.
 
-**This is the only module that imports** ``analysis.triage.classify`` (the
-hit rule is another session's to change; the pass itself takes train ids).
-``xpcs_hits_preprocessing`` is the second read of proc by design: the hit rule
-needs the whole run's ``agipd_saxs``, which exists only after the first.
+This is the only module that imports ``analysis.triage.classify``; the pass
+itself takes train ids. ``xpcs.preprocessing`` is a second read of proc by
+design, because the hit rule needs the whole run's ``agipd.saxs``, which exists
+only after the first.
 
 Nothing here imports DAMNIT at module level, so the functions run from a
 notebook or a Slurm script. ``Cell`` and ``Skip`` are imported inside them.
@@ -72,14 +72,14 @@ def config_for(proposal: int, run_no: int, **overrides: Any) -> XpcsConfig:
 
 
 def result_file(proposal: int, run_no: int, **overrides: Any) -> Path:
-    """The results file ``xpcs_hits_preprocessing`` writes for this run."""
+    """The results file ``xpcs.preprocessing`` writes for this run."""
     return config_for(proposal, run_no, **overrides).output_file
 
 
 def hit_set(proposal: int, run_no: int, saxs: Any, xgm: Any, transmission: Any):
     """This run's droplet hits, from DAMNIT's values in memory.
 
-    Inside the cluster job the run's ``agipd_saxs`` is not in the per-run file
+    Inside the cluster job the run's ``agipd.saxs`` is not in the per-run file
     until the job ends, so the hits come from the dependencies, as in
     ``analysis.diagnostics.damnit.photon_statistics``.
     """
@@ -102,12 +102,12 @@ def preprocess(
     transmission: Any,
     **overrides: Any,
 ) -> Any:
-    """The ``xpcs_hits_preprocessing`` cell: the hit trains' one read of proc.
+    """The ``xpcs.preprocessing`` cell: the hit trains' one read of proc.
 
-    Extracts the hit trains the photon store lacks and writes their sums; a
-    complete run is answered from its files without writing (CLAUDE.md pitfall
-    26). Every failure is a cell, so the readers still run and say what their
-    file lacks.
+    Extracts the hit trains the photon store lacks and writes their sums. A
+    complete run is answered from its files without writing, so a relaunched job
+    cannot rewrite a finished file. Every failure is a cell, so the readers
+    still run and say what their file lacks.
 
     :returns: a ``Cell`` whose data is the coverage as JSON: green when every
         hit is usable, amber when some are final non-OK (no frames, a pulse
@@ -207,10 +207,11 @@ def coverage_cell(path: str | Path, **extra: Any) -> Any:
 
 
 def frames_used(proposal: int, run_no: int, **overrides: Any) -> Any:
-    """The ``xpcs_hits_frames_used`` cell: hits used, read from the results file.
+    """The ``xpcs.frames_used`` cell: hits used, read from the results file.
 
     Like the other ``*_frames_used`` cells it has no ``var#`` on the pass, so
-    asking for it cannot relaunch the cluster job (CLAUDE.md pitfall 26).
+    asking for it cannot relaunch the cluster job, which would write the output
+    a second time.
     """
     return coverage_cell(result_file(proposal, run_no, **overrides))
 
@@ -245,7 +246,7 @@ def _open(
 def g2_from_file(
     proposal: int, run_no: int, rep_rate_mhz: float | None = None, **overrides: Any
 ) -> Any:
-    """The ``xpcs_hits_g2`` column: pooled g2, baseline and c2 with jackknife errors.
+    """The ``xpcs.g2`` column: pooled g2, baseline and c2 with jackknife errors.
 
     :param rep_rate_mhz: DAMNIT's ``rep_rate``; a pulse pattern that implies
         another rate refuses to make a lag axis (``RepRateMismatch``).
@@ -257,7 +258,7 @@ def g2_from_file(
 
 
 def ttcf_from_file(proposal: int, run_no: int, **overrides: Any) -> Any:
-    """The ``xpcs_hits_ttcf`` column: pooled two-time maps ``raw``, ``off``, ``c2``."""
+    """The ``xpcs.ttcf`` column: pooled two-time maps ``raw``, ``off``, ``c2``."""
     hits = _open(proposal, run_no, None, overrides)
     out = hits.ttcf(Averaging.POOLED)
     out.attrs["coverage"] = str(hits.coverage())
@@ -313,11 +314,11 @@ def overview_figure(g2: Any, ttcf: Any) -> Any:
     return fig
 
 
-# ── the old ``xpcs_*`` columns, from the hit store ───────────────────────────────
-# One wrapper per old DAMNIT variable (``src/amore/context.py`` ``xpcs_*``), each
-# a thin call into ``analysis.xpcs.figures``. They read the results file through
-# ``_open``, so a run without a file or without a usable hit is a ``Skip`` and an
-# unfinished one an ``IncompleteRun``, as for ``xpcs_hits_g2``.
+# ── extra-speckle's figure and data columns, from the hit store ──────────────────
+# One wrapper per DAMNIT variable, each a thin call into ``analysis.xpcs.figures``.
+# They read the results file through ``_open``, so a run without a file or
+# without a usable hit is a ``Skip`` and an unfinished one an ``IncompleteRun``,
+# as for ``xpcs.g2``.
 
 
 def _detector_mean(
@@ -336,7 +337,7 @@ def _detector_mean(
 def q_rings_figure(
     proposal: int, run_no: int, max_trains: int | None = 200, **overrides: Any
 ) -> Any:
-    """The old ``XPCS q-rings`` column: mean image and ring map (annulus only)."""
+    """The ``XPCS q-rings`` column: mean image and ring map (annulus only)."""
     hits = _open(proposal, run_no, None, overrides)
     det = _detector_mean(proposal, run_no, hits, max_trains, overrides)
     return figures.figure_q_rings(det)
@@ -345,7 +346,7 @@ def q_rings_figure(
 def beamcenter_figure(
     proposal: int, run_no: int, max_trains: int | None = 200, **overrides: Any
 ) -> Any:
-    """The old ``XPCS beamcenter`` column: the cone test at the configured centre."""
+    """The ``XPCS beamcenter`` column: the cone test at the configured centre."""
     hits = _open(proposal, run_no, None, overrides)
     det = _detector_mean(proposal, run_no, hits, max_trains, overrides)
     return figures.figure_beamcenter(det)
@@ -354,45 +355,45 @@ def beamcenter_figure(
 def outliers_figure(
     proposal: int, run_no: int, max_trains: int | None = 200, **overrides: Any
 ) -> Any:
-    """The old ``XPCS outliers`` column: I(q) before and after, and the statistic."""
+    """The ``XPCS outliers`` column: I(q) before and after, and the statistic."""
     hits = _open(proposal, run_no, None, overrides)
     det = _detector_mean(proposal, run_no, hits, max_trains, overrides)
     return figures.figure_outliers(det)
 
 
 def intensity_outliers_figure(proposal: int, run_no: int, **overrides: Any) -> Any:
-    """The old ``XPCS intensity outliers`` column: mean intensity per hit train."""
+    """The ``XPCS intensity outliers`` column: mean intensity per hit train."""
     return figures.figure_intensity_outliers(_open(proposal, run_no, None, overrides))
 
 
 def kbar_figure(proposal: int, run_no: int, **overrides: Any) -> Any:
-    """The old ``XPCS kbar`` column."""
+    """The ``XPCS kbar`` column."""
     return figures.figure_kbar(_open(proposal, run_no, None, overrides))
 
 
 def correction_figure(
     proposal: int, run_no: int, rep_rate_mhz: float | None = None, **overrides: Any
 ) -> Any:
-    """The old ``XPCS correction`` column: raw, baseline and corrected, maps and g2."""
+    """The ``XPCS correction`` column: raw, baseline and corrected, maps and g2."""
     return figures.figure_correction(_open(proposal, run_no, rep_rate_mhz, overrides))
 
 
 def ttcfs_figure(proposal: int, run_no: int, **overrides: Any) -> Any:
-    """The old ``XPCS TTCF's`` column: the corrected two-time map of every ring."""
+    """The ``XPCS TTCF's`` column: the corrected two-time map of every ring."""
     return figures.figure_ttcfs(_open(proposal, run_no, None, overrides))
 
 
 def g2_figure(
     proposal: int, run_no: int, rep_rate_mhz: float | None = None, **overrides: Any
 ) -> Any:
-    """The old ``XPCS g2`` column."""
+    """The ``XPCS g2 figure`` column."""
     return figures.figure_g2(_open(proposal, run_no, rep_rate_mhz, overrides))
 
 
 def g2_fit_figure(
     proposal: int, run_no: int, rep_rate_mhz: float | None = None, **overrides: Any
 ) -> Any:
-    """The old ``XPCS g2 fit`` column; ``Skip`` when the fit fails, as before."""
+    """The ``XPCS g2 fit`` column; ``Skip`` when the fit fails."""
     from damnit.context import Skip
 
     hits = _open(proposal, run_no, rep_rate_mhz, overrides)
@@ -405,7 +406,7 @@ def g2_fit_figure(
 def saxs_figure(
     proposal: int, run_no: int, max_trains: int | None = 200, **overrides: Any
 ) -> Any:
-    """The old ``XPCS SAXS overview`` column: q-binned from the store, else per ring."""
+    """The ``XPCS SAXS overview`` column: q-binned from the store, else per ring."""
     from damnit.context import Skip
 
     hits = _open(proposal, run_no, None, overrides)
@@ -417,21 +418,21 @@ def saxs_figure(
 
 
 def legacy_ttcf(proposal: int, run_no: int, **overrides: Any) -> Any:
-    """The old ``XPCS TTCF`` column: ``TTCF_raw − TTCF_off`` of every hit train."""
+    """The ``XPCS TTCF per train`` column: ``TTCF_raw - TTCF_off`` per hit train."""
     return figures.legacy_ttcf(_open(proposal, run_no, None, overrides))
 
 
 def legacy_mean_dataset(
     proposal: int, run_no: int, rep_rate_mhz: float | None = None, **overrides: Any
 ) -> Any:
-    """The old ``XPCS mean dataset`` column: ``ttcf_mean`` and ``g2``."""
+    """The ``XPCS mean dataset`` column: ``ttcf_mean`` and ``g2``."""
     return figures.legacy_mean_dataset(_open(proposal, run_no, rep_rate_mhz, overrides))
 
 
 def legacy_saxs(
     proposal: int, run_no: int, max_trains: int | None = 200, **overrides: Any
 ) -> Any:
-    """The old ``XPCS SAXS`` column: I(q) per frame on the annulus, ``(frame, q)``."""
+    """The ``XPCS SAXS`` column: I(q) per frame on the annulus, ``(frame, q)``."""
     hits = _open(proposal, run_no, None, overrides)
     return figures.saxs_curves(
         _detector_mean(proposal, run_no, hits, max_trains, overrides)

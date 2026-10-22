@@ -1,4 +1,4 @@
-"""Orchestration: failure paths, resume and a real spawned pool (§6.7; P3)."""
+"""Orchestration of the SAXS pass: failure paths, resume and a real spawned pool."""
 
 from __future__ import annotations
 
@@ -90,7 +90,7 @@ def test_end_to_end_inline(pipeline, tmp_path):
         assert (f["frames/status"][:] == FrameStatus.OK).all()
         assert f["provenance"].attrs["n_workers"] == pipeline.cfg.workers
         assert "operator_sha256" in f["provenance"].attrs
-        # P4 checks the wall time against the §2 budget from the file alone.
+        # Acceptance reads the wall time from the file alone.
         assert f["provenance"].attrs["wall_s"] > 0
         assert f["provenance"].attrs["started_at"] > 0
         assert f["masks"].attrs["operator_sha256"] == f["operator"].attrs["sha256"]
@@ -124,7 +124,7 @@ def test_end_to_end_with_a_real_spawned_pool(pipeline, tmp_path):
 
 
 def test_thread_env_is_set_before_any_pool(pipeline, tmp_path, monkeypatch):
-    """§3 rule 3: spawned children inherit it, so it must be set in the parent."""
+    """Spawned children inherit the thread variables, so the parent must set them."""
     for name in THREAD_ENV:
         monkeypatch.delenv(name, raising=False)
     run_on_mock(pipeline, tmp_path)
@@ -194,8 +194,8 @@ def test_resume_processes_only_the_missing_blocks(pipeline, tmp_path, monkeypatc
     """The frame table's resume, with window sums off.
 
     With them on, the rerun would also rebuild the window that lost the failed
-    block's trains, reading its other blocks for their sums — covered in
-    ``test_pixel_sums.py``.
+    block's trains, reading its other blocks for their sums. ``test_pixel_sums.py``
+    covers that case.
     """
     pipeline = SimpleNamespace(**vars(pipeline))
     pipeline.cfg = replace(pipeline.cfg, pixel_sum_trains=None)
@@ -212,8 +212,7 @@ def test_resume_processes_only_the_missing_blocks(pipeline, tmp_path, monkeypatc
     with pytest.raises(IncompleteRun):
         run_on_mock(pipeline, tmp_path)
 
-    # the failed block is WORKER_ERROR, not NOT_PROCESSED, so it is complete;
-    # reset it the way a rerun after a crash would find it
+    # reset the failed block the way a rerun after a crash would find it
     failed = pipeline.plan.blocks[0]
     with h5py.File(tmp_path / "out.h5", "r+") as f:
         rows = failed.rows()

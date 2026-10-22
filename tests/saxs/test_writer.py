@@ -1,4 +1,4 @@
-"""Worker results, output schema, rows by label and resume (§6.5, §7; P3)."""
+"""Worker results, output schema, rows by label and resume."""
 
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ def test_worker_integrates_every_frame(worker_ready):
 
 
 def test_worker_labels_come_from_the_reader(worker_ready):
-    """Identity is read, never inferred from position (CLAUDE.md pitfall 4)."""
+    """Identity is read, never inferred from position, which a dropped train shifts."""
     for block in worker_ready.plan.blocks:
         result = worker.process_block(block)
         expected = np.concatenate(
@@ -99,7 +99,7 @@ def test_output_schema(worker_ready, tmp_path):
 
 
 def test_no_nan_anywhere(worker_ready, tmp_path):
-    """§3 rule 7: status codes, never NaN sentinels."""
+    """Failed frames carry status codes, never NaN sentinels."""
     path = tmp_path / "out.h5"
     with AgipdSaxsWriter.open_or_create(
         worker_ready.cfg, worker_ready.plan, path

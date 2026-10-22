@@ -1,17 +1,17 @@
-"""Build a proc-like JUNGFRAU run on disk (WAXS context file §7, phase W3).
+"""Build a proc-like JUNGFRAU run on disk.
 
-EXtra-data's own ``JUNGFRAUModule`` already writes the right dtypes and shapes —
-``data/adc`` float32 ``(entries, 16, 512, 1024)``, ``data/mask`` uint32,
-``data/memoryCell`` uint8 — so unlike the AGIPD mock nothing has to be recast.
+EXtra-data's own ``JUNGFRAUModule`` already writes the right dtypes and shapes
+(``data/adc`` float32 ``(entries, 16, 512, 1024)``, ``data/mask`` uint32,
+``data/memoryCell`` uint8), so unlike the AGIPD mock nothing has to be recast.
 What it does not write is *content*: the datasets are created unallocated, so
 each file is reopened and filled with lit and dark cells, a static-looking mask
 pattern per cell and a few per-frame bits.
 
 The awkward-train cases are produced the way EXtra-data actually decides them:
 
-* **zero-entry train** — ``INDEX/.../data/count`` zeroed for that train, which
-  is what takes it out of ``JUNGFRAU.frame_counts`` entirely;
-* **dropped train** — ``INDEX/trainId`` and the per-entry ``trainId`` are
+* zero-entry train: ``INDEX/.../data/count`` zeroed for that train, which is
+  what takes it out of ``JUNGFRAU.frame_counts`` entirely;
+* dropped train: ``INDEX/trainId`` and the per-entry ``trainId`` are
   renumbered to a non-contiguous sequence, so the run itself has a gap.
 
 There is no missing-module case: each of this experiment's detectors is a single
@@ -19,17 +19,17 @@ JUNGFRAU-500K module with its own PONI and mask, and ``plan.open_detector``
 refuses a multi-module selection outright, so a train can only have its one
 module or none.
 
-**A filled run costs 135 MB on disk**, nearly all of it ``data/adc``: 16 cells
-of 512x1024 float32 per train, dense by construction because the real detector
-is. ``data/mask`` used to cost the same again until it was compressed (see
-``_recreate_mask_compressed``). The fixtures cache a run per distinct keyword
-signature and hold it for the whole session, so the suite's peak is that 135 MB
-times the number of distinct signatures — keep new signatures deliberate, and
-pass ``fill=False`` for a run whose frames are never read.
+A filled run of the default four trains costs 135 MB on disk, nearly all of it
+``data/adc``: 16 cells of 512x1024 float32 per train, dense because the real
+detector is. ``data/mask`` is compressed (``_recreate_mask_compressed``). The
+fixtures cache a run per distinct keyword signature and hold it for the whole
+session, so the suite's peak disk use is that 135 MB times the number of
+distinct signatures. Add new signatures sparingly, and pass ``fill=False`` for a
+run whose frames are never read.
 
-This leans on ``extra_data.tests.mockdata``, an internal test package of
-EXtra-data with no API stability promise — the same dependency the AGIPD mock
-carries, and the same thing to check on an EXtra-data upgrade.
+This relies on ``extra_data.tests.mockdata``, an internal test package of
+EXtra-data with no API stability promise. The AGIPD mock has the same
+dependency, so check both on an EXtra-data upgrade.
 """
 
 from __future__ import annotations
@@ -45,24 +45,24 @@ from extra_data.tests.mockdata.jungfrau import JUNGFRAUModule
 MODULE_SHAPE = (512, 1024)
 N_MODULE_PX = MODULE_SHAPE[0] * MODULE_SHAPE[1]
 CELLS = 16
-#: The real pattern, measured on the cluster: 0-6 and 15, which is deliberately
-#: **not** contiguous. A mock lighting 0-7 would never exercise the code paths
-#: that care - the ROI window, and any assumption that the lit set is a range.
+#: The real science-block pattern, 0-6 and 15, which is not a contiguous range
+#: of ids. A mock lighting 0-7 would never exercise code that assumes the lit
+#: set is a range.
 LIT_CELLS = (0, 1, 2, 3, 4, 5, 6, 15)
 STATIC_BIT = np.uint32(1 << 0)  # OFFSET_OUT_OF_THRESHOLD
 DYNAMIC_BIT = np.uint32(1 << 21)  # WRONG_GAIN_VALUE
-SEAM_BIT = np.uint32(1 << 22)  # NON_STANDARD_SIZE — set here, unlike AGIPD
+SEAM_BIT = np.uint32(1 << 22)  # NON_STANDARD_SIZE, set here, unlike AGIPD
 
 #: Enough photons for the lit-cell fraction to clear ``lit_fraction_min`` by a
-#: wide margin, as the real data does (42–53 % against ≤ 0.08 %).
+#: wide margin, as the real data does.
 LIT_RATE = 0.6
 PHOTON_KEV = 9.04
 READ_NOISE_KEV = 0.32
 
-#: The zero level proc leaves in (CLAUDE.md pitfall 23), at a fraction of W7's
-#: real sizes so the measured readout noise stays within 2 % of READ_NOISE_KEV:
+#: The zero level that corrected JUNGFRAU data still carry, smaller than the
+#: real one so the measured readout noise stays within 2 % of READ_NOISE_KEV:
 #: a static offset per ASIC, a common-mode jump per train shared by every cell
-#: and ASIC (jf1's behaviour), and lit cells sitting higher than dark ones.
+#: and ASIC (as on jf1), and lit cells sitting higher than dark ones.
 ASIC_OFFSET_KEV = (0.03, -0.05, 0.02, 0.06, -0.01, -0.04, 0.05, -0.02)
 COMMON_MODE_RMS_KEV = 0.05
 LIT_SHIFT_KEV = 0.10
@@ -106,10 +106,9 @@ class MockRun:
 def device_id(detector_name: str, module: int = 1) -> str:
     """Karabo device id. ``write_instrument`` appends ``:daqOutput`` itself.
 
-    Corrected data has used ``/CORR/`` in its source names since 2026/1, which
-    is what ``lsxfel`` reports for r0423:
+    Corrected data use ``/CORR/`` in their source names, for example
     ``MID_EXP_JF500K1/CORR/JNGFR01:daqOutput``. ``JUNGFRAU._source_corr_pat``
-    matches only that form, so a mock written with the old ``/DET/`` names would
+    matches only that form, so a mock written with the ``/DET/`` names would
     silently exercise the raw-name fallback path instead of the one the real
     files take.
     """
@@ -117,7 +116,7 @@ def device_id(detector_name: str, module: int = 1) -> str:
 
 
 def legacy_device_id(detector_name: str, module: int = 1) -> str:
-    """The pre-2026/1 ``/DET/`` name, kept in the files as a soft link."""
+    """The older ``/DET/`` name, which proc files keep as a soft link."""
     return f"{detector_name}/DET/JNGFR{module:02d}"
 
 
@@ -153,23 +152,22 @@ def write_mock_run(
     :param zero_entry_trains: trains the module wrote no entry for, which the
         plan records as ``NO_FRAMES``.
     :param static_fraction: fraction of pixels the returned static mask
-        excludes, mimicking the real ``.edf`` files' 75.9 % / 84.4 %.
+        excludes. The real ``.edf`` masks exclude most of the module.
     :param nonfinite_train: put a NaN on a kept pixel of this train's first lit
-        cell, to drive ``DATA_CHECK_FAILED``.
-    :param extreme_train: put a 1.8e5 keV pixel — the magnitude jf2 actually
-        carries, unflagged — on a kept pixel of this train's first lit cell.
-    :param extreme_flagged: also set that pixel's dynamic bit, so the value is
-        one ``data.mask`` removes and the integrator never sees. The frame still
-        fails D6, which tests the pixels the *static* mask keeps — this is the
-        r0480 case, and the only one where the two stored maxima disagree.
+        cell.
+    :param extreme_train: put an unflagged 1.8e5 keV pixel on a kept pixel of
+        this train's first lit cell, which the value check excludes.
+    :param extreme_flagged: also set that pixel's dynamic bit, so ``data.mask``
+        removes the value before the value check sees it. ``max_kev_static``
+        still records it, and ``n_extreme_pixels`` does not count it.
     :param shuffled_cells_train: give this train a repeated ``memoryCell``
         entry, so its rows cannot be filled by label.
     :param fill: write frame content. ``False`` leaves ``data/adc``,
         ``data/mask`` and ``data/memoryCell`` created but unwritten, which for
-        a chunked dataset means no space is allocated for them at all — a run
-        that costs kilobytes instead of 135 MB. Only for tests that read the
-        file's *metadata*: source names, INDEX, train ids. Anything that reads
-        a frame gets the fill value, silently.
+        a chunked dataset means no space is allocated for them at all, so the
+        run costs kilobytes instead of 135 MB. Only for tests that read the
+        file's metadata (source names, INDEX, train ids). Anything that reads a
+        frame silently gets the fill value.
     """
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
@@ -276,16 +274,15 @@ def _renumber_trains(
 
 
 def _add_legacy_alias(path: Path, detector_name: str, module: int = 1) -> None:
-    """Add the pre-2026/1 ``/DET/`` source name as a soft link, as proc does.
+    """Add the older ``/DET/`` source name as a soft link, as proc files do.
 
-    ``lsxfel`` reports one of these per JUNGFRAU file in r0423. EXtra-data
-    detects them by looking for an ``h5py.SoftLink`` under ``INSTRUMENT/`` whose
-    id is listed in ``METADATA/dataSourceId`` (``file_access._read_data_sources``),
-    and ``DataCollection.instrument_sources`` **includes** them — only
-    ``detector_sources`` subtracts them. So the alias really is visible to
-    ``MultimodDetectorBase._source_matches``, and the reason it does not become
-    a second module is that ``_source_corr_pat`` matches ``/CORR/`` alone.
-    That is worth a mock rather than an argument, which is why this exists.
+    EXtra-data detects these by looking for an ``h5py.SoftLink`` under
+    ``INSTRUMENT/`` whose id is listed in ``METADATA/dataSourceId``
+    (``file_access._read_data_sources``). ``DataCollection.instrument_sources``
+    includes them and only ``detector_sources`` subtracts them, so the alias is
+    visible to ``MultimodDetectorBase._source_matches``. It does not become a
+    second module only because ``_source_corr_pat`` matches ``/CORR/`` alone,
+    and the mock lets a test check that instead of assuming it.
     """
     canonical = source(detector_name, module)
     legacy = legacy_source(detector_name, module)
@@ -327,21 +324,16 @@ def _zero_entry_counts(
 def _recreate_mask_compressed(group: h5py.Group) -> h5py.Dataset:
     """Replace ``data/mask`` with a gzip+shuffle copy of itself, still empty.
 
-    ``write_file`` creates it uncompressed, so once every entry is filled it
-    costs 134 MB per run on disk — half of what a mock run weighs, and the
-    bytes that made a session of these tests fill a disk. Its content is a few
-    hundred bits set in a field of zeros, so gzip takes it to 0.74 MB
-    (measured), and both writing and reading it get *faster*: there is that
-    much less I/O and the deflate is trivial.
+    ``write_file`` creates it uncompressed, so once filled it costs as much
+    disk as ``adc``. Its content is a few hundred set bits in a field of zeros,
+    so gzip shrinks it to under 1 MB and makes writing and reading it faster.
 
-    ``adc`` is deliberately left alone. It is dense float32 noise, so the same
-    treatment buys 15 % for 2.3 s of deflate per run and pays it back on every
-    read.
+    ``adc`` stays uncompressed. It is dense float32 noise, so deflate saves
+    little space and costs time on every write and read.
 
-    ``(1, 16, 512, 1024)`` is the chunking the real CORR files use — one chunk
-    spanning all sixteen memory cells, which is what rules an ``roi`` over the
-    lit cells out on real data (W1). The dataset is recreated before anything
-    is written to it, so nothing is orphaned in the file.
+    ``(1, 16, 512, 1024)`` is the chunking the real CORR files use, one chunk
+    spanning all sixteen memory cells. The dataset is recreated before
+    anything is written to it, so nothing is orphaned in the file.
     """
     shape, dtype = group["mask"].shape, group["mask"].dtype
     del group["mask"]
@@ -376,9 +368,9 @@ def _fill_frames(
 
     Lit cells get Poisson photons at ``PHOTON_KEV`` plus readout noise; dark
     cells get the noise alone, so the dark-cell spread a run measures is
-    ``READ_NOISE_KEV`` and the lit fraction is far above any sane threshold —
-    the same separation the real detectors show. Every cell then carries the
-    zero level of :func:`injected_level`.
+    ``READ_NOISE_KEV`` and the lit fraction is far above any sane threshold,
+    as on the real detectors. Every cell then carries the zero level of
+    :func:`injected_level`.
     """
     asic = ((np.arange(MODULE_SHAPE[0])[:, None] // 256) * 4) + (
         np.arange(MODULE_SHAPE[1])[None, :] // 256

@@ -5,9 +5,9 @@ the train it belongs to, never by its position in an array: a dropped train
 would otherwise shift every later frame onto the wrong trainId.
 
 Nothing here knows which detector it is describing. Each pass builds its own
-:class:`RunPlan` — how many rows a train owns, and which run checks apply, are
-detector questions — but the records, the blocks and the train sampling are
-the same either way.
+:class:`RunPlan`, because how many rows a train owns and which run checks apply
+depend on the detector. The records, the blocks and the train sampling are the
+same either way.
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ class TrainRecord:
 
 @dataclass(frozen=True, slots=True)
 class Block:
-    """A unit of scheduling, ledger and resume — not a unit of memory."""
+    """A unit of scheduling, ledger and resume, not a unit of memory."""
 
     index: int
     train_ids: tuple[int, ...]

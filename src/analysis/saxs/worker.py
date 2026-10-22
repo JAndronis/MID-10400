@@ -4,15 +4,15 @@ One single-threaded worker per core, spawned. The worker owns nothing but its
 own reads: the operator and the masks come from files written by the parent,
 and the results go back as plain arrays. Only the parent writes the output files.
 
-The same read feeds the per-pixel window sums (context file §15) and the
-per-frame photon statistics (``analysis.saxs.photon_stats``) when the parent asks
-for them, so they cost an add per train and a histogram per frame rather than a
-second read. A block the parent needs only for those skips the integration.
+The same read feeds the per-pixel window sums and the per-frame photon
+statistics (``analysis.saxs.photon_stats``) when the parent asks for them, so
+they cost an add per train and a histogram per frame rather than a second read.
+A block the parent needs only for those skips the integration.
 
-Thread limits are inherited from the parent's environment — a
-spawned child has already imported numpy by the time an initializer runs, so
-setting them here would be too late for pools that already exist. They are
-re-asserted anyway, which helps only libraries imported lazily.
+Thread limits are inherited from the parent's environment. A spawned child has
+already imported numpy by the time an initializer runs, so setting them here
+would be too late for pools that already exist. They are re-asserted anyway,
+which helps only libraries imported lazily.
 """
 
 from __future__ import annotations
@@ -89,8 +89,8 @@ def init(
     """Process initializer: load the operator and masks, open the run.
 
     :param windows: sum pixels into these windows; ``None`` sums nothing.
-    :param skip_integration: blocks to read and sum without integrating —
-        those whose frames the output file already holds.
+    :param skip_integration: blocks to read and sum without integrating, because
+        the output file already holds their frames.
     :param photon: histogram the frames of ``photon.blocks``; ``None`` none.
     """
     set_thread_env()
@@ -206,8 +206,8 @@ def process_block(block: Block) -> BlockResult:
     """Read and integrate one block; sum its pixels and histogram its frames if asked.
 
     Every frame's identity comes from the reader's coordinates, never from its
-    position in the array. A train whose labels or frame
-    count disagree with the plan is marked ``LABEL_MISMATCH`` and none of its
+    position in the array. A train whose labels or frame count disagree with
+    the plan is marked ``LABEL_MISMATCH`` and none of its
     frames are integrated, summed or histogrammed. The histogram sees the same
     bad pixels and the same data check as the integration, so a frame has one
     status in both files.
@@ -298,8 +298,8 @@ def process_block(block: Block) -> BlockResult:
         for frame in range(expected):
             row = rows.start + frame
             counts = data[:, frame].reshape(-1)
-            # The mask is the integration's cost when it runs (as before the
-            # statistics joined), else the histogram's.
+            # The mask's time counts towards the integration when it runs,
+            # else towards the histogram.
             started = time.perf_counter()
             static_bad = masks.static_bad if masks is not None else spec.static_bad
             bad = frame_bad(mask[:, frame], cfg.mask_bits, static_bad)

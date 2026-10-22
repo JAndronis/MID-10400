@@ -275,7 +275,7 @@ def test_the_es_g2_drops_a_ring_whose_map_is_more_than_2p5_percent_nan(world, tm
     hits = build_results(tmp_path / "noisy.h5", photons, rings, kernel=Kernel.ES)
     c2 = hits.ttcf(Averaging.ES)["c2"].values
     nan_share = np.isnan(c2).mean(axis=(1, 2))
-    assert nan_share[0] > 0.025 and nan_share[1] < 0.025  # the rule has both sides
+    assert nan_share[0] > 0.025 and nan_share[1] < 0.025  # one ring each side of it
 
     g2 = hits.g2(Averaging.ES, binned=False)
     kept = [r for r in range(R) if r != 0]
@@ -291,7 +291,7 @@ def test_the_nan_threshold_is_a_share_of_the_whole_map_not_a_count(world, tmp_pa
     label = np.asarray(rings.label)
     dense = [d.copy() for d in dense]
     for d in dense:
-        d[0, label == 0] = 0  # one dark frame: its row and column, 2P-1 of P*P entries
+        d[0, label == 0] = 0  # blanks a row and a column, 2P-1 of P*P
     photons = [make_train(t, d, f) for t, d, f in zip(IDS, dense, flags, strict=True)]
     hits = build_results(tmp_path / "edge.h5", photons, rings, kernel=Kernel.ES)
     share = np.isnan(hits.ttcf(Averaging.ES)["c2"].values[0]).mean()
@@ -370,7 +370,7 @@ def long_world(tmp_path):
 def test_binning_keeps_the_first_lags_and_pools_the_rest_into_log_bins(long_world):
     hits, photons, rings = long_world
     unbinned, binned = hits.g2(binned=False), hits.g2()
-    # 80 frames: lags 1 … 69 after extra-speckle's 10 dropped
+    # 80 frames give lags 1 to 79, and dropping extra-speckle's last 10 leaves 69
     assert unbinned.tau.size == 69 and binned.tau.size <= 10 + 20
     assert binned.attrs["binned"] == 1 and unbinned.attrs["binned"] == 0
     np.testing.assert_allclose(binned.g2.values[:, :10], unbinned.g2.values[:, :10])
@@ -579,7 +579,7 @@ def test_sums_read_by_a_pool_of_slabs_pool_to_the_serial_ones(many_rows):
     assert pools == [3]
     for name in ("rows", "has_off", "on", "den_on", "off", "den_off"):
         np.testing.assert_array_equal(getattr(parallel, name), getattr(serial, name))
-    for name in ("raw_num", "pair_num", "off_num"):  # integer counts: exact
+    for name in ("raw_num", "pair_num", "off_num"):  # integer counts, so exact
         np.testing.assert_array_equal(getattr(parallel, name), getattr(serial, name))
     for name in ("raw_den", "pair_den", "off_den"):
         np.testing.assert_allclose(

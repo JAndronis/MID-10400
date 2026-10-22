@@ -1,4 +1,4 @@
-"""XPCS signal-to-noise per run and per 30 s slice: the keep criterion (§4.6).
+"""XPCS signal-to-noise per run and per 30 s slice: the keep criterion.
 
 The analytical multispeckle SNR of one g2 point (Möller, Sprung, Madsen & Gutt 2019,
 IUCrJ 6:794, eq. 8, after Lumma et al. 2000 and Falus et al. 2006), as it applies to
@@ -12,18 +12,17 @@ extra-speckle's kbar filter, n the trains, and √2 the extra variance of subtra
 TTCF_off. β, the contrast, is measured here from the data: the τ → 0 intercept of
 the runs whose decay is slow and well measured.
 
-Every input is read from the run's hit-train results file (`analysis.xpcs.result.
-XpcsHits`; P6, 2026-10-19). The TTCF is reduced to per-train sums and counts of its
-finite diagonal entries, from which g2 over any set of trains follows exactly. The
-readers of DAMNIT's ``xpcs_ttcf`` and ``agipd_saxs`` and `measure_run_legacy` remain
-for the acceptance comparison only.
+Every input is read from the run's hit-train results file
+(`analysis.xpcs.result.XpcsHits`). The TTCF is reduced to per-train sums and counts
+of its finite diagonal entries, from which g2 over any set of trains follows
+exactly. The readers of DAMNIT's ``xpcs_ttcf`` and ``agipd_saxs`` and
+`measure_run_legacy` read extra-speckle's old columns, for comparison only.
 
-β is one table for every run, `REFERENCE_BETA` (user, 2026-10-13), from the runs
-whose g2 decays almost completely inside the lag window. `measure_beta`, the median
-over whichever runs pass `beta_eligible`, survives as a cross-check only: it moved
-with the run set (2.3 % at 0.029 Å⁻¹ over the eleven acceptance runs, against 4.8 %
-from the reference runs), because a run that loses contrast before the first lag
-still passes eligibility with a low intercept.
+β is one table for every run, `REFERENCE_BETA`, from the runs whose g2 decays
+almost completely inside the lag window. `measure_beta`, the median over whichever
+runs pass `beta_eligible`, is a cross-check only. It moves with the run set,
+because a run that loses contrast before the first lag still passes eligibility
+with a low intercept.
 """
 
 from __future__ import annotations
@@ -85,20 +84,20 @@ __all__ = [
     "summarise",
 ]
 
-#: XPCS ROI edges [Å⁻¹] as the DAMNIT context hands them to extra-speckle
-#: (src/amore/context.py, args["q_range"]). DAMNIT stores only the centres.
+#: XPCS ROI edges [Å⁻¹] of the extra-speckle pipeline. DAMNIT stored only the
+#: centres.
 ROI_EDGES_A = (0.0225, 0.035, 0.045, 0.056, 0.065, 0.069, 0.075, 0.086)
-#: The narrow-excess (Bragg) windows [nm⁻¹] of §4.3; a ROI touching one is "bragg".
+#: The narrow-excess (Bragg) windows [nm⁻¹]; a ROI touching one is "bragg".
 BRAGG_WINDOWS_NM = ((0.57, 0.65), (0.68, 0.74))
-#: 30 s at 10 Hz (user, 2026-10-01). A shorter final part joins the slice before it.
+#: 30 s at 10 Hz. A shorter final part joins the slice before it.
 SLICE_TRAINS, MIN_SLICE_TRAINS = 300, 150
-#: Per-slice SNR a run must reach once to count as extractable (user, 2026-10-01).
+#: Per-slice SNR a run must reach once to count as extractable.
 SNR_MIN = 3.0
 #: Jackknife blocks; the variance estimate is then good to sqrt(1/(2·49)) ≈ 10 %.
 N_BLOCKS = 50
-#: Lags extra-speckle drops from the end of g2 (xpcs/tools.py, skip_last).
+#: Lags extra-speckle drops from the end of g2 (its ``skip_last``).
 SKIP_LAST_LAGS = 10
-#: β eligibility (§4.6, open question O9): A/σ_A, and 1/(2Γ) in units of the first lag.
+#: β eligibility: A/σ_A, and 1/(2Γ) in units of the first lag.
 BETA_MIN_PRECISION, BETA_MIN_DECAY_LAGS = 10.0, 5.0
 #: Noise factor of the pipeline's TTCF_raw − TTCF_off: two estimates, one variance each.
 OFF_SUBTRACTION = float(np.sqrt(2.0))
@@ -107,17 +106,14 @@ OFF_SUBTRACTION = float(np.sqrt(2.0))
 KBAR_MIN = 3e-3
 #: OK frames whose normalization is median-combined into N_pix per bin.
 NPIX_FRAMES = 10
-#: Runs whose g2 decays almost completely inside the 60 µs lag window (user,
-#: 2026-10-13: "a fitted contrast that is different to each run will be a pitfall").
-#: Late PEG 6K droplet of 12 May; their τ → 0 intercepts fix β for every run.
+#: Runs whose g2 decays almost completely inside the 60 µs lag window, a late PEG 6K
+#: droplet. Their τ → 0 intercepts fix one β for every run, rather than a contrast
+#: fitted to each run.
 REFERENCE_BETA_RUNS = (450, 493, 494, 495, 496)
 #: β per extra-speckle ROI centre [Å⁻¹] (`ROI_EDGES_A`) as (median, p16, p84) of
-#: the fitted intercept A over `REFERENCE_BETA_RUNS`. Measured 2026-10-13 with this
-#: module's `measure_run` and `fit_decay` (job 25288023,
-#: scripts/run_triage_xpcs_20261013T152014Z.json): 4.8 % at 0.029 Å⁻¹ falling to
-#: 1.9 % at 0.0805, A/σ_A 19–68 per run. The XPCS pass used these ROIs until
-#: 2026-10-20; the photon statistics (`analysis.diagnostics.photon_stats`) still
-#: bin on them.
+#: the fitted intercept A over `REFERENCE_BETA_RUNS`, from this module's
+#: `measure_run` and `fit_decay`. The photon statistics
+#: (`analysis.diagnostics.photon_stats`) bin on these ROIs.
 ES_REFERENCE_BETA: dict[float, tuple[float, float, float]] = {
     0.02875: (0.047803, 0.047412, 0.048816),
     0.04: (0.039039, 0.038549, 0.039383),
@@ -128,14 +124,11 @@ ES_REFERENCE_BETA: dict[float, tuple[float, float, float]] = {
     0.0805: (0.018556, 0.017375, 0.018862),
 }
 #: β per ROI centre [Å⁻¹] as (median, p16, p84) of the fitted intercept A over
-#: `REFERENCE_BETA_RUNS`, for the pass's rings (`analysis.xpcs.config.RINGS_NM`).
-#: Measured 2026-10-20 with this module's `measure_run` and `fit_decay` on the five
-#: runs merged from their photon stores with those rings (scripts/
-#: run_triage_xpcs_20261020T114609Z.json, `reference_beta_reproduced`; every fit
-#: converged): 4.9 % at 0.025 Å⁻¹ falling to 1.7 % at 0.084. It also carries
-#: `ES_REFERENCE_BETA`, whose centres differ from these by more than `ROI_MATCH_A`,
-#: so a lookup by centre gives each ring set its own β. `reference_beta` re-measures
-#: it; the triage script checks the two agree when the runs are in its set.
+#: `REFERENCE_BETA_RUNS`, for the pass's rings (`analysis.xpcs.config.RINGS_NM`),
+#: from this module's `measure_run` and `fit_decay` on those runs merged from their
+#: photon stores. It also carries `ES_REFERENCE_BETA`, whose centres differ from
+#: these by more than `ROI_MATCH_A`, so a lookup by centre gives each ring set its
+#: own β. `reference_beta` re-measures it.
 REFERENCE_BETA: dict[float, tuple[float, float, float]] = {
     **ES_REFERENCE_BETA,
     0.02475: (0.048842, 0.048317, 0.050663),
@@ -161,9 +154,6 @@ class QGridMismatch(ValueError):
     """The scratch file and DAMNIT's grid were integrated onto different q bins."""
 
 
-# ── ROIs ──────────────────────────────────────────────────────────────────────
-
-
 def roi_edges_nm(edges_a=ROI_EDGES_A) -> np.ndarray:
     """(R, 2) ROI edges in nm⁻¹ from extra-speckle's bin edges in Å⁻¹."""
     e = 10.0 * np.asarray(edges_a, dtype=np.float64)
@@ -182,9 +172,6 @@ def roi_bin_masks(q_nm: np.ndarray, edges_nm: np.ndarray) -> np.ndarray:
     """(R, Q): the SAXS bins whose centres lie in each ROI, ``lo <= q < hi``."""
     q = np.asarray(q_nm)[None, :]
     return (q >= edges_nm[:, :1]) & (q < edges_nm[:, 1:])
-
-
-# ── TTCF reduction ────────────────────────────────────────────────────────────
 
 
 @dataclass(frozen=True)
@@ -233,9 +220,6 @@ def read_ttcf_diagonals(path: Path) -> TtcfDiagonals | None:
     sums = np.concatenate([p[0] for p in parts])[order]
     counts = np.concatenate([p[1] for p in parts])[order]
     return TtcfDiagonals(tids[order], roi, sums, counts)
-
-
-# ── k̄ and N_pix from the SAXS pass ────────────────────────────────────────────
 
 
 def read_npix_per_bin(path: Path, q_expected: np.ndarray, n_frames=NPIX_FRAMES):
@@ -304,9 +288,6 @@ def read_saxs_kbar(
         np.concatenate(present)[order],
         n_slots,
     )
-
-
-# ── g2, its errors and its fit ────────────────────────────────────────────────
 
 
 def jackknife_g2(
@@ -387,9 +368,6 @@ def fit_decay(tau, g2, sigma, loo=None) -> DecayFit:
                     float(popt[2]), True)  # fmt: skip
 
 
-# ── slices and the SNR ────────────────────────────────────────────────────────
-
-
 def slice_index(
     train_ids: np.ndarray,
     first_train: int,
@@ -415,7 +393,7 @@ def snr(beta, kbar, npix, n_frames, phi, n_trains):
 
 @dataclass
 class RunMeasurement:
-    """Everything §4.6 needs from one run, before β is known."""
+    """Everything the SNR verdict needs from one run, before β is known."""
 
     run: int
     roi_q_A: np.ndarray  # (R,) centres as DAMNIT stores them
@@ -571,9 +549,8 @@ def measure_run_legacy(
 ) -> RunMeasurement | None:
     """LEGACY: read one run from DAMNIT's ``xpcs_ttcf`` and ``agipd_saxs``.
 
-    Retired from production with extra-speckle's columns; kept for the acceptance
-    comparison (``scripts/xpcs_hits_acceptance.py``) and for `measure_run` to be
-    compared with. None without a TTCF.
+    These are extra-speckle's columns, which production no longer writes. Kept to
+    compare `measure_run` against. None without a TTCF.
 
     Usable trains have every frame present in the SAXS grid and a TTCF; ``select``
     (train ids) narrows them further.
@@ -616,11 +593,8 @@ def measure_run_legacy(
     return m
 
 
-# ── β and the run summary ─────────────────────────────────────────────────────
-
-
 def beta_eligible(fit: DecayFit, tau_1: float, tau_max: float) -> bool:
-    """A run fixes β when its decay is precise and slow against the first lag (§4.6)."""
+    """A run fixes β when its decay is precise and slow against the first lag."""
     if not fit.converged or not np.isfinite(fit.sigma_amplitude) or fit.rate <= 0:
         return False
     decay = 1.0 / (2.0 * fit.rate)
@@ -695,12 +669,10 @@ def fixed_beta(roi_q_A: np.ndarray, table=REFERENCE_BETA) -> dict[int, Beta]:
 
 
 def summarise(m: RunMeasurement, beta: dict[int, Beta], snr_min: float = SNR_MIN):
-    """The run's §4.6 verdict: per-slice SNR over plain ROIs, best slice, run SNR.
+    """The run's keep verdict: per-slice SNR over plain ROIs, best slice, run SNR.
 
     ``extractable`` is None, not False, when no slice has a finite SNR in any plain
-    ROI — β unknown, or no usable train. An unknown SNR is not a low one: the
-    2026-10-01 report measured r423 alone, no run fixed β, and every run read as
-    not extractable.
+    ROI (β unknown, or no usable train). An unknown SNR is not a low one.
     """
     plain = [r for r, k in enumerate(m.kinds) if k == "plain"]
     b = np.array([beta[r].value for r in range(len(m.kinds))])
@@ -743,7 +715,7 @@ def summarise(m: RunMeasurement, beta: dict[int, Beta], snr_min: float = SNR_MIN
 
 
 def crl_state(raw) -> str:
-    """The CRL lens insertion state of a raw run, ``XTD1:0010100000 XTD6:…`` (§4.6).
+    """The CRL lens insertion state of a raw run, ``XTD1:0010100000 XTD6:…``.
 
     ``~`` marks a lens that moved during the run.
     """

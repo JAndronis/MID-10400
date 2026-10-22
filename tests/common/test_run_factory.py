@@ -2,8 +2,7 @@
 
 Each mock run is tens to hundreds of MB that lives until the session ends, so a
 cache that misses on an explicitly-passed default writes a second identical copy
-of the same run. Both suites used to have their own factory and only one of them
-got this right.
+of the same run.
 """
 
 from __future__ import annotations

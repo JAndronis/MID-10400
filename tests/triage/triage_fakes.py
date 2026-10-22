@@ -1,6 +1,6 @@
 """Fakes for the triage: DAMNIT's sqlite and per-run HDF5 files, in their real layout.
 
-The layout is DAMNIT's as found on p10400 (2026-10-01): one group per variable, the
+The layout is DAMNIT's as found on p10400: one group per variable, the
 main dataset named as `analysis.triage.inventory.TRACKED` says, ``droplet_fit`` with
 ``trainId``/``volume``/``center``/``dim``, scalar byte strings under ``.errors``, and
 a 0-d value for a variable that returned nothing.

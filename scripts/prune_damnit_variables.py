@@ -1,19 +1,17 @@
 #!/usr/bin/env python
 """Remove from DAMNIT's table every variable the live context no longer defines.
 
-(not unit-tested, CLAUDE.md working rule 7.) Renaming columns into ``Group`` classes
-(2026-10-19) left the old flat names in ``runs.sqlite``: their columns kept showing
-the old results beside the new ones, with the same titles.
+A renamed variable leaves its old name in ``runs.sqlite``, and its column keeps
+showing the old results beside the new ones, under the same title.
 
     python scripts/prune_damnit_variables.py             # dry run: what would go
     python scripts/prune_damnit_variables.py --delete    # back up runs.sqlite, delete
 
 What is removed is the rows of ``variables`` and ``run_variables`` for each such name,
 and the ``runs`` view is rebuilt, which is what the GUI's "Delete" does to the database.
-**The per-run ``extracted_data/*.h5`` are not touched**: deleting inside 500 files of
-2.2 TB that the listener and other users write is where an interrupted run corrupts a
-file, and HDF5 does not give the space back without a repack. The old groups stay in
-the files, unlisted.
+The per-run ``extracted_data/*.h5`` are not touched. The listener and other users
+write those files, an interrupted delete inside one can corrupt it, and HDF5 does not
+give the space back without a repack. The old groups stay in the files, unlisted.
 
 Refuses a name the live context still defines, and keeps any variable with a ``type``
 (a user-editable column made in the GUI). The names come from evaluating the live

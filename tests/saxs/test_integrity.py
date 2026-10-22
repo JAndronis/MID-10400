@@ -1,4 +1,4 @@
-"""Pass integrity on a mock run (open task 17; CLAUDE.md pitfalls 26 and 27).
+"""Pass integrity on a mock run.
 
 A complete run is answered from its files and nothing is written; a second
 writer is refused while the first holds the lock, and takes a dead one's lock
@@ -58,7 +58,7 @@ def copy_of(complete_run, tmp_path):
 
 
 def stats(directory):
-    """What any write — even an attribute — would change, per file."""
+    """Per file, what any write, even of an attribute, would change."""
     return {
         path.name: (path.stat().st_ino, path.stat().st_mtime_ns, path.stat().st_size)
         for path in sorted(directory.iterdir())
@@ -122,7 +122,7 @@ def test_a_complete_run_is_complete(pipeline, complete_run):
 def test_a_complete_run_is_answered_from_the_file_and_writes_nothing(
     pipeline, complete_run, tmp_path, monkeypatch
 ):
-    """The inode and mtime of both files stay put, and no npz reappears."""
+    """Every file keeps its inode and mtime, and no npz reappears."""
     pooled = copy_of(complete_run, tmp_path)
     before = stats(tmp_path)
     forbid_writing(monkeypatch)
@@ -155,7 +155,7 @@ def test_the_per_pulse_grid_comes_from_the_file_too(
 def test_a_complete_file_with_final_failures_raises_as_the_pass_would(
     pipeline, complete_run, tmp_path, monkeypatch
 ):
-    """``LABEL_MISMATCH`` is final, so the file is complete — and still refused."""
+    """``LABEL_MISMATCH`` is final, so the file is complete, and still refused."""
     copy_of(complete_run, tmp_path)
     with h5py.File(tmp_path / "out.h5", "r+") as handle:
         handle["frames/status"][:3] = FrameStatus.LABEL_MISMATCH
@@ -246,7 +246,7 @@ def test_another_operator_or_config_is_not_complete(pipeline, complete_run):
 # ── node classes ──────────────────────────────────────────────────────────────
 def _restamp(handle, op):
     """Give the stored operator the sha256 its arrays now hash to, everywhere
-    the file records it — as a file written on another node class has."""
+    the file records it, as a file written on another node class has."""
     sha = operator_module.operator_sha256(
         *(handle[f"operator/{name}"][()] for name in ("coef", "bins", "indptr")),
         handle["operator/omega"][()],
@@ -279,8 +279,8 @@ def _nudge_omega(directory, op, relative=None):
 def test_a_one_ulp_solid_angle_from_another_node_class_is_complete(
     pipeline, complete_run, tmp_path, monkeypatch
 ):
-    """AVX2 and AVX-512 nodes build omega one ULP apart on ~10 % of pixels
-    (S3, 2026-10-13), and allcpu mixes both: that must not refuse a file."""
+    """AVX2 and AVX-512 nodes build omega one ULP apart on some pixels, and
+    the cluster partition mixes both, so that difference must not refuse a file."""
     copy_of(complete_run, tmp_path)
     _nudge_omega(tmp_path, pipeline.op)
     before = stats(tmp_path)

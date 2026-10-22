@@ -53,10 +53,9 @@ def _empty(dtype: type) -> np.ndarray:
 class FlagBase:
     """Each memory cell's usual set of flagged pixels, as envelope positions.
 
-    The cells of a train share nearly all their bad pixels with the same cell of
-    every other train (0.022 % vary between trains, CLAUDE.md), so a frame's
-    flags are stored as their difference from this: about 100 pixels a frame
-    instead of 37 000. Any base is lossless; a better one only makes the file
+    A memory cell flags nearly the same pixels in every train, so a frame's flags
+    are stored as their difference from this base, a much shorter list than the
+    flags themselves. Any base is lossless; a better one only makes the file
     smaller, which is why it is fixed once, when the store is created, and why it
     is not part of the store's identity.
     """
@@ -180,9 +179,8 @@ class TrainPhotons:
 def delta_encode(pixel: np.ndarray, frame_ptr: np.ndarray) -> np.ndarray:
     """Positions as steps from the previous event, restarting at each frame.
 
-    The first event of a frame keeps its absolute position. Gzip then finds far
-    more to remove in the steps than in the positions (1.6 against 2.2 MB per
-    train on r0423, P0 of ``context/xpcs-hits.md``).
+    The first event of a frame keeps its absolute position. Gzip compresses the
+    steps better than the positions.
     """
     step = np.diff(pixel.astype(np.int64), prepend=0)
     starts = frame_ptr[:-1]

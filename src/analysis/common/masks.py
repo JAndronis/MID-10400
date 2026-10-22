@@ -2,13 +2,13 @@
 
 A *static* mask excludes the same pixels for every frame of a run; a *dynamic*
 one comes from the correction pipeline's per-frame bad-pixel bitfield. What
-goes into each is detector business — AGIPD needs ASIC seams because
+goes into each belongs to the detector (AGIPD needs ASIC seams because
 ``NON_STANDARD_SIZE`` is never set in its files, JUNGFRAU does not because it
-is — but the provenance record, the bit vocabulary and the per-frame union are
-the same in both.
+is). The provenance record, the bit vocabulary and the per-frame union are the
+same in both.
 
-Every mask here follows one convention: **non-zero means excluded**, which is
-also pyFAI's own (``integrate1d_ng``: "array with 0 for valid pixels, all other
+Every mask here follows one convention, non-zero means excluded, which is also
+pyFAI's own (``integrate1d_ng``: "array with 0 for valid pixels, all other
 are masked"). Nothing in either pass inverts a mask.
 """
 
@@ -95,9 +95,9 @@ def frame_bad(
     """This frame's bad-pixel mask: ``((m & mask_bits) != 0) | static_bad``.
 
     ``mask_frame`` is one frame of the correction pipeline's mask, in any shape
-    that flattens to the static mask's length. A blanket ``mask_bits`` is only
-    correct while every bit present marks an unusable pixel (see
-    6), which is why both passes record the bit set actually seen.
+    that flattens to the static mask's length. A blanket ``mask_bits`` is
+    correct only while every bit present marks an unusable pixel, which is why
+    both passes record the bit set actually seen.
     """
     flat = mask_frame.reshape(-1)
     if flat.size != static_bad.size:

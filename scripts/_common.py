@@ -77,7 +77,7 @@ def write_report(report: dict[str, Any], path: Path | None, stem: str) -> Path:
 
     :param report: the report.
     :param path: an explicit destination, usually ``args.json``.
-    :param stem: filename stem used when ``path`` is None, e.g. ``"w1_facts"``.
+    :param stem: filename stem used when ``path`` is None, e.g. ``"run_triage"``.
     :returns: where it was written.
     """
     destination = path or Path(__file__).with_name(f"{stem}_{stamp()}.json")

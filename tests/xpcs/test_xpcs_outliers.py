@@ -41,7 +41,7 @@ def reference(dense, flags, candidate, q, q_range, thresholds, q_bins):
 def synthetic(rng, n_trains=20, n_frames=6, n_env=400):
     dense = [rng.poisson(2.0, (n_frames, n_env)) for _ in range(n_trains)]
     for d in dense:
-        d[:3, 7] += 6  # hot in some frames only: a cell-block pixel
+        d[:3, 7] += 6  # hot in some frames only, like a cell-block pixel
         d[:, 11] = 0  # dead
     flags = [
         [np.flatnonzero(rng.random(n_env) < 0.05) for _ in range(n_frames)]

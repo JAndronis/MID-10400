@@ -1,11 +1,10 @@
 """The pixel envelope the photon store covers, and the rings inside it.
 
-Geometry is the SAXS pass's own (``build_operator``, whose pixel-centre q and
-beam centre every other product uses), not a second one. The *envelope* is the
-annulus the rings span, dilated by ``envelope_margin_mm`` and with bad pixels
-kept: it is what the store holds, so it fixes the store's identity, while the
-rings, the static mask and the kernel are recomputable from it after proc is
-taped.
+The geometry is the SAXS pass's own (``build_operator``, whose pixel-centre q
+and beam centre every other product uses). The envelope is the annulus the rings
+span, dilated by ``envelope_margin_mm``, with bad pixels kept. It is what the
+store holds, so it fixes the store's identity, while the rings, the static mask
+and the kernel can be recomputed from it after proc is taped.
 """
 
 from __future__ import annotations
@@ -56,7 +55,7 @@ class Envelope:
 
 @dataclass(frozen=True, slots=True)
 class Rings:
-    """Each envelope pixel's ring, or −1 for none, a bad pixel or a seam."""
+    """Each envelope pixel's ring, or -1 for none, a bad pixel or a seam."""
 
     bounds_nm: tuple[tuple[float, float], ...]  # empty for rings from a masks file
     label: np.ndarray  # int8 (n_env,), read-only
@@ -69,12 +68,12 @@ class Rings:
 
 @dataclass(frozen=True, slots=True)
 class PixelMap:
-    """Every detector pixel's ring (−1: none) and, for geometry rings, its q."""
+    """Every detector pixel's ring (-1: none) and, for geometry rings, its q."""
 
     label: np.ndarray  # int16 (NPIX,)
     n_rings: int
     q_nm: np.ndarray | None  # float64 (NPIX,); None for rings from a masks file
-    operator_sha256: str | None  # provenance only: it depends on the node (pitfall 30)
+    operator_sha256: str | None  # provenance only: it varies with the CPU
 
 
 def pixel_map(cfg: XpcsConfig, geometry: Any = None) -> PixelMap:
@@ -149,7 +148,7 @@ def build_envelope(pixels: PixelMap, cfg: XpcsConfig) -> Envelope:
 def build_rings(
     pixels: PixelMap, envelope: Envelope, static_bad: np.ndarray, cfg: XpcsConfig
 ) -> Rings:
-    """Ring labels over the envelope, with the static mask folded in as −1."""
+    """Ring labels over the envelope, with the static mask folded in as -1."""
     label = pixels.label[envelope.pixels].astype(np.int8)
     label[np.asarray(static_bad, dtype=bool)[envelope.pixels]] = -1
     label.flags.writeable = False

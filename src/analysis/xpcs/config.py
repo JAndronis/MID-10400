@@ -1,6 +1,6 @@
 """Frozen configuration of the hit-train XPCS pass.
 
-Two products, two hashes (CLAUDE.md pitfall 12). The photon store holds raw
+Two products, two hashes. The photon store holds raw
 counts, which proc will not give back once it is taped, so what it is *keyed*
 on is as narrow as it can be: :meth:`XpcsConfig.extract_hash` covers the pixel
 envelope and the bit set, and nothing a later analysis chooses.
@@ -47,16 +47,15 @@ def _contiguous_nm(edges_A: tuple[float, ...]) -> tuple[tuple[float, float], ...
     return tuple(zip(nm[:-1], nm[1:], strict=True))
 
 
-#: extra-speckle's seven contiguous ROIs (Å⁻¹ 0.0225 … 0.086) as the old DAMNIT
-#: context handed them to it, in nm⁻¹: what the equivalence gate compares on.
+#: extra-speckle's seven contiguous ROIs, 0.0225 to 0.086 Å⁻¹, in nm⁻¹. The
+#: equivalence gate against extra-speckle compares on these.
 ES_RINGS_NM = _contiguous_nm((0.0225, 0.035, 0.045, 0.056, 0.065, 0.069, 0.075, 0.086))
 
-#: The XPCS rings [nm⁻¹], 0.045 wide, with the fcc 111 (0.585–0.640) and 200
-#: (0.685–0.725) bands left out: their Bragg speckle gave ES's 0.0605 and 0.072 Å⁻¹
-#: ROIs a contrast of ~1. Bands measured 2026-10-20 as the excess over r0423 on
-#: r0424/0426/0488 (0.593–0.631, 0.693–0.715) and the outlier-ratio tail over 438
-#: runs (0.598–0.618, 0.698–0.713), under the 2026-09-13 beam centre. The outer
-#: bounds are ES's, built the same way, so the envelope and every store stay valid.
+#: The XPCS rings [nm⁻¹], 0.045 wide, with the fcc 111 (0.585 to 0.640) and 200
+#: (0.685 to 0.725) bands left out, because Bragg speckle there gives a contrast
+#: near 1. The bands enclose the measured Bragg excess with a margin. The outer
+#: bounds equal those of ``ES_RINGS_NM``, so both ring sets give the same
+#: envelope and the same photon store.
 RINGS_NM: tuple[tuple[float, float], ...] = (
     _contiguous_nm((0.0225, 0.027, 0.0315, 0.036, 0.0405, 0.045, 0.0495, 0.054, 0.0585))
     + _contiguous_nm((0.064, 0.0685))
@@ -125,16 +124,16 @@ class XpcsConfig:
     ring_masks_file: str | None = None
     kernel: Kernel = Kernel.CLEAN
     mask_policy: MaskPolicy = MaskPolicy.ANY_FRAME
-    #: Largest train-id distance to a partner. 1 (the previous train only): B4
-    #: found the pooled baseline drifts with the gap on every PEG 6K reference run
-    #: (``context/xpcs-hits.md`` section 10).
+    #: Largest train-id distance to a partner. 1 pairs with the previous train
+    #: only, because the pooled baseline drifts with the gap on the PEG 6K
+    #: reference runs.
     max_partner_gap: int = 1
-    #: Envelope dilation. Provisional; it only has to exceed the beam-centre
-    #: disagreement of open task 4 (4.0 mm) for a later move of the centre to
-    #: stay inside the store.
+    #: Envelope dilation. It exceeds the 4.0 mm between the two beam-centre
+    #: conventions, so moving the centre from one to the other keeps every ring
+    #: inside the store.
     envelope_margin_mm: float = 5.0
-    #: extra-speckle's pixel-outlier mask (``mask_outlier``, production values of
-    #: ``xpcs_offline``): a pixel whose RMS over frames of its per-frame mean lies
+    #: extra-speckle's pixel-outlier mask (``mask_outlier``, with its production
+    #: thresholds). A pixel whose RMS over frames of its per-frame mean lies
     #: outside these multiples of its q bin's median is removed from every ring.
     #: Computed from the hit trains at the merge; None switches it off.
     outlier_thresholds: tuple[float, float] | None = (0.75, 1.75)
@@ -211,7 +210,11 @@ class XpcsConfig:
             raise ValueError(f"n_workers must be positive, got {self.n_workers}")
 
     def __getstate__(self) -> dict[str, Any]:
-        """Pickle by field name, not by position (CLAUDE.md pitfall 20)."""
+        """Pickle by field name, not position.
+
+        A frozen slots dataclass pickles by position, so adding a field would
+        shift every later field of a state pickled by an older import.
+        """
         return state_by_name(self)
 
     def __setstate__(self, state: Any) -> None:
@@ -228,7 +231,10 @@ class XpcsConfig:
 
     @property
     def workers(self) -> int:
-        """``n_workers``, else one per *physical* core (CLAUDE.md pitfall 10)."""
+        """``n_workers``, else one per physical core.
+
+        ``os.sched_getaffinity`` would count hyperthreads too.
+        """
         if self.n_workers is not None:
             return int(self.n_workers)
         return physical_cores() or 1

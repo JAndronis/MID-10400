@@ -32,8 +32,7 @@ __all__ = [
     "train_sequences",
 ]
 
-#: Photons per pixel the store can hold. The probe saw no count above 12 in any
-#: ring (r0423, r0450, 2026-10-13).
+#: Photons per pixel and frame the store can hold: counts are stored as uint8.
 MAX_COUNT = 255
 
 

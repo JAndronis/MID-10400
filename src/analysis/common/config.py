@@ -5,9 +5,9 @@ can change a stored number; :data:`OPERATIONAL_FIELDS` is what it excludes, and
 a file records the set it was written under in its own provenance rather than
 relying on this constant.
 
-Both configs are frozen slots dataclasses sent to a spawned pool, where the
-dataclass default pickles state *by position* — so a class whose field list has
-moved assigns every later value to the wrong field, silently.
+Both configs are frozen slots dataclasses sent to a spawned pool, and the
+dataclass default pickles their state *by position*. A class whose field list
+has moved then assigns every later value to the wrong field, without an error.
 :func:`state_by_name` and :func:`restore_by_name` key the state by name instead,
 and each config must call them from its own class body: ``dataclasses._add_slots``
 reinstalls the positional pair unless ``__getstate__`` is in the class's own
@@ -143,11 +143,10 @@ def restore_by_name(cfg: Any, state: Any) -> None:
 class PassConfigMembers:
     """The config members both passes compute the same way.
 
-    A plain mixin, never a dataclass: it declares no field, so inheriting it
+    A plain mixin, never a dataclass. It declares no field, so inheriting it
     cannot move either config's field list. ``__getstate__``/``__setstate__``
-    deliberately stay in each config's own class body — ``dataclasses`` installs
-    its positional pair unless they are in the class's own ``__dict__``, so a
-    mixin could not hold them.
+    stay in each config's own class body, because ``dataclasses`` installs its
+    positional pair unless they are in the class's own ``__dict__``.
 
     A subclass supplies ``input_files`` and ``operational_fields``, which differ
     per detector, and the fields the members below read.
@@ -157,10 +156,9 @@ class PassConfigMembers:
     def workers(self) -> int:
         """Worker count: ``n_workers``, else one per *physical* core.
 
-        Whether hyperthreading helps is an open question, so the default must
-        not answer it: ``sched_getaffinity`` counts logical CPUs, and using it
-        would silently run the hyperthreaded configuration while claiming one
-        worker per core.
+        Whether hyperthreading helps is not settled, so the default does not
+        assume it. ``sched_getaffinity`` counts logical CPUs, and defaulting to
+        it would run one worker per hyperthread while claiming one per core.
         """
         if self.n_workers is not None:  # type: ignore[attr-defined]
             return int(self.n_workers)  # type: ignore[attr-defined]
@@ -181,7 +179,7 @@ class PassConfigMembers:
     def config_hash(self) -> str:
         """sha256 over the result-affecting fields plus each input file's sha256.
 
-        Operational fields are excluded — see this module's docstring — and
-        recorded in full in provenance instead.
+        Operational fields are excluded, and recorded in full in provenance
+        instead.
         """
         return config_sha256(self, self.input_files, self.operational_fields)  # type: ignore[attr-defined]

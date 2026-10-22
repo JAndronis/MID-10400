@@ -1,7 +1,4 @@
-"""The P1 gate: sparse path versus the pyFAI engine (context file §6.6).
-
-Every test here is an acceptance criterion of phase P1.
-"""
+"""The self-test gate: the sparse path against the pyFAI engine."""
 
 from __future__ import annotations
 
@@ -26,7 +23,7 @@ TOLERANCE = 1e-6
 
 @pytest.mark.parametrize("occupancy", [0.005, 0.02, 0.05])
 def test_matches_pyfai_at_each_occupancy(op, engine, occupancy, make_frame, make_masks):
-    """P1 acceptance: S, N, V within 1e-6 at 0.5 %, 2 % and 5 % occupancy."""
+    """S, N and V agree within 1e-6 at 0.5 %, 2 % and 5 % occupancy."""
     rng = np.random.default_rng(int(occupancy * 1e4))
     x = make_frame(rng, occupancy)
     bad, base_bad = make_masks(rng)
@@ -51,11 +48,11 @@ def test_matches_pyfai_at_each_occupancy(op, engine, occupancy, make_frame, make
 def test_matches_pyfai_with_disagreement_in_both_directions(
     op, engine, make_frame, make_masks
 ):
-    """P1 acceptance: frame flags differing from the cell in either sign.
+    """Frame flags differ from the cell's in either sign.
 
     ``make_masks`` flips half the pixels from bad-in-cell to good-in-frame and
-    half the other way, so both branches of the §6.4 normalization correction
-    are exercised in one frame.
+    half the other way, so both branches of the normalization correction are
+    exercised in one frame.
     """
     rng = np.random.default_rng(99)
     x = make_frame(rng, 0.02)
@@ -111,9 +108,9 @@ def test_matches_pyfai_on_an_empty_frame(op, engine, make_frame, make_masks):
 
 
 def test_empty_bins_are_identical_in_both_paths(op, engine, make_frame, make_masks):
-    """P1 acceptance: the same bins are empty in the sparse and dense paths.
+    """The same bins are empty in the sparse and dense paths.
 
-    The synthetic geometry populates all 500 bins, so bins are emptied on
+    The synthetic geometry populates every bin, so bins are emptied on
     purpose: every pixel contributing to a chosen slice of q is flagged bad.
     Emptiness is tested as ``N > 0`` rather than ``nnz > 0`` because full-split
     coefficients can be marginally negative from rounding.

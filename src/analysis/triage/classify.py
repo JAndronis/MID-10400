@@ -1,50 +1,45 @@
-"""Which trains hit the droplet (run-triage §4.4, xpcs-quality §5.1).
+"""Which trains of a run hit the droplet.
 
-Every diagnostic of a run is computed over its droplet hits only (user, 2026-10-13).
-The per-train signal is mid-q SAXS per unit flux,
+The per-train signal is mid-q SAXS per unit flux, x = log10(s_t/F_t), with
 
-    s_t = mean over the frames present of DAMNIT's agipd_saxs, 0.3–0.5 nm⁻¹ (D5)
-    F_t = xgm_intensity × total_transmission           (per train, never per pulse)
+    s_t = mean over the frames present of DAMNIT's agipd_saxs, 0.3-0.5 nm^-1
+    F_t = xgm_intensity * total_transmission       (per train, never per pulse)
 
-which separates droplet from beam-only trains by 14–28× (§2.1). The JUNGFRAU ring
-(jf1, 17–23 nm⁻¹) is read beside it as a cross-check (~2.5×).
+The JUNGFRAU ring (jf1, 17-23 nm^-1) is read beside it as a cross-check that is
+reported, never cut on. This module reads DAMNIT's per-run file only, and caches
+each run's per-train signals under scratch/run_triage, keyed on the file's size
+and mtime.
 
-This module reads DAMNIT's per-run file only, and caches each run's per-train signals
-under scratch/run_triage (§6), keyed on the file's size and mtime.
+Mesh runs are classified per block, the runs of one attenuator and sample:
 
-Mesh runs (x = log10 s_t/F_t), measured 2026-10-14 over all 255 mesh runs:
-
-    per run:    Otsu's two-class split of x (Otsu 1979). The off level m and its width
-                σ (1.4826·MAD) come from the low class. The median of the run is no
-                use: 29 runs hit the droplet on ≥ 40 % of their trains.
-    per block:  runs of one attenuator and sample. rel = x − m of each run, pooled.
-                The hit cut t_on is the centre of the widest empty band of the pooled
-                rel between the off band and the hits' mode (§4.4's empty band, on the
-                relative axis, where the off peaks of different runs coincide).
-    overlap:    f = (10^rel − 1)/(10^P − 1), the train's droplet signal as a fraction
-                of a full hit's; P the shorth midpoint of the run's trains above t_on
-                (the block's on_mode below 20 such trains). §4.4, 2026-10-18.
-    classes:    off ⇔ rel ≤ 5σ;  on ⇔ rel ≥ t_on and f ≥ 0.75;  edge otherwise
-                (partial overlaps)
-    one class:  a run with no second class of its own (high − off < 2·5σ) is placed
-                against its nearest two-class neighbour's off level: at the hit level
-                every train is a hit (r309–311: the beam stayed on the droplet), in
-                the off band every train is off, anywhere else the run is ambiguous
-                (r140, 0.6 dex below its neighbours' off level).
-    ambiguous:  such a run, or a block whose hits' mode lies less than one off band
-                above the off band (on_mode < 2·5σ; silica r68–69 at 1.07 band
-                widths, against 4.9 for the weakest real block, r307). No hits are
+    per run:    Otsu's two-class split of x. The off level m is the median of the
+                low class, and its width the robust σ (1.4826·MAD) of that class.
+                The median of the whole run is no use, because a run can hit the
+                droplet on most of its trains.
+    per block:  σ is the median of the runs' widths. A run has two classes of its
+                own when its high class sits at least 2·5σ above m. rel = x - m of
+                those runs, pooled. on_mode is the shorth midpoint of rel above 5σ,
+                and the hit cut t_on is the centre of the widest empty band of rel
+                between 5σ and on_mode.
+    overlap:    f = (10^rel - 1)/(10^P - 1), the train's droplet signal as a
+                fraction of a full hit's. P is the shorth midpoint of the run's
+                trains above t_on, or the block's on_mode below 20 such trains.
+    classes:    off if rel <= 5σ, on if rel >= t_on and f >= 0.75, edge otherwise
+                (partial overlaps).
+    one class:  a run without two classes of its own is placed against its nearest
+                two-class neighbour's off level. At the hit level every train is a
+                hit (the beam stayed on the droplet), in the off band every train
+                is off, anywhere else the run is ambiguous.
+    ambiguous:  such a run, or a block whose on_mode lies below 2·5σ. No hits are
                 reported for either.
-    Off levels drift within a block (r308 → r335: −5.45 → −4.7) and differ between
-    its sub-series (r290–306 sit 0.7 dex below r240–288), so no block-wide level is
-    used, only each run's own or its neighbour's.
 
-Pooling raw x per block, as §4.4 first said, fails: off levels differ between runs
-by up to 0.9 dex within a block, and the r240–335 block mixes two samples.
+Off levels drift within a block and differ between its sub-series, and a block can
+mix two samples, so raw x is never pooled and no block-wide level is used. Each
+run is measured against its own off level or its neighbour's.
 
 Static runs: every train is a hit except a droplet out of the beam, a train whose
-x falls more than 5 robust σ below a running 75th percentile over 301 trains (30 s),
-which an absence of up to 22 s cannot drag down (`static_hits`).
+x falls more than 5 robust σ below a running 75th percentile over 301 trains
+(30 s), which an absence of up to 22 s cannot drag down (`static_hits`).
 """
 
 from __future__ import annotations
@@ -76,25 +71,26 @@ __all__ = [
 ]
 
 CACHE_DIR = Path("/gpfs/exfel/exp/MID/202601/p010400/scratch/run_triage")
-#: The classification band (§4.4, D5) and the WAXS cross-check ring.
+#: The classification band and the WAXS cross-check ring.
 MID_BAND_NM = (0.3, 0.5)
 WAXS_RING_NM = (17.0, 23.0)
 #: Trains per read of the pulse-resolved grid: bounds memory, matches its chunking.
 TRAIN_CHUNK = 106
 #: Bump when what a cached signal file holds changes.
 SIGNALS_VERSION = 1
-#: Gaussian-tail cut in robust σ (§4.3, 0.002 false outliers per 3000 trains): the off
-#: band of a run, a run's off level against its block's, a static train's drop.
+#: Gaussian-tail cut in robust σ, about 0.002 false outliers per 3000 trains. It sets
+#: the off band of a run, a run's off level against its block's, a static train's drop.
 OFF_SIGMA = 5.0
-#: Running-median window of §4.3, in trains (kept for reference; see `static_hits`).
+#: A running median over this many trains misses any absence longer than 25 trains,
+#: which is why `static_hits` uses a running quantile instead. Unused.
 RUNNING_TRAINS = 51
-#: Static runs: the reference is this quantile over this many trains, the keep rule's
-#: 30 s slice (user, 2026-10-01). An absence of up to 225 trains (22 s) is found.
+#: Static runs: the reference is this quantile over this many trains, a 30 s slice.
+#: An absence of up to 225 trains (22 s) is found.
 STATIC_WINDOW, STATIC_QUANTILE = 301, 0.75
 #: Hits need a mode beyond this many off-band widths above the off level.
 SEPARATION_BANDS = 2.0
-#: A mesh hit carries at least this fraction of a full hit's droplet signal (user,
-#: 2026-10-18): where the median WAXS of the old hits levels off against f (§4.4).
+#: A mesh hit carries at least this fraction of a full hit's droplet signal. Above
+#: it, the hits' median WAXS ring levels off against f.
 ON_FRACTION = 0.75
 #: Fewer trains above t_on than this, and a run's full-hit level is its block's on_mode.
 PLATEAU_MIN_TRAINS = 20
@@ -111,8 +107,11 @@ def _band_mean(path: Path, group: str, band) -> tuple | None:
 
 
 def _band_mean_of(g, band, label: str) -> tuple:
-    """`_band_mean` on a group or Dataset with ``q``, ``trainId``, ``intensity``
-    (train, frame, q) and ``n_frames`` (train, frame), read in train chunks."""
+    """`_band_mean` on any group or Dataset, read in train chunks.
+
+    ``g`` holds ``q``, ``trainId``, ``intensity`` (train, frame, q) and
+    ``n_frames`` (train, frame).
+    """
     q = np.asarray(g["q"][:])
     cols = np.flatnonzero((q >= band[0]) & (q < band[1]))
     if cols.size == 0:
@@ -199,10 +198,11 @@ def train_signals(
     cache_dir: str | Path | None = CACHE_DIR,
     refresh: bool = False,
 ):
-    """Per train of one run: ``saxs_mid``, ``n_frames``, ``xgm_uJ``,
-    ``total_transmission``, ``flux`` and ``waxs_ring`` (NaN without jf1).
+    """Per-train signals of one run, read from its DAMNIT file.
 
-    Unscaled (memory, cache-holds-raw-data-only): the flux sits beside the signals.
+    The variables are ``saxs_mid``, ``n_frames``, ``xgm_uJ``,
+    ``total_transmission``, ``flux`` and ``waxs_ring`` (NaN without jf1). They
+    are unscaled: the flux sits beside the signals.
     The trains are those of DAMNIT's agipd_saxs grid; a train without a frame, an
     XGM or a transmission carries NaN where the value is missing.
 
@@ -263,9 +263,6 @@ def train_signals(
     if cached is not None:
         write_dataset(ds, cached)
     return ds
-
-
-# ── classification ────────────────────────────────────────────────────────────
 
 
 def otsu_split(x: np.ndarray) -> float:
@@ -436,16 +433,15 @@ def static_hits(
     """A static run's hits: finite trains not out of the beam.
 
     ``x`` is log10(s_t/F_t) in train order. The reference is a running `quantile`
-    over `window` trains, so an absence of up to (1 − quantile)·window trains
-    cannot pull it down. A 51-train running median (§4.3) misses any absence longer
-    than 25 trains, and r0426 has two of 21 and 25. A train is out of the beam when
+    over `window` trains, so an absence of up to quantile·window trains cannot
+    pull it down, where a running median misses any absence longer than half its
+    window. A train is out of the beam when
     its residual, centred on the median residual, lies below `OFF_SIGMA` robust σ.
     The reference is recomputed without the trains already flagged, until nothing
     new is flagged.
 
     Small dips (0.1–0.2 dex, the droplet moving slightly in the beam) stay below
-    that cut at this window and remain hits. The 51-train median flagged them as well
-    (r0436: 68 against 4 trains, r0406: 54 against 6; 2026-10-14).
+    that cut at this window and remain hits.
     """
     import pandas as pd
 
@@ -475,10 +471,9 @@ def waxs_check(waxs: np.ndarray, classes: np.ndarray) -> dict:
 
     ``waxs`` is log10(ring/F) per train. The shift is the median over the hits minus
     the median over the off trains, in dex; ``z`` divides it by the standard error
-    of a median, 1.2533 · σ_off / √n_hits, σ_off the off trains' robust σ.
-    Measured 2026-10-14: hits sit 0.33–0.35 dex (×2.1–2.25) above off from
-    attenuator 0.012 up; at 0.001 and 0.0047 the ring is noise-dominated and
-    confirms nothing (r307: 0.05 dex, z 1.5). A reported number, never a cut.
+    of a median, 1.2533 · σ_off / √n_hits, σ_off the off trains' robust σ. At
+    the lowest attenuator settings the ring is noise-dominated and confirms
+    nothing. A reported number, never a cut.
     """
     from analysis.triage.stats import robust_sd
 
@@ -531,13 +526,15 @@ MEMBER_WAIT_S = 20.0
 
 
 def _member_signals(run: int, **kwargs):
-    """`train_signals` of another run of a mesh block, riding out a concurrent write.
+    """`train_signals` of another run of a mesh block, retried through a write.
 
-    :raises LookupError: the run has no agipd_saxs, or
-    :raises FileNotFoundError: no DAMNIT file: the caller leaves it out of the block.
-    :raises OSError: or ValueError: the file stayed unreadable through every try.
-        Not treated as "missing": leaving a run out of its block silently changes
-        the cut every run of the block is classified with.
+    :raises LookupError: the run has no agipd_saxs. The caller leaves it out of
+        the block.
+    :raises FileNotFoundError: the run has no DAMNIT file. The caller leaves it
+        out of the block.
+    :raises OSError: the file stayed unreadable through every try (or
+        ValueError). Not treated as missing, because leaving a run out of its
+        block silently changes the cut every run of the block is classified with.
     """
     for attempt in range(MEMBER_TRIES):
         try:
@@ -567,8 +564,8 @@ def hits(
     """The trains of one run that hit the droplet, and why.
 
     Mesh runs are classified with every run of their block (`classify_block`); any
-    other run by `static_hits`. Per-train signals are cached, so a block costs a
-    few seconds once its runs have been read.
+    other run by `static_hits`. Per-train signals are cached, so a block is cheap
+    once its runs have been read.
 
     :param runs_table: DAMNIT's run table (`inventory.read_run_table`); read from
         ``damnit_root`` when not given.

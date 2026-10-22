@@ -29,14 +29,14 @@ __all__ = [
     "units",
 ]
 
-#: What ``signal``/``variance`` hold in a file that records no ``units`` attribute:
-#: AGIPD sums integer photon counts; JUNGFRAU files written before photonising
-#: (CLAUDE.md open task 18) sum keV. S2 writes ``units`` to ``/provenance`` from then
-#: on, so a recorded value always wins.
+#: What ``signal``/``variance`` hold in a file that records no ``units`` attribute.
+#: AGIPD sums integer photon counts; JUNGFRAU files written before the pass
+#: photonised sum keV. Photonised files record ``units`` in ``/provenance``, so a
+#: recorded value always wins.
 DEFAULT_UNITS = {"agipd": "photons", "jungfrau": "keV"}
 #: The per-frame total of each detector's valid pixels, by preference. JUNGFRAU's
 #: ``energy_valid`` stays raw keV even in a photonised file; ``n_photons`` is its
-#: photon equivalent where it exists (S2, 2026-10-13).
+#: photon equivalent where it exists.
 SCALAR_COLUMNS = {
     "agipd": ("photons_valid",),
     "jungfrau": ("n_photons", "energy_valid"),
@@ -90,13 +90,13 @@ def frame_accounting(source, by: str | None = "auto"):
     """Frames per status code, overall and per label.
 
     :param by: a ``/frames`` label column to break the counts down by; ``"auto"``
-        is ``cellId`` for JUNGFRAU and nothing for AGIPD (155 pulse columns are a
+        is ``cellId`` for JUNGFRAU and nothing for AGIPD (one column per pulse is a
         table nobody reads; pass ``"reader_pulseId"`` to get it).
     :returns: a DataFrame indexed by status name, ``OK`` always first and every
         other code only where it occurs. Column ``frames`` is the total; one column
         per label value follows, and ``unlabelled`` when some rows carry no label.
-        ``attrs`` hold the detector, the totals, and the plan's train statuses —
-        a train the plan gave no rows (``NO_FRAMES``) is invisible in the frame
+        ``attrs`` hold the detector, the totals, and the plan's train statuses. A
+        train the plan gave no rows (``NO_FRAMES``) is invisible in the frame
         counts and appears only there.
     """
     import pandas as pd
@@ -144,9 +144,9 @@ def frame_accounting(source, by: str | None = "auto"):
 def frame_scalar(source, column: str | None = None):
     """A per-frame column on a ``(trainId, label)`` grid, ``OK`` frames only.
 
-    Each frame is placed by its stored trainId and label (CLAUDE.md pitfall 4);
-    a slot without an ``OK`` frame is NaN. The grid is an in-memory view, not a
-    stored product, so NaN marks absence here.
+    Each frame is placed by its stored trainId and label, never by its array
+    position; a slot without an ``OK`` frame is NaN. The grid is an in-memory view,
+    not a stored product, so NaN marks absence here.
 
     :param column: a ``/frames`` column; default `default_scalar_column`.
     :raises ValueError: two ``OK`` frames share a (train, label) slot.

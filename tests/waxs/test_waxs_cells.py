@@ -1,4 +1,4 @@
-"""Lit-cell selection and the readout-noise measurement (§3 D4, D3)."""
+"""Lit-cell selection and the readout-noise measurement."""
 
 from __future__ import annotations
 
@@ -43,8 +43,8 @@ def test_the_split_is_measured_not_assumed(cfg, operator):
     assert result.dark == tuple(c for c in range(CELLS) if c not in LIT_CELLS)
     lit_fractions = result.lit_fraction[list(LIT_CELLS)]
     dark_fractions = np.delete(result.lit_fraction, list(LIT_CELLS))
-    # The real detectors show 42-53 % against <= 0.08 %; the margin is what
-    # makes any threshold in 0.01-0.30 safe.
+    # The two populations sit far apart, as on the real detectors, so any
+    # threshold between 0.01 and 0.30 splits them.
     assert lit_fractions.min() > 0.3
     assert dark_fractions.max() < 0.01
 
@@ -60,11 +60,11 @@ def test_the_readout_noise_comes_from_the_dark_cells(cfg, operator):
 
 
 def test_a_changed_cell_pattern_fails_loudly(cfg, operator):
-    """§3 D4: a silent change would halve or double I(q) with nothing saying so.
+    """A pinned lit-cell set that the run does not match raises.
 
-    Only when the set is *pinned*: ``cfg.expected_lit_cells`` is ``None`` by
-    default because the proposal used four readout patterns, so this is the
-    reprocess-the-science-block case rather than the every-run one.
+    A silent change would halve or double I(q). ``cfg.expected_lit_cells`` is
+    ``None`` by default because the proposal used several readout patterns, so
+    this gate applies only when a reprocess pins the set.
     """
     op, _ = operator
     accumulator = CellAccumulator(cfg, op.static_bad)
@@ -74,9 +74,9 @@ def test_a_changed_cell_pattern_fails_loudly(cfg, operator):
     assert result.lit == (0, 1, 2, 3)
     with pytest.raises(UnexpectedLitCells, match=r"cells \[0, 1, 2, 3\] are lit"):
         result.check_expected(EXPECTED_LIT_CELLS)
-    # ...and four consecutive cells are a shape a JUNGFRAU can read, so the
-    # run-invariant check says nothing about it. That is the division of
-    # labour: one gate knows this beamtime, the other knows the detector.
+    # Four consecutive cells are a pattern a JUNGFRAU can read, so the
+    # run-invariant check passes. One gate checks this beamtime's pattern, the
+    # other what the detector can produce.
     result.check_structure(CELLS)
 
 
@@ -101,17 +101,17 @@ def test_the_failure_names_every_cell_fraction(cfg, operator):
         ((15,), True),  # one cell
         ((), True),  # no beam
         ((0, 2, 4), False),  # no start produces this
-        ((1, 12), False),  # one of the 67 the old floor produced
+        ((1, 12), False),  # a gap no start produces
         ((5, 7, 9, 10), False),  # another
     ],
 )
 def test_only_a_storage_cell_sequence_is_plausible(lit, expected):
-    """A JUNGFRAU reads consecutive cells mod 16 — every valid pattern is one."""
+    """A JUNGFRAU reads consecutive cells mod 16, so every valid pattern is one."""
     assert is_storage_cell_sequence(lit, 16) is expected
 
 
 def test_an_impossible_set_names_itself_and_the_knobs(cfg, operator):
-    """The tripwire raises rather than logging: one that returns is not one."""
+    """An impossible set raises, naming the two settings that decide the split."""
     op, _ = operator
     accumulator = CellAccumulator(cfg, op.static_bad)
     accumulator.update(*synthetic_train(lit_cells=(0, 2, 4)))
@@ -191,7 +191,7 @@ def test_the_dynamic_mask_is_excluded_too(cfg, operator):
 
 
 def test_cell_ids_are_taken_from_the_reader_not_from_position(cfg, operator):
-    """CLAUDE.md pitfall 4, on the cell axis."""
+    """A cell's id comes from ``data.memoryCell``, never from its array position."""
     op, _ = operator
     data, mask, _ = synthetic_train(lit_cells=(0, 1))
     shifted = np.arange(CELLS, dtype=np.uint16) + 100
