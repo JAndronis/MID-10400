@@ -383,7 +383,7 @@ def _r318_against_lowq(classes, tids) -> dict:
     z = raw[src, "Z.actualPosition"].xarray()
     path = damnit_file(318, DAMNIT_ROOT, 10400)
     with h5py.File(path, "r") as f:
-        g = f["agipd_saxs"]
+        g = f["agipd.saxs"]
         q = g["q"][:]
         c = np.flatnonzero((q >= 0.85) & (q < 0.95))
         frames = g["n_frames"][:] > 0
