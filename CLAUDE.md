@@ -5,7 +5,10 @@ Repository guide for Claude Code. Read this file first, then the context file fo
 `<pkg>` = `analysis` (`src/analysis/`), this repository's src-layout analysis package. It holds
 `analysis.common` (detector-agnostic: status codes, the train/block row model, the mask vocabulary,
 CPU and pool helpers, the frame-table writer), `analysis.saxs` (AGIPD) and `analysis.waxs`
-(JUNGFRAU). The DAMNIT context files (`src/amore/`, not packaged) are separate.
+(JUNGFRAU). The droplet figures share `analysis.droplets` (the droplet catalogue, runs left out,
+matched t/t*), `analysis.xpcs.kww` (the per-ring KWW fit) and `analysis.plotting` (style, grids,
+colours); a new droplet or exclusion is an edit there, not in a script. The DAMNIT context files
+(`src/amore/`, not packaged) are separate.
 
 ## Context files
 

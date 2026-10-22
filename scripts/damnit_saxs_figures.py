@@ -17,13 +17,9 @@ the blocks they used in one JSON. The mesh droplets get figures of their own
 (``saxs_<sample>_mesh_norm.png``, ``saxs_matched_tstar_<sample>_mesh_norm.png``), never
 mixed with the static ones.
 
-The droplets are the run triage's series after r240 (inventory of 2026-10-21). Left
-out: the silica references (r288, r382-385, r389), r463 (exploded), the buffer r464-466
-itself (it is the background), and r289 (attenuator 0.041), r307 (0.0047) and r402-408
-(0.6), for which the notebook has no flux correction.
-
-The mesh droplets (s240, s258, s289, s308; SSHEX fly scans, attenuator 0.1006) are run
-with the notebook's MESH_SCAN, so a mesh run's curves average only the trains that hit
+The droplets are `analysis.droplets.DROPLETS` with ``figures`` set, the runs left out
+there. The mesh droplets (SSHEX fly scans, attenuator 0.1006) are run with the
+notebook's MESH_SCAN, so a mesh run's curves average only the trains that hit
 the droplet (`analysis.triage.classify.hits`, class "on"). Their figures carry caveats
 the static ones do not: a hit can cross the droplet off-centre while the scale assumes
 the full chord; the q_min rule (0.156 a_x) was measured on static droplets; and like
@@ -44,8 +40,8 @@ this script with the shared environment too (the overviews need xarray and matpl
 
 The XPCS comparison (``xpcs_mesh_vs_static_*.png``) takes the same mesh and static
 representatives and, per MATCH_T, pools every hit train within MATCH_TOLERANCE
-(`analysis.cache.pool_g2`) and fits each ring with a stretched exponential (KWW,
-weighted, bounded): c2(τ), Γ(q), τ(q), α(q) and the fit parameters against t/t*,
+(`analysis.cache.pool_g2`) and fits each ring with a stretched exponential
+(`analysis.xpcs.kww`): c2(τ), Γ(q), τ(q), α(q) and the fit parameters against t/t*,
 the fits in one JSON. The pooled windows are saved per droplet as
 ``figures/overview/xpcs_windows_<id>.nc``, so a refit reads them in seconds;
 ``--refresh-xpcs`` pools them again, and a file made from other runs or source files
@@ -54,140 +50,43 @@ is refused.
 
 import argparse
 import datetime
-import functools
 import json
-import math
-import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[1]
+from _common import FIGURES, REPO
+
+from analysis import plotting
+from analysis.droplets import (
+    CONDITIONS,
+    DROPLETS,
+    FERRITIN_MG_PER_ML,
+    MATCH_T,
+    MATCH_TOLERANCE,
+    NEAR_ZERO_BLOCKS,
+    PROPOSAL,
+    REPRESENTATIVE,
+    condition_title,
+    groups,
+)
+from analysis.plotting import DROPLET_COLOURS, KIND_COLOURS
+
 NOTEBOOK = REPO / "notebooks" / "damnit_saxs.ipynb"
-FIGURES = REPO / "figures"
 # the interpreter of the shared mid-10400 kernel (scripts/shared_env.sh)
 SHARED_PYTHON = Path(
     "/gpfs/exfel/exp/MID/202601/p010400/usr/Software/MID-10400/.venv/bin/python"
 )
 
-# id, sample, runs (what the droplet's V0 and t* come from), runs left out and why,
-# PEG w/v % at the start
-DROPLETS = [
-    ("s240", "ferritin50-peg6k", range(240, 258), {}, 5.0),
-    ("s258", "ferritin50-peg6k", range(258, 276), {}, 5.0),
-    (
-        "s289",
-        "ferritin50-peg6k",
-        range(289, 308),
-        {
-            289: "attenuator 0.041, no flux correction",
-            307: "attenuator 0.0047, no flux correction",
-        },
-        5.0,
-    ),
-    ("s308", "ferritin50", range(308, 338), {}, 0.0),
-    (
-        "s338",
-        "ferritin50",
-        range(338, 370),
-        {
-            349: "no droplet fit",
-            353: "dark",
-            354: "dark",
-            355: "dark",
-            356: "left out by clean_range",
-        },
-        0.0,
-    ),
-    ("s370", "ferritin50", range(370, 382), {}, 0.0),
-    ("s390", "ferritin50", range(390, 394), {}, 0.0),
-    ("s394", "ferritin50", range(394, 401), {}, 0.0),
-    ("s409", "ferritin50-peg1k", range(409, 420), {}, 5.0),
-    ("s423", "ferritin50-peg6k", range(423, 433), {}, 5.0),
-    ("s433", "ferritin50-peg6k", range(433, 443), {}, 5.0),
-    (
-        "s443",
-        "ferritin50-peg6k",
-        range(443, 453),
-        {447: "left out by clean_range"},
-        5.0,
-    ),
-    ("s453", "ferritin50-peg6k", range(453, 463), {}, 5.0),
-    ("s467", "ferritin50-peg6k", range(467, 477), {}, 5.0),
-    ("s477", "ferritin50-peg6k", range(477, 487), {}, 5.0),
-    ("s487", "ferritin50-peg6k", range(487, 497), {}, 5.0),
-]
-# probed by SSHEX mesh scans (s308's last two runs, r336-337, are static; the notebook
-# keeps every train of a static run)
-MESH_DROPLETS = {"s240", "s258", "s289", "s308"}
-# figure titles; they are set in LaTeX, where an unescaped % starts a comment
-CONDITIONS = {
-    "ferritin50": "ferritin 50 mg/ml, no PEG",
-    "ferritin50-peg1k": r"ferritin 50 mg/ml + PEG 1K 5\,\% w/v",
-    "ferritin50-peg6k": r"ferritin 50 mg/ml + PEG 6K 5\,\% w/v",
-}
 OUTPUTS = ("saxs_subtracted_norm.png", "saxs_subtracted.png", "curves.nc")
-# the conditions compared at matched t/t*: a droplet shows its nearest block, and only
-# within MATCH_TOLERANCE of the target (about half the 0.13-0.18 spacing of the blocks).
-# Pure ferritin ends near t/t* = 2.1, hence 2.0 as the last.
-MATCH_T = (0.25, 0.5, 0.75, 1.0, 1.5, 2.0)
-MATCH_TOLERANCE = 0.08
-# the common q grid of the mesh/static ratio, inside the droplet figures' q range
-# the mesh droplet shown per condition in the mesh/static comparison (the others stay in
-# their own mesh figures); a condition not listed shows all its mesh droplets
-MESH_REPRESENTATIVE = {"ferritin50-peg6k": "s258"}
-# likewise the static droplet; static droplets vary too much to pool. Both chosen by the
-# user: s443 (r443-452) for PEG 6K, s394 (r394-400) for no PEG
-STATIC_REPRESENTATIVE = {"ferritin50-peg6k": "s443", "ferritin50": "s394"}
-# the bounds of Γ in the per-ring XPCS fit, s⁻¹: 1/Γ from 10 ms down to 10 ns, two
-# decades past either end of the 0.44-135 µs lag window
-XPCS_GAMMA_BOUNDS = (1e2, 1e8)
-# the bounds of the KWW exponent α: from strongly stretched (0.2, a generous floor) to
-# compressed up to 2, the ballistic limit seen in jammed and gelling soft matter
-XPCS_STRETCH_BOUNDS = (0.2, 2.0)
-# a fitted parameter this close to a bound, as a fraction of the bound interval (log Γ,
-# α, b), marks the ring unresolved: the bound, not the data, set it
-AT_BOUND = 0.01
 # the V/V0 figure: the running median over this many trains (5 s at 10 Hz) is drawn over
 # the per-train volumes, whose fit jumps as a mesh scan moves the droplet; and its line
 # breaks where trains are further apart than this (runs follow each other ~75 s apart)
 VOLUME_MEDIAN_TRAINS = 51
 VOLUME_GAP_S = 5.0
-# droplets in the V/V0 figure only, in the DROPLETS format: the run triage's other
-# ferritin series (inventory of 2026-10-21), SSHEX mesh scans before r240 (labels from
-# DAMNIT, unchecked), and the static s402 (attenuator 0.6, no flux correction, which a
-# volume does not need). Left out: s088, s093, s129, s134, s140 and s144, whose D^2 fit
-# finds no break (V/V0 0.55-1.6 at the fitted t*, or t* at the end of the data), so
-# t/t* means nothing for them
-VOLUME_ONLY_DROPLETS = [
-    ("s070", "ferritin50-peg6k", range(70, 88), {}, 5.0),
-    ("s168", "ferritin50-peg6k", range(168, 186), {}, 5.0),
-    ("s186", "ferritin50-peg6k", range(186, 204), {}, 5.0),
-    ("s204", "ferritin50-peg6k", range(204, 222), {}, 5.0),
-    ("s222", "ferritin50-peg6k", range(222, 240), {}, 5.0),
-    ("s402", "ferritin50", range(402, 409), {}, 0.0),
-]
-VOLUME_ONLY_MESH = {d[0] for d in VOLUME_ONLY_DROPLETS} - {"s402"}
-KNOWN_Q = [0.2 * (1.0 / 0.2) ** (i / 199) for i in range(200)]
-# blocks the matching passes over, (run, first trainId) -> why. Found 2026-10-08 as the
-# only blocks in any curves.nc whose mean I over q 0.3-0.4 is under a tenth of the
-# median of up to two blocks on each side; the droplet figures still show them.
-NEAR_ZERO_BLOCKS = {
-    (357, 2637483940): "near zero: I(q 0.3-0.4) 0.8 % of its neighbours'",
-    (477, 2637914817): "near zero: I(q 0.3-0.4) 1.3 % of its neighbours'",
-}
-# a condition's droplets, in DROPLETS order: Okabe & Ito's colour-blind-safe palette
-# without its yellow, which is too faint on white
-DROPLET_COLOURS = (
-    "#0072B2",  # blue
-    "#D55E00",  # vermillion
-    "#009E73",  # bluish green
-    "#CC79A7",  # reddish purple
-    "#E69F00",  # orange
-    "#56B4E9",  # sky blue
-    "#000000",  # black
-)
+# the common q grid of the mesh/static ratio, inside the droplet figures' q range
+RATIO_Q = [0.2 * (1.0 / 0.2) ** (i / 199) for i in range(200)]
 
 HEADER = '''"""SAXS figures of droplet {id} ({sample}, runs {first}-{last}).
 
@@ -204,15 +103,8 @@ import matplotlib
 matplotlib.use("Agg")  # no display: the figures are saved, plt.show() does nothing'''
 
 
-def kept_runs(droplet):
-    _, _, runs, excluded, _ = droplet
-    return [r for r in runs if r not in excluded]
-
-
 def folder(droplet):
-    droplet_id, sample = droplet[:2]
-    runs = kept_runs(droplet)
-    return FIGURES / "droplets" / f"{droplet_id}_{sample}_r{runs[0]}-{runs[-1]}"
+    return FIGURES / "droplets" / droplet.name
 
 
 def notebook_version():
@@ -233,12 +125,11 @@ def notebook_version():
 def export(droplet, parameters, name):
     """The notebook's code cells as one script, the droplet's values after the
     parameters cell; IPython magics are dropped."""
-    droplet_id, sample = droplet[:2]
     runs = parameters["DROPLET_RUNS"]
     parts = [
         HEADER.format(
-            id=droplet_id,
-            sample=sample,
+            id=droplet.id,
+            sample=droplet.sample,
             first=runs[0],
             last=runs[-1],
             version=notebook_version(),
@@ -265,20 +156,19 @@ def export(droplet, parameters, name):
 
 
 def run_one(droplet):
-    droplet_id, sample, _, excluded, peg = droplet
     out = folder(droplet)
     out.mkdir(parents=True, exist_ok=True)
     parameters = {
-        "DROPLET_ID": droplet_id,
-        "SAMPLE": sample,
-        "DROPLET_RUNS": kept_runs(droplet),
+        "DROPLET_ID": droplet.id,
+        "SAMPLE": droplet.sample,
+        "DROPLET_RUNS": droplet.kept_runs,
         "PLOT_RUNS": None,
-        "FERRITIN_MG_PER_ML": 50.0,
-        "PEG_PERCENT_WV": peg,
-        "MESH_SCAN": droplet_id in MESH_DROPLETS,
+        "FERRITIN_MG_PER_ML": FERRITIN_MG_PER_ML,
+        "PEG_PERCENT_WV": droplet.peg_percent_wv,
+        "MESH_SCAN": droplet.mesh,
         "FIGURES_ROOT": str(FIGURES),
     }
-    script = out / f"damnit_saxs_{droplet_id}.py"
+    script = out / f"damnit_saxs_{droplet.id}.py"
     script.write_text(export(droplet, parameters, script.name))
     started = time.perf_counter()
     begun = time.time()
@@ -290,31 +180,17 @@ def run_one(droplet):
         (out / f).exists() and (out / f).stat().st_mtime >= begun for f in OUTPUTS
     )
     return {
-        "id": droplet_id,
-        "sample": sample,
+        "id": droplet.id,
+        "sample": droplet.sample,
         "folder": str(out.relative_to(REPO)),
         "script": script.name,
-        "runs": kept_runs(droplet),
-        "excluded": {str(r): why for r, why in excluded.items()},
-        "peg_percent_wv": peg,
-        "mesh_scan": droplet_id in MESH_DROPLETS,
+        "runs": droplet.kept_runs,
+        "excluded": {str(r): why for r, why in droplet.excluded.items()},
+        "peg_percent_wv": droplet.peg_percent_wv,
+        "mesh_scan": droplet.mesh,
         "status": "ok" if result.returncode == 0 and fresh else "FAILED",
         "seconds": round(time.perf_counter() - started, 1),
     }
-
-
-def groups():
-    "The (sample, mesh) pairs that get overviews of their own, in CONDITIONS order."
-    present = {(d[1], d[0] in MESH_DROPLETS) for d in DROPLETS}
-    return [(s, m) for s in CONDITIONS for m in (False, True) if (s, m) in present]
-
-
-def group_suffix(mesh):
-    return "_mesh" if mesh else ""
-
-
-def group_title(sample, mesh):
-    return CONDITIONS[sample] + (", mesh scans (hit trains)" if mesh else "")
 
 
 def load_curves(sample, mesh):
@@ -322,35 +198,21 @@ def load_curves(sample, mesh):
     import xarray as xr
 
     return [
-        (droplet[0], xr.load_dataset(folder(droplet) / "curves.nc"))
+        (droplet.id, xr.load_dataset(folder(droplet) / "curves.nc"))
         for droplet in DROPLETS
-        if droplet[1] == sample
-        and (droplet[0] in MESH_DROPLETS) == mesh
+        if droplet.figures
+        and (droplet.sample, droplet.mesh) == (sample, mesh)
         and (folder(droplet) / "curves.nc").exists()
     ]
-
-
-def q_axis(ax):
-    "The droplet figures' q range and ticks, on a log axis."
-    from matplotlib.ticker import FixedLocator, FuncFormatter, NullFormatter
-
-    ax.set_xlim(0.2, 1.0)
-    ax.xaxis.set_major_locator(FixedLocator([0.2, 0.3, 0.5, 1.0]))
-    ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}"))
-    ax.xaxis.set_minor_formatter(NullFormatter())
 
 
 def overview(sample, mesh):
     """One figure per normalisation: a panel per droplet of `sample` (mesh or static),
     shared axes and t/t* colour scale. Returns the files written."""
     import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
     import numpy as np
-    import scienceplots  # noqa: F401  (registers the notebook's "science" style)
 
-    plt.style.use("science")
+    plt = plotting.pyplot()
     data = load_curves(sample, mesh)
     if not data:
         return []
@@ -359,25 +221,17 @@ def overview(sample, mesh):
     )
     cmap = plt.get_cmap("viridis")
     ncols = min(4, len(data))
-    nrows = math.ceil(len(data) / ncols)
     written = []
     for normalise in (True, False):
-        fig, axs = plt.subplots(
-            nrows,
-            ncols,
-            figsize=(3.6 * ncols + 1.2, 3.2 * nrows + 0.6),
-            sharex=True,
-            sharey=True,
-            squeeze=False,
-        )
-        # the grid can have more panels than droplets
+        fig, axs = plotting.panel_grid(len(data), ncols, pad=(1.2, 0.6))
         shown = []
         for ax, (droplet_id, ds) in zip(axs.flat, data, strict=False):
             for k in range(ds.sizes["curve"]):
-                iq = ds.intensity[k]
                 if normalise:
-                    iq = iq / iq.sel(q=slice(0.80, 0.95)).mean()
-                iq = iq.where((iq > 0) & (ds.q >= ds.q_min[k]))
+                    iq = plotting.normalised_curve(ds, k)
+                else:
+                    iq = ds.intensity[k]
+                    iq = iq.where((iq > 0) & (ds.q >= ds.q_min[k]))
                 color = cmap(norm(float(ds.t_over_tstar[k])))
                 ax.loglog(ds.q, iq, color=color, lw=0.6)
                 shown.append(iq.sel(q=slice(0.2, 1.0)).values)
@@ -387,35 +241,53 @@ def overview(sample, mesh):
                 f"$t^*$ = {ds.attrs['t_star_s']:.0f} s",
                 fontsize=9,
             )
-        for ax in axs.flat[len(data) :]:
-            ax.set_visible(False)
-        q_axis(axs[0, 0])
+        plotting.log_q_axis(axs[0, 0])
         if normalise:
             axs[0, 0].set_ylim(0.5, 25)
         else:  # the bulk of the curves; a stray near-zero block may run off the bottom
             low, high = np.nanpercentile(np.concatenate(shown), [1, 100])
             axs[0, 0].set_ylim(low / 2, high * 2)
-        for ax in axs[-1]:
-            ax.set_xlabel(r"$q$ (nm$^{-1}$)")
-        for ax in axs[:, 0]:
-            ax.set_ylabel(
-                r"$I(q)\,/\,\langle I \rangle_{0.80-0.95}$"
-                if normalise
-                else r"$I(q)$ per flux$\cdot$path"
-            )
+        label_grid(
+            axs,
+            r"$I(q)\,/\,\langle I \rangle_{0.80-0.95}$"
+            if normalise
+            else r"$I(q)$ per flux$\cdot$path",
+        )
         fig.colorbar(
             matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap),
             ax=axs,
             label="$t/t^*$",
             shrink=0.9,
         )
-        fig.suptitle(group_title(sample, mesh))
-        name = f"saxs_{sample}{group_suffix(mesh)}{'_norm' if normalise else ''}.png"
-        (FIGURES / "overview").mkdir(parents=True, exist_ok=True)
-        fig.savefig(FIGURES / "overview" / name, dpi=200, bbox_inches="tight")
-        plt.close(fig)
-        written.append(name)
+        fig.suptitle(condition_title(sample, mesh))
+        name = (
+            f"saxs_{sample}{'_mesh' if mesh else ''}{'_norm' if normalise else ''}.png"
+        )
+        written.append(plotting.save(fig, FIGURES / "overview" / name))
     return written
+
+
+def label_grid(axs, ylabel, xlabel=r"$q$ (nm$^{-1}$)"):
+    for ax in axs[-1]:
+        ax.set_xlabel(xlabel)
+    for ax in axs[:, 0]:
+        ax.set_ylabel(ylabel)
+
+
+def write_blocks(name, record, **extra):
+    """The blocks a set of matched figures shows, as JSON beside them."""
+    (FIGURES / "overview" / name).write_text(
+        json.dumps(
+            {
+                "t_targets": list(MATCH_T),
+                "tolerance": MATCH_TOLERANCE,
+                **extra,
+                "blocks": record,
+            },
+            indent=1,
+        )
+    )
+    return name
 
 
 def match_block(ds, target):
@@ -458,31 +330,15 @@ def matched(sample, mesh):
     MATCH_T, a line per droplet in its own colour, normalised to the mean over q
     0.80-0.95. Returns the file written and, per panel and droplet, the block shown or
     why none."""
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    import scienceplots  # noqa: F401  (registers the notebook's "science" style)
-
-    plt.style.use("science")
     data = load_curves(sample, mesh)
     if not data:
         return None, []
     if len(data) > len(DROPLET_COLOURS):
         raise ValueError(
-            f"{len(data)} droplets in {group_title(sample, mesh)!r}, "
+            f"{len(data)} droplets in {condition_title(sample, mesh)!r}, "
             f"only {len(DROPLET_COLOURS)} colours"
         )
-    ncols = 3
-    nrows = math.ceil(len(MATCH_T) / ncols)
-    fig, axs = plt.subplots(
-        nrows,
-        ncols,
-        figsize=(3.6 * ncols, 3.2 * nrows + 0.6),
-        sharex=True,
-        sharey=True,
-        squeeze=False,
-    )
+    fig, axs = plotting.panel_grid(len(MATCH_T), 3)
     record = []
     handles = {}
     for ax, target in zip(axs.flat, MATCH_T, strict=False):
@@ -492,9 +348,7 @@ def matched(sample, mesh):
             record.append({"sample": sample, "mesh_scan": mesh} | entry)
             if k is None:
                 continue
-            iq = ds.intensity[k]
-            iq = iq / iq.sel(q=slice(0.80, 0.95)).mean()
-            iq = iq.where((iq > 0) & (ds.q >= ds.q_min[k]))
+            iq = plotting.normalised_curve(ds, k)
             (handles[droplet_id],) = ax.loglog(ds.q, iq, color=colour, lw=1.0)
             concentrations.append(entry["ferritin_mg_per_ml"])
         title = f"$t/t^* = {target:g}$"
@@ -502,14 +356,9 @@ def matched(sample, mesh):
             low, high = (f"{f(concentrations):.0f}" for f in (min, max))
             title += f", {low} mg/ml" if low == high else f", {low}-{high} mg/ml"
         ax.set_title(title, fontsize=9)
-    for ax in axs.flat[len(MATCH_T) :]:
-        ax.set_visible(False)
-    q_axis(axs[0, 0])
+    plotting.log_q_axis(axs[0, 0])
     axs[0, 0].set_ylim(0.5, 25)  # as the normalised overviews
-    for ax in axs[-1]:
-        ax.set_xlabel(r"$q$ (nm$^{-1}$)")
-    for ax in axs[:, 0]:
-        ax.set_ylabel(r"$I(q)\,/\,\langle I \rangle_{0.80-0.95}$")
+    label_grid(axs, r"$I(q)\,/\,\langle I \rangle_{0.80-0.95}$")
     shown = [(d, ds) for d, ds in data if d in handles]
     fig.legend(
         [handles[d] for d, _ in shown],
@@ -522,15 +371,11 @@ def matched(sample, mesh):
         frameon=False,
     )
     fig.suptitle(
-        f"{group_title(sample, mesh)} at matched $t/t^*$ (nearest block within "
+        f"{condition_title(sample, mesh)} at matched $t/t^*$ (nearest block within "
         f"$\\pm${MATCH_TOLERANCE:g}; ferritin range per panel)"
     )
-    out = FIGURES / "overview"
-    out.mkdir(parents=True, exist_ok=True)
-    name = f"saxs_matched_tstar_{sample}{group_suffix(mesh)}_norm.png"
-    fig.savefig(out / name, dpi=200, bbox_inches="tight")
-    plt.close(fig)
-    return name, record
+    name = f"saxs_matched_tstar_{sample}{'_mesh' if mesh else ''}_norm.png"
+    return plotting.save(fig, FIGURES / "overview" / name), record
 
 
 def matched_all():
@@ -543,75 +388,50 @@ def matched_all():
             written.append(name)
             record += blocks
     if written:
-        blocks = "saxs_matched_tstar_blocks.json"
-        (FIGURES / "overview" / blocks).write_text(
-            json.dumps(
-                {
-                    "t_targets": list(MATCH_T),
-                    "tolerance": MATCH_TOLERANCE,
-                    "normalisation": "mean over q 0.80-0.95 nm^-1",
-                    "blocks": record,
-                },
-                indent=1,
+        written.append(
+            write_blocks(
+                "saxs_matched_tstar_blocks.json",
+                record,
+                normalisation="mean over q 0.80-0.95 nm^-1",
             )
         )
-        written.append(blocks)
     return written
 
 
 def compare_mesh_static(sample):
     """`sample`'s mesh and static droplets on the same axes at matched t/t*: a panel per
-    MATCH_T, static droplets in blue, mesh droplets in vermillion, normalised to the mean
-    over q 0.80-0.95. A second figure gives, per panel, the ratio of the mesh droplets'
-    mean curve to the static ones' (geometric means over the droplets with a block
-    there). Returns the files written and the blocks shown. Needs both kinds."""
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    MATCH_T, static droplets in blue, mesh droplets in vermillion, normalised to the
+    mean over q 0.80-0.95. A second figure gives, per panel, the ratio of the mesh
+    droplets' mean curve to the static ones' (geometric means over the droplets with a
+    block there). Returns the files written and the blocks shown. Needs both kinds."""
     import numpy as np
-    import scienceplots  # noqa: F401  (registers the notebook's "science" style)
 
-    plt.style.use("science")
-    mesh = [
-        (d, ds)
-        for d, ds in load_curves(sample, True)
-        if d == MESH_REPRESENTATIVE.get(sample, d)
-    ]
-    static = [
-        (d, ds)
-        for d, ds in load_curves(sample, False)
-        if d == STATIC_REPRESENTATIVE.get(sample, d)
-    ]
-    kinds = {"static": static, "mesh": mesh}
+    kinds = {
+        kind: [
+            (d, ds)
+            for d, ds in load_curves(sample, mesh)
+            if d == REPRESENTATIVE.get((sample, mesh), d)
+        ]
+        for kind, mesh in (("static", False), ("mesh", True))
+    }
     if not all(kinds.values()):
         return [], []
-    colours = {"static": "#0072B2", "mesh": "#D55E00"}
-    ncols = 3
-    nrows = math.ceil(len(MATCH_T) / ncols)
-    size = (3.6 * ncols, 3.2 * nrows + 0.6)
-    fig, axs = plt.subplots(
-        nrows, ncols, figsize=size, sharex=True, sharey=True, squeeze=False
-    )
-    fig_r, axs_r = plt.subplots(
-        nrows, ncols, figsize=size, sharex=True, sharey=True, squeeze=False
-    )
+    fig, axs = plotting.panel_grid(len(MATCH_T), 3)
+    fig_r, axs_r = plotting.panel_grid(len(MATCH_T), 3)
     record = []
     handles = {}
     for ax, ax_r, target in zip(axs.flat, axs_r.flat, MATCH_T, strict=False):
         curves = {"static": [], "mesh": []}
         concentrations = {"static": [], "mesh": []}
         for kind, data in kinds.items():
-            for droplet_id, ds in data:
+            for _, ds in data:
                 k, entry = match_block(ds, target)
                 record.append({"sample": sample, "mesh_scan": kind == "mesh"} | entry)
                 if k is None:
                     continue
-                iq = ds.intensity[k]
-                iq = iq / iq.sel(q=slice(0.80, 0.95)).mean()
-                iq = iq.where((iq > 0) & (ds.q >= ds.q_min[k]))
-                (handles[kind],) = ax.loglog(ds.q, iq, color=colours[kind], lw=1.2)
-                curves[kind].append(iq.interp(q=KNOWN_Q).values)
+                iq = plotting.normalised_curve(ds, k)
+                (handles[kind],) = ax.loglog(ds.q, iq, color=KIND_COLOURS[kind], lw=1.2)
+                curves[kind].append(iq.interp(q=RATIO_Q).values)
                 concentrations[kind].append(entry["ferritin_mg_per_ml"])
         title = f"$t/t^* = {target:g}$"
         for kind, values in concentrations.items():
@@ -624,22 +444,16 @@ def compare_mesh_static(sample):
                     kind: np.exp(np.nanmean(np.log(np.array(c)), axis=0))
                     for kind, c in curves.items()
                 }
-            ax_r.semilogx(KNOWN_Q, mean["mesh"] / mean["static"], color="k", lw=1.0)
+            ax_r.semilogx(RATIO_Q, mean["mesh"] / mean["static"], color="k", lw=1.0)
             ax_r.axhline(1, color="0.6", lw=0.5)
         ax_r.set_title(f"$t/t^* = {target:g}$", fontsize=9)
     for a in (axs, axs_r):
-        for ax in a.flat[len(MATCH_T) :]:
-            ax.set_visible(False)
-        q_axis(a[0, 0])
-        for ax in a[-1]:
-            ax.set_xlabel(r"$q$ (nm$^{-1}$)")
+        plotting.log_q_axis(a[0, 0])
     axs[0, 0].set_ylim(0.5, 25)  # as the normalised overviews
     axs_r[0, 0].set_ylim(0.5, 2)
     axs_r[0, 0].set_yscale("log")
-    for ax in axs[:, 0]:
-        ax.set_ylabel(r"$I(q)\,/\,\langle I \rangle_{0.80-0.95}$")
-    for ax in axs_r[:, 0]:
-        ax.set_ylabel("mesh / static")
+    label_grid(axs, r"$I(q)\,/\,\langle I \rangle_{0.80-0.95}$")
+    label_grid(axs_r, "mesh / static")
     fig.legend(
         [handles[k] for k in kinds if k in handles],
         [f"{k}: " + ", ".join(d for d, _ in kinds[k]) for k in kinds if k in handles],
@@ -655,14 +469,10 @@ def compare_mesh_static(sample):
     fig.suptitle(CONDITIONS[sample] + ": mesh (hit trains) vs static" + suffix)
     fig_r.suptitle(CONDITIONS[sample] + r": mesh / static")
     out = FIGURES / "overview"
-    out.mkdir(parents=True, exist_ok=True)
     names = [
-        f"saxs_mesh_vs_static_{sample}_norm.png",
-        f"saxs_mesh_vs_static_ratio_{sample}.png",
+        plotting.save(fig, out / f"saxs_mesh_vs_static_{sample}_norm.png"),
+        plotting.save(fig_r, out / f"saxs_mesh_vs_static_ratio_{sample}.png"),
     ]
-    for f, name in zip((fig, fig_r), names, strict=True):
-        f.savefig(out / name, dpi=200, bbox_inches="tight")
-        plt.close(f)
     return names, record
 
 
@@ -675,19 +485,13 @@ def compare_all():
         written += names
         record += blocks
     if written:
-        name = "saxs_mesh_vs_static_blocks.json"
-        (FIGURES / "overview" / name).write_text(
-            json.dumps(
-                {
-                    "t_targets": list(MATCH_T),
-                    "tolerance": MATCH_TOLERANCE,
-                    "normalisation": "mean over q 0.80-0.95 nm^-1",
-                    "blocks": record,
-                },
-                indent=1,
+        written.append(
+            write_blocks(
+                "saxs_mesh_vs_static_blocks.json",
+                record,
+                normalisation="mean over q 0.80-0.95 nm^-1",
             )
         )
-        written.append(name)
     return written
 
 
@@ -726,36 +530,22 @@ def volume_timelines(sample):
     than VOLUME_GAP_S apart (between runs). The legend gives each droplet's flux,
     XGM times total transmission (`run_fluxes`). Returns the files written."""
     import damnit
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
     import numpy as np
-    import scienceplots  # noqa: F401  (registers the notebook's "science" style)
 
     from analysis import cache
 
-    plt.style.use("science")
-    db = damnit.Damnit(10400)
-    mesh = MESH_DROPLETS | VOLUME_ONLY_MESH
+    plt = plotting.pyplot()
+    db = damnit.Damnit(PROPOSAL)
     droplets = sorted(
-        (d for d in DROPLETS + VOLUME_ONLY_DROPLETS if d[1] == sample),
-        key=lambda d: d[2][0],
+        (d for d in DROPLETS if d.sample == sample), key=lambda d: d.runs[0]
     )
-    kinds = [m for m in (False, True) if any((d[0] in mesh) == m for d in droplets)]
+    kinds = [m for m in (False, True) if any(d.mesh == m for d in droplets)]
     if not kinds:
         return []
-    fig, axs = plt.subplots(
-        1,
-        len(kinds),
-        figsize=(5.0 * len(kinds), 4.0),
-        sharex=True,
-        sharey=True,
-        squeeze=False,
-    )
+    fig, axs = plotting.panel_grid(len(kinds), len(kinds), panel=(5.0, 4.0), pad=(0, 0))
     record = []
     for ax, kind in zip(axs[0], kinds, strict=True):
-        group = [d for d in droplets if (d[0] in mesh) == kind]
+        group = [d for d in droplets if d.mesh == kind]
         # more droplets than the palette has colours: viridis in run order
         colours = (
             DROPLET_COLOURS
@@ -763,7 +553,7 @@ def volume_timelines(sample):
             else plt.get_cmap("viridis")(np.linspace(0, 0.95, len(group)))
         )
         for droplet, colour in zip(group, colours, strict=False):
-            runs = kept_runs(droplet)
+            runs = droplet.kept_runs
             tl = cache.droplet_timeline(runs, db)
             t_star = tl.attrs["t_star_s"]
             v0 = float(tl.volume_mm3[0])
@@ -783,12 +573,12 @@ def volume_timelines(sample):
                 np.insert(smooth.values, gap, np.nan),
                 color=colour,
                 lw=0.9,
-                label=f"{droplet[0]} r{runs[0]}-{runs[-1]}, $t^*$ = {t_star:.0f} s, "
+                label=f"{droplet.id} {droplet.run_label}, $t^*$ = {t_star:.0f} s, "
                 f"$F$ = {flux_label(fluxes)} $\\mu$J",
             )
             record.append(
                 {
-                    "id": droplet[0],
+                    "id": droplet.id,
                     "mesh_scan": kind,
                     "runs": runs,
                     "v0_mm3": round(v0, 4),
@@ -816,10 +606,7 @@ def volume_timelines(sample):
     axs[0, 0].set_ylabel("$V/V_0$")
     fig.suptitle(CONDITIONS[sample])
     out = FIGURES / "overview"
-    out.mkdir(parents=True, exist_ok=True)
-    names = [f"volume_{sample}.png", f"volume_{sample}.json"]
-    fig.savefig(out / names[0], dpi=200, bbox_inches="tight")
-    plt.close(fig)
+    names = [plotting.save(fig, out / f"volume_{sample}.png"), f"volume_{sample}.json"]
     (out / names[1]).write_text(json.dumps(record, indent=1))
     return names
 
@@ -836,22 +623,12 @@ def xpcs_windows(droplet, db):
 
     from analysis import cache
     from analysis.common.status import FrameStatus
-    from analysis.utils import droplet_composition
 
-    droplet_id, sample, _, _, peg = droplet
-    runs = kept_runs(droplet)
+    droplet_id = droplet.id
+    runs = droplet.kept_runs
     tl = cache.droplet_timeline(runs, db)
     tau = tl.elapsed_s / tl.attrs["t_star_s"]
-    conc = xr.DataArray(
-        droplet_composition(
-            tl.volume_mm3,
-            tl.volume_mm3[0].values,
-            ferritin_mg_per_ml_initial=50.0,
-            peg_percent_wv_initial=peg,
-        ).ferritin_mg_per_ml,
-        dims="trainId",
-        coords={"trainId": tl.trainId},
-    )
+    conc = droplet.ferritin_mg_per_ml(tl)
     terms = (
         "status",
         "train_g2_num",
@@ -910,26 +687,22 @@ def saved_windows(droplet, db, refresh=False):
     from analysis import cache
     from analysis.xpcs.damnit import result_file
 
-    droplet_id = droplet[0]
-    runs = kept_runs(droplet)
+    droplet_id = droplet.id
+    runs = droplet.kept_runs
     inputs = {
         "runs": runs,
         "match_t": list(MATCH_T),
         "match_tolerance": MATCH_TOLERANCE,
-        "peg_percent_wv": droplet[4],
+        "peg_percent_wv": droplet.peg_percent_wv,
         "cache_version": cache.CACHE_VERSION,
     }
-    sources = [cache._source(result_file(10400, r)) for r in runs]
-    sources += [cache._source(db[r].file) for r in runs]
+    sources = [cache.file_source(result_file(PROPOSAL, r)) for r in runs]
+    sources += [cache.file_source(db[r].file) for r in runs]
     path = FIGURES / "overview" / f"xpcs_windows_{droplet_id}.nc"
     if path.exists() and not refresh:
         with xr.open_dataset(path, engine="h5netcdf") as ds:
             # every attribute read inside the block (CLAUDE.md pitfall 13)
-            stale = [
-                key
-                for key, now in (("inputs", inputs), ("sources", sources))
-                if json.loads(ds.attrs[key]) != cache._normalised(now)
-            ]
+            stale = cache.stale(ds.attrs, inputs=inputs, sources=sources)
             if stale:
                 raise ValueError(
                     f"{path} was made from other {' and '.join(stale)} than "
@@ -963,185 +736,17 @@ def saved_windows(droplet, db, refresh=False):
         "description": "pooled g2 of the hit trains of each t/t* window; see "
         "scripts/damnit_saxs_figures.py saved_windows",
     }
-    cache._write(ds, path)
+    cache.write_dataset(ds, path)
     return {
         t: (None if g2 is None else ds.sel(t_target=t), e)
         for t, (g2, e) in windows.items()
     }, hit_sources
 
 
-def fit_window(g2, beta_mode="fixed"):
-    """Per ring, a weighted fit of a pooled g2's baseline-subtracted ``c2`` to the
-    stretched exponential (KWW) ``β exp(−2 (Γτ)^α) + b`` (errors ``sigma``) with β
-    fixed at the ring's reference contrast (`analysis.triage.xpcs.REFERENCE_BETA`,
-    the τ → 0 intercept of r450 and r493-496) and Γ (XPCS_GAMMA_BOUNDS), α
-    (XPCS_STRETCH_BOUNDS) and b free. With β free the fit degenerates wherever part
-    of the decay lies below the first lag: β, Γ and α trade off, α runs to its floor.
-    Fixed, contrast lost before the first lag reads as a fast Γ. τ = 1/Γ is the KWW
-    relaxation time, not the mean one, τ Γ(1/α)/α. Not
-    `analysis.xpcs.figures.fit_g2`, the DAMNIT column's: that is one unweighted joint
-    fit over all rings, so one ring that does not converge fails them all. A ring is
-    ``resolved`` when no fitted parameter lies within AT_BOUND of a bound (relative,
-    in log for Γ), 1/Γ lies inside the lag window and σ_Γ < Γ. ``visible`` is the
-    measured c2 at the first lag over β, the fraction of the contrast left there. The
-    slope n of Γ ∝ qⁿ, D = Γ/q² and the mean α use the resolved rings only.
-    ``beta_mode="bounded"`` fits β too, in [0, the reference's p84] from the reference:
-    β is then the amplitude of the decay inside the lag window, ``lost`` = 1 − β/β_ref
-    the fraction of the contrast gone before the first lag, and a β at either bound
-    marks the ring unresolved. Returns (fit, record), the fit a namespace of per-ring
-    arrays."""
-    import types
-
-    import numpy as np
-    from scipy.optimize import curve_fit
-
-    from analysis.triage.xpcs import fixed_beta
-
-    q_nm = 10 * g2.roi_q.values  # roi_q is in Å⁻¹
-    reference = fixed_beta(g2.roi_q.values)
-    tau = g2.tau.values
-    n = q_nm.size
-    fit = types.SimpleNamespace(
-        q=g2.roi_q.values,
-        tau=tau,
-        curve=np.full((n, tau.size), np.nan),
-        **{
-            k: np.full(n, np.nan)
-            for k in (
-                "gamma",
-                "err_gamma",
-                "beta",
-                "err_beta",
-                "beta_ref",
-                "stretch",
-                "err_stretch",
-                "visible",
-                "err_visible",
-            )
-        },
-    )
-    fit.at_bound = np.zeros(n, dtype=bool)
-    low = (np.log(XPCS_GAMMA_BOUNDS[0]), XPCS_STRETCH_BOUNDS[0], -1)
-    high = (np.log(XPCS_GAMMA_BOUNDS[1]), XPCS_STRETCH_BOUNDS[1], 1)
-
-    if beta_mode not in ("fixed", "bounded"):
-        raise ValueError(f"beta_mode must be 'fixed' or 'bounded', got {beta_mode!r}")
-
-    # Γ fitted as log Γ, so that its bound check is relative
-    def kww(t, log_gamma, stretch, base, beta):
-        return beta * np.exp(-2 * (np.exp(log_gamma) * t) ** stretch) + base
-
-    failed = {}
-    for r in range(n):
-        ref = reference[r]
-        fit.beta_ref[r] = ref.value
-        if beta_mode == "fixed":
-            fit.beta[r], fit.err_beta[r] = ref.value, (ref.p84 - ref.p16) / 2
-        y, e = g2.c2.values[r], g2.sigma.values[r]
-        ok = np.isfinite(y) & np.isfinite(e) & (e > 0)
-        if not np.isfinite(ref.value):
-            failed[r] = "no reference contrast for this ring"
-            continue
-        if ok.sum() < 6:
-            failed[r] = "fewer than 6 points"
-            continue
-        fit.visible[r], fit.err_visible[r] = y[0] / ref.value, e[0] / ref.value
-        p0 = (-np.log(float(np.median(tau))), 1.0, 0.0)
-        if beta_mode == "fixed":
-            model = functools.partial(kww, beta=ref.value)
-            lo, hi = low, high
-        else:
-            model = kww
-            lo, hi = (*low, 0.0), (*high, ref.p84)
-            p0 = (*p0, ref.value)
-        try:
-            popt, pcov = curve_fit(
-                model,
-                tau[ok],
-                y[ok],
-                p0=p0,
-                sigma=e[ok],
-                absolute_sigma=True,
-                bounds=(lo, hi),
-                maxfev=20000,
-            )
-        except (RuntimeError, ValueError) as error:
-            failed[r] = str(error)
-            continue
-        err = np.sqrt(np.diag(pcov))
-        span = np.subtract(hi, lo)
-        fit.at_bound[r] = bool(
-            np.any((popt - lo) < AT_BOUND * span)
-            or np.any((hi - popt) < AT_BOUND * span)
-        )
-        fit.gamma[r], fit.stretch[r] = np.exp(popt[0]), popt[1]
-        fit.err_gamma[r], fit.err_stretch[r] = fit.gamma[r] * err[0], err[1]
-        if beta_mode == "bounded":
-            fit.beta[r], fit.err_beta[r] = popt[3], err[3]
-        fit.curve[r] = model(tau, *popt)
-    relax = 1 / fit.gamma
-    with np.errstate(invalid="ignore"):
-        resolved = (
-            ~fit.at_bound
-            & (relax >= tau.min())
-            & (relax <= tau.max())
-            & (fit.err_gamma < fit.gamma)
-        )
-    fit.resolved = resolved
-    record = {
-        "q_nm": np.round(q_nm, 4).tolist(),
-        "gamma_per_s": fit.gamma.tolist(),
-        "err_gamma_per_s": fit.err_gamma.tolist(),
-        "tau_s": relax.tolist(),
-        "beta": fit.beta.tolist(),
-        "err_beta": fit.err_beta.tolist(),
-        "beta_ref": fit.beta_ref.tolist(),
-        "stretch": fit.stretch.tolist(),
-        "err_stretch": fit.err_stretch.tolist(),
-        "visible": fit.visible.tolist(),
-        "err_visible": fit.err_visible.tolist(),
-        "at_bound": fit.at_bound.tolist(),
-        "resolved": resolved.tolist(),
-        "n_resolved": int(resolved.sum()),
-    }
-    if failed:
-        record["ring_fit_failed"] = {str(k): v for k, v in failed.items()}
-    if resolved.any():
-        # D = Γ/q², nm²/s → µm²/s, weighted by its inverse variance
-        d = fit.gamma[resolved] / q_nm[resolved] ** 2 * 1e-6
-        w = (fit.err_gamma[resolved] / q_nm[resolved] ** 2 * 1e-6) ** -2
-        record |= {
-            "D_um2_per_s": float(np.average(d, weights=w)),
-            "D_err_um2_per_s": float(w.sum() ** -0.5),
-        }
-    if resolved.any():
-        w = fit.err_stretch[resolved] ** -2
-        record |= {
-            "stretch_mean": float(np.average(fit.stretch[resolved], weights=w)),
-            "stretch_mean_err": float(w.sum() ** -0.5),
-        }
-    if beta_mode == "bounded":
-        lost = 1 - fit.beta / fit.beta_ref
-        record["lost"] = lost.tolist()
-        if resolved.any():
-            record["lost_mean"] = float(lost[resolved].mean())
-    if resolved.sum() >= 3:
-        # Γ ∝ q^n over the resolved rings, weighted by the relative errors of Γ
-        (slope, _), cov = np.polyfit(
-            np.log(q_nm[resolved]),
-            np.log(fit.gamma[resolved]),
-            1,
-            w=fit.gamma[resolved] / fit.err_gamma[resolved],
-            cov="unscaled",
-        )
-        record |= {"exponent_n": float(slope), "exponent_err": float(cov[0, 0] ** 0.5)}
-    return fit, record
-
-
 def compare_xpcs_mesh_static(sample, db, refresh=False, beta_mode="fixed"):
     """`sample`'s mesh and static representatives' XPCS at matched t/t*, every hit
     train within MATCH_TOLERANCE pooled (`xpcs_windows`) and fitted per ring
-    (`fit_window`; fits drawn and Γ, τ filled only where resolved).
+    (`analysis.xpcs.kww.fit_rings`; fits drawn and Γ, τ filled only where resolved).
     Five figures: c2(τ) with the KWW fit at four rings, a panel per (ring, t/t*); Γ, τ
     = 1/Γ and the KWW exponent α against q, a panel per t/t*, Γ and τ with the Γ ∝ q²
     (diffusion) and Γ ∝ q (shear) slopes; and against t/t* the slope n of Γ ∝ qⁿ,
@@ -1149,33 +754,29 @@ def compare_xpcs_mesh_static(sample, db, refresh=False, beta_mode="fixed"):
     mean α, and with ``beta_mode="bounded"`` 1 − β/β_ref at the lowest ring; those
     figures' names end in ``_beta_bounded``. The windows come from `saved_windows`.
     Returns the files written and the record."""
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
     import numpy as np
-    import scienceplots  # noqa: F401  (registers the notebook's "science" style)
-    from matplotlib.ticker import FixedLocator, FuncFormatter, NullFormatter
 
-    plt.style.use("science")
-    mesh = [d[0] for d in DROPLETS if d[1] == sample and d[0] in MESH_DROPLETS]
+    from analysis.droplets import by_id
+    from analysis.xpcs.kww import fit_rings
+
+    plt = plotting.pyplot()
+    mesh = [d.id for d in DROPLETS if d.figures and d.sample == sample and d.mesh]
     picks = {
-        "static": STATIC_REPRESENTATIVE.get(sample),
+        "static": REPRESENTATIVE.get((sample, False)),
         # a condition with one mesh droplet needs no entry
-        "mesh": MESH_REPRESENTATIVE.get(sample, mesh[0] if len(mesh) == 1 else None),
+        "mesh": REPRESENTATIVE.get((sample, True), mesh[0] if len(mesh) == 1 else None),
     }
     if not all(picks.values()):
         return [], {}
-    by_id = {d[0]: d for d in DROPLETS}
-    colours = {"static": "#0072B2", "mesh": "#D55E00"}
+    colours = KIND_COLOURS
     data = {}
     record = {"sample": sample, "droplets": {}}
     for kind, droplet_id in picks.items():
-        windows, sources = saved_windows(by_id[droplet_id], db, refresh)
+        windows, sources = saved_windows(by_id(droplet_id), db, refresh)
         fits = {}
         for target, (g2, entry) in windows.items():
-            fit, fitted = (None, {}) if g2 is None else fit_window(g2, beta_mode)
-            entry |= fitted
+            fit = None if g2 is None else fit_rings(g2, beta_mode)
+            entry |= {} if fit is None else fit.summary()
             fits[target] = (g2, fit, entry)
         data[kind] = fits
         record["droplets"][kind] = {
@@ -1186,7 +787,6 @@ def compare_xpcs_mesh_static(sample, db, refresh=False, beta_mode="fixed"):
         print(f"xpcs {sample} {kind} {droplet_id}: windows done", flush=True)
 
     out = FIGURES / "overview"
-    out.mkdir(parents=True, exist_ok=True)
     names = []
     suffix = "" if beta_mode == "fixed" else "_beta_bounded"
     labels = {k: f"{k}: {picks[k]}" for k in picks}
@@ -1219,14 +819,12 @@ def compare_xpcs_mesh_static(sample, db, refresh=False, beta_mode="fixed"):
 
     # c2(τ) and its fit at four rings
     rings = [0, 3, 7, 11]
-    ncols = len(MATCH_T)
-    fig, axs = plt.subplots(
-        len(rings),
-        ncols,
-        figsize=(2.6 * ncols, 2.2 * len(rings) + 0.8),
-        sharex=True,
+    fig, axs = plotting.panel_grid(
+        len(rings) * len(MATCH_T),
+        len(MATCH_T),
+        panel=(2.6, 2.2),
+        pad=(0, 0.8),
         sharey="row",
-        squeeze=False,
     )
     for j, target in enumerate(MATCH_T):
         for kind in picks:
@@ -1263,28 +861,20 @@ def compare_xpcs_mesh_static(sample, db, refresh=False, beta_mode="fixed"):
         ax.set_xlabel(r"$\tau$ (s)")
     legend(fig)
     fig.suptitle(suptitle, fontsize=10)
-    names.append(f"xpcs_mesh_vs_static_g2_{sample}{suffix}.png")
-    fig.savefig(out / names[-1], dpi=200, bbox_inches="tight")
-    plt.close(fig)
+    names.append(
+        plotting.save(fig, out / f"xpcs_mesh_vs_static_g2_{sample}{suffix}.png")
+    )
 
     # Γ(q) and τ(q), a panel per t/t*
-    nrows = math.ceil(len(MATCH_T) / 3)
     for quantity in ("gamma", "tau", "stretch"):
-        fig, axs = plt.subplots(
-            nrows,
-            3,
-            figsize=(3.6 * 3 + 0.4, 3.2 * nrows + 0.8),
-            sharex=True,
-            sharey=True,
-            squeeze=False,
-        )
+        fig, axs = plotting.panel_grid(len(MATCH_T), 3, pad=(0.4, 0.8))
         for ax, target in zip(axs.flat, MATCH_T, strict=False):
             anchor = None
             for kind in picks:
                 _, fit, entry = data[kind][target]
                 if fit is None:
                     continue
-                q = 10 * fit.q
+                q = fit.q_nm
                 ok = np.array(entry["resolved"])
                 if quantity == "gamma":
                     y, err = fit.gamma, fit.err_gamma
@@ -1332,29 +922,21 @@ def compare_xpcs_mesh_static(sample, db, refresh=False, beta_mode="fixed"):
                         ls=style,
                         lw=0.8,
                     )
-            ax.set_xscale("log")
-            ax.set_xlim(0.22, 0.9)
+            plotting.log_q_axis(ax, lim=(0.22, 0.9), ticks=(0.3, 0.5, 0.8))
             if quantity == "stretch":
                 ax.set_ylim(0, 2.1)
             else:
                 ax.set_yscale("log")
                 ax.set_ylim(*((1e3, 1e7) if quantity == "gamma" else (1e-7, 1e-3)))
-            ax.xaxis.set_major_locator(FixedLocator([0.3, 0.5, 0.8]))
-            ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}"))
-            ax.xaxis.set_minor_formatter(NullFormatter())
             ax.set_title(title(target), fontsize=7)
-        for ax in axs.flat[len(MATCH_T) :]:
-            ax.set_visible(False)
-        for ax in axs[-1]:
-            ax.set_xlabel(r"$q$ (nm$^{-1}$)")
-        for ax in axs[:, 0]:
-            ax.set_ylabel(
-                {
-                    "gamma": r"$\Gamma$ (s$^{-1}$)",
-                    "tau": r"$\tau = 1/\Gamma$ (s)",
-                    "stretch": r"KWW exponent $\alpha$",
-                }[quantity]
-            )
+        label_grid(
+            axs,
+            {
+                "gamma": r"$\Gamma$ (s$^{-1}$)",
+                "tau": r"$\tau = 1/\Gamma$ (s)",
+                "stretch": r"KWW exponent $\alpha$",
+            }[quantity],
+        )
         legend(fig)
         guide = (
             (
@@ -1374,9 +956,8 @@ def compare_xpcs_mesh_static(sample, db, refresh=False, beta_mode="fixed"):
             + r"$n$ from $\Gamma \propto q^n$ over filled points"
         )
         fig.suptitle(suptitle + "\n" + guide, fontsize=9)
-        names.append(f"xpcs_mesh_vs_static_{quantity}_{sample}{suffix}.png")
-        fig.savefig(out / names[-1], dpi=200, bbox_inches="tight")
-        plt.close(fig)
+        name = f"xpcs_mesh_vs_static_{quantity}_{sample}{suffix}.png"
+        names.append(plotting.save(fig, out / name))
 
     # fit parameters against t/t*
     mid = 5
@@ -1446,9 +1027,8 @@ def compare_xpcs_mesh_static(sample, db, refresh=False, beta_mode="fixed"):
     legend(fig, x=0.99)
     fig.suptitle(suptitle, fontsize=10)
     fig.tight_layout()
-    names.append(f"xpcs_mesh_vs_static_params_{sample}{suffix}.png")
-    fig.savefig(out / names[-1], dpi=200, bbox_inches="tight")
-    plt.close(fig)
+    name = f"xpcs_mesh_vs_static_params_{sample}{suffix}.png"
+    names.append(plotting.save(fig, out / name))
     return names, record
 
 
@@ -1456,7 +1036,7 @@ def compare_xpcs_all(refresh=False, beta_mode="fixed"):
     "compare_xpcs_mesh_static() for every condition with both kinds; fits in one JSON."
     import damnit
 
-    db = damnit.Damnit(10400)
+    db = damnit.Damnit(PROPOSAL)
     written = []
     record = []
     for sample in CONDITIONS:
@@ -1481,7 +1061,7 @@ def compare_xpcs_all(refresh=False, beta_mode="fixed"):
                         if beta_mode == "fixed"
                         else "beta in [0, REFERENCE_BETA p84], lost = 1 - beta/beta_ref"
                     )
-                    + ", weighted by sigma, bounded (fit_window); resolved = no "
+                    + ", weighted by sigma, bounded (analysis.xpcs.kww); resolved = no "
                     "parameter at a bound, 1/Gamma inside the lags, "
                     "sigma_Gamma < Gamma",
                     "beta_mode": beta_mode,
@@ -1526,17 +1106,10 @@ def main(argv=None):
         help="only make V/V0 against t/t* for every droplet of SAMPLE",
     )
     args = parser.parse_args(argv)
-    unknown = set(args.ids) - {d[0] for d in DROPLETS}
+    unknown = set(args.ids) - {d.id for d in DROPLETS if d.figures}
     if unknown:
         parser.error(f"unknown droplet ids: {sorted(unknown)}")
-    kpsewhich = shutil.which("kpsewhich")
-    found = (
-        kpsewhich
-        and subprocess.run(
-            [kpsewhich, "type1cm.sty"], capture_output=True
-        ).stdout.strip()
-    )
-    if not found:
+    if not plotting.latex_ok():
         parser.error(
             "LaTeX without type1cm.sty on PATH; run `module load texlive/2022` first"
         )
@@ -1552,7 +1125,7 @@ def main(argv=None):
     results = []
     if not args.overview_only:
         for droplet in DROPLETS:
-            if args.ids and droplet[0] not in args.ids:
+            if not droplet.figures or (args.ids and droplet.id not in args.ids):
                 continue
             results.append(run_one(droplet))
             r = results[-1]

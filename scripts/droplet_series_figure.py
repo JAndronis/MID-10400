@@ -32,14 +32,15 @@ import json
 from pathlib import Path
 
 import numpy as np
-from damnit_saxs_figures import DROPLETS, folder, kept_runs
+from _common import FIGURES
 
-PROPOSAL = 10400
+from analysis.droplets import PROPOSAL, by_id
+from analysis.plotting import normalised_curve
+
 # The ROI `droplet_fit` fits in (src/amore/context.py), so the insets show what the
 # volume was measured on.
 CAMERA_ROI = np.s_[80:230, 200:400]
-# the notebook's NORMALISE window and plotted q range (damnit_saxs.ipynb)
-NORM_Q = (0.80, 0.95)
+# the notebook's plotted q range (damnit_saxs.ipynb)
 Q_RANGE = (0.2, 1.0)
 # The six points of the CoSAXS figure (JPCL manuscript, Fig. 1a: 50 mg/ml ferritin,
 # 3 w/v % PEG 6000), read off the plot at t = 276, 550, 711, 984, 1158 and 1401 s and
@@ -57,13 +58,6 @@ def pick_curves(curves, taus):
     if len(set(picked)) < len(picked):
         print("note: some requested t/t* share a nearest curve")
     return picked
-
-
-def normalised(curves, i):
-    """Curve `i` over its mean in NORM_Q, NaN below its q_min and where not positive."""
-    iq = curves.intensity.isel(curve=i)
-    iq = iq / iq.sel(q=slice(*NORM_Q)).mean()
-    return iq.where((iq.q >= float(curves.q_min[i])) & (iq > 0))
 
 
 def camera_frame(run, train_id):
@@ -123,7 +117,7 @@ def draw(tl, curves, picked, images, offset, destination):
     ax_v.text(0.95, 0.92, "(a)", transform=ax_v.transAxes, ha="right", fontsize=14)
 
     for k, i in enumerate(picked):
-        iq = normalised(curves, i) * offset**k
+        iq = normalised_curve(curves, i) * offset**k
         ax_q.loglog(
             iq.q,
             iq,
@@ -144,7 +138,7 @@ def draw(tl, curves, picked, images, offset, destination):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("droplet", help="series id from damnit_saxs_figures, e.g. s443")
+    parser.add_argument("droplet", help="droplet id from analysis.droplets, e.g. s443")
     parser.add_argument(
         "--tau",
         type=float,
@@ -161,8 +155,8 @@ def main(argv=None):
 
     from analysis import cache
 
-    (droplet,) = [d for d in DROPLETS if d[0] == args.droplet]
-    out_dir = folder(droplet)
+    droplet = by_id(args.droplet)
+    out_dir = FIGURES / "droplets" / droplet.name
     curves_path = out_dir / "curves.nc"
     if not curves_path.exists():
         raise SystemExit(
@@ -170,11 +164,11 @@ def main(argv=None):
             f"{args.droplet} first"
         )
     curves = xr.load_dataset(curves_path)
-    runs = kept_runs(droplet)
+    runs = droplet.kept_runs
     if list(curves.attrs["droplet_runs"]) != list(runs):
         raise SystemExit(
             f"{curves_path} was made from runs {curves.attrs['droplet_runs']}, "
-            f"damnit_saxs_figures lists {runs}: remake it"
+            f"analysis.droplets lists {runs}: remake it"
         )
 
     tl = cache.droplet_timeline(runs, damnit.Damnit(PROPOSAL))

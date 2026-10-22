@@ -35,9 +35,12 @@ __all__ = [
     "DEFAULT_CACHE_DIR",
     "detector_sums",
     "droplet_timeline",
+    "file_source",
     "pool_g2",
     "saxs_run",
+    "stale",
     "waxs_run",
+    "write_dataset",
     "xpcs_run",
 ]
 
@@ -53,12 +56,20 @@ SUM_CHUNK = 5
 N_MODULES, MODULE_SHAPE = 16, (512, 128)
 
 
-def _normalised(obj):
-    """`obj` after a JSON round trip, for comparing with the stored attrs."""
-    return json.loads(json.dumps(obj, sort_keys=True))
+def stale(attrs, **expected) -> list[str]:
+    """The keys of `expected` whose value differs from the JSON stored under the
+    same key in `attrs` (a file's attributes, read inside its ``with`` block,
+    CLAUDE.md pitfall 13). A key missing from `attrs` is stale."""
+    return [
+        key
+        for key, value in expected.items()
+        if json.loads(attrs.get(key, "null"))
+        != json.loads(json.dumps(value, sort_keys=True))
+    ]
 
 
-def _source(path) -> dict:
+def file_source(path) -> dict:
+    """What identifies a source file's version: its path, size and mtime."""
     stat = os.stat(path)
     return {"path": str(path), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
 
@@ -74,15 +85,14 @@ def _load(path: Path, inputs: dict, sources: list) -> xr.Dataset | None:
         return None
     with xr.open_dataset(path, engine="h5netcdf") as ds:
         # read every attribute inside the block (CLAUDE.md pitfall 13)
-        current = (
-            int(ds.attrs.get("cache_version", -1)) == CACHE_VERSION
-            and json.loads(ds.attrs.get("inputs", "null")) == _normalised(inputs)
-            and json.loads(ds.attrs.get("sources", "null")) == _normalised(sources)
+        current = int(ds.attrs.get("cache_version", -1)) == CACHE_VERSION and not (
+            stale(ds.attrs, inputs=inputs, sources=sources)
         )
         return ds.load() if current else None
 
 
-def _write(ds: xr.Dataset, path: Path) -> None:
+def write_dataset(ds: xr.Dataset, path: Path) -> None:
+    """Write `ds` under a temporary name and rename it into place."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     try:
@@ -246,7 +256,7 @@ def saxs_run(
         "n_pulses": n_pulses,
         **composition,
     }
-    sources = [_source(db[r].file) for r in sorted({run_nr, v0_run})]
+    sources = [file_source(db[r].file) for r in sorted({run_nr, v0_run})]
     path = _cache_path(cache_dir, f"saxs_r{run_nr:04d}", inputs)
     if not refresh and (cached := _load(path, inputs, sources)) is not None:
         return cached
@@ -284,7 +294,7 @@ def saxs_run(
         v0_run=v0_run,
         **droplet,
     )
-    _write(ds, path)
+    write_dataset(ds, path)
     return ds
 
 
@@ -448,7 +458,7 @@ def waxs_run(
         "method": method if combine else None,
         **composition,
     }
-    sources = [_source(db[r].file) for r in sorted({run_nr, v0_run})]
+    sources = [file_source(db[r].file) for r in sorted({run_nr, v0_run})]
     stem = f"waxs_r{run_nr:04d}_{'combined' if combine else 'split'}"
     path = _cache_path(cache_dir, stem, inputs)
     if not refresh and (cached := _load(path, inputs, sources)) is not None:
@@ -504,7 +514,7 @@ def waxs_run(
         **droplet,
         **attrs,
     )
-    _write(ds, path)
+    write_dataset(ds, path)
     return ds if combine else _split(ds)
 
 
@@ -715,8 +725,8 @@ def xpcs_run(
         "layout": 2,
         **composition,
     }
-    sources = [_source(results_file)]
-    sources += [_source(db[r].file) for r in sorted({run_nr, v0_run})]
+    sources = [file_source(results_file)]
+    sources += [file_source(db[r].file) for r in sorted({run_nr, v0_run})]
     path = _cache_path(cache_dir, f"xpcs_r{run_nr:04d}_{averaging}", inputs)
     if not refresh and (cached := _load(path, inputs, sources)) is not None:
         return cached
@@ -788,7 +798,7 @@ def xpcs_run(
         **identity,
         **droplet,
     )
-    _write(ds, path)
+    write_dataset(ds, path)
     return ds
 
 
@@ -829,7 +839,7 @@ def droplet_timeline(
         "t_star": t_star if isinstance(t_star, str) else float(t_star),
         "t_star_guess": None if t_star_guess is None else float(t_star_guess),
     }
-    sources = [_source(db[r].file) for r in runs]
+    sources = [file_source(db[r].file) for r in runs]
     path = _cache_path(cache_dir, f"timeline_r{runs[0]:04d}-r{runs[-1]:04d}", inputs)
     if not refresh and (cached := _load(path, inputs, sources)) is not None:
         return cached
@@ -880,7 +890,7 @@ def droplet_timeline(
         t_star_s=chosen,
         t_star_source="override" if not isinstance(t_star, str) else t_star,
     )
-    _write(tl, path)
+    write_dataset(tl, path)
     return tl
 
 
@@ -1020,5 +1030,5 @@ def detector_sums(
         n_frames=n_frames,
         label=label,
     )
-    _write(ds, path)
+    write_dataset(ds, path)
     return ds

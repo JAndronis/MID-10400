@@ -211,7 +211,7 @@ def train_signals(
     """
     import xarray as xr
 
-    from analysis.cache import _attrs, _cache_path, _load, _source, _write
+    from analysis.cache import _attrs, _cache_path, _load, file_source, write_dataset
     from analysis.diagnostics.curves import per_train_flux
 
     path = damnit_file(int(run), Path(damnit_root), proposal)
@@ -222,7 +222,7 @@ def train_signals(
         "mid_band_nm": list(MID_BAND_NM),
         "waxs_ring_nm": list(WAXS_RING_NM),
     }
-    sources = [_source(path)]
+    sources = [file_source(path)]
     cached = None
     if cache_dir is not None:
         cached = _cache_path(cache_dir, f"signals_r{int(run):04d}", inputs)
@@ -261,7 +261,7 @@ def train_signals(
         run=int(run),
     )
     if cached is not None:
-        _write(ds, cached)
+        write_dataset(ds, cached)
     return ds
 
 

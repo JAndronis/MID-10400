@@ -1,4 +1,4 @@
-"""What the scripts' JSON reports share: a comparable header and where they go.
+"""What the scripts share: where figures go, and a comparable header for JSON reports.
 
 Not part of the package: these run as ``python scripts/<name>.py``, which puts
 this directory on ``sys.path``.
@@ -18,11 +18,18 @@ from typing import Any
 from analysis.threadenv import THREAD_ENV
 
 __all__ = [
+    "FIGURES",
+    "REPO",
     "git_commit",
     "report_header",
     "stamp",
     "write_report",
 ]
+
+
+REPO = Path(__file__).resolve().parents[1]
+#: The figure scripts' output, one folder per droplet (gitignored).
+FIGURES = REPO / "figures"
 
 
 def git_commit() -> str:

@@ -1,6 +1,6 @@
 """Make the XPCS figures of every droplet after r240, one folder per droplet.
 
-The droplets are scripts/damnit_saxs_figures.py's (`DROPLETS`, the same runs left out),
+The droplets are `analysis.droplets.DROPLETS` with ``figures`` set,
 and each gets ``figures/droplets_xpcs/<id>_<sample>_r<first>-<last>/``, named as its
 SAXS folder. A droplet's usable hit trains (every train of a static run that hit the
 droplet, the "on" trains of a mesh run) are split into contiguous t/t* windows
@@ -12,10 +12,9 @@ The pooled windows are saved in the droplet's folder (``xpcs_windows.nc``, with 
 they were made from), so a refit or a new figure reads them in seconds; a file made
 from other inputs is refused, ``--refresh`` pools again.
 
-Each ring's baseline-subtracted c2 is fitted with the mesh-vs-static comparison's
-`damnit_saxs_figures.fit_window`: a KWW ``β exp(−2(Γτ)^α) + b`` with β fixed at the
-ring's reference contrast (`analysis.triage.xpcs.REFERENCE_BETA`) and Γ, α, b free, so
-the two scripts give the same numbers for the same trains. Every fitted ring is drawn
+Each ring's baseline-subtracted c2 is fitted with `analysis.xpcs.kww.fit_rings`: a KWW
+``β exp(−2(Γτ)^α) + b`` with β fixed at the ring's reference contrast
+(`analysis.triage.xpcs.REFERENCE_BETA`) and Γ, α, b free. Every fitted ring is drawn
 as (c2 − b)/β_ref; a ring is "resolved" when no parameter sits at a bound, 1/Γ lies
 inside the lags and σ_Γ < Γ, and only resolved rings enter n, D and the mean α.
 
@@ -37,9 +36,9 @@ Per droplet:
 ``xpcs_windows.nc``
     the pooled g2 (c2, sigma, g2, baseline) and two-time c2 of every window
 
-With ``--matched``, each condition's droplets side by side at the SAXS script's
-matched t/t* instead (MATCH_T ± MATCH_TOLERANCE, mesh and static apart, saved per
-droplet as ``xpcs_windows_matched.nc``), into ``figures/overview/``:
+With ``--matched``, each condition's droplets side by side at matched t/t* instead
+(MATCH_T ± MATCH_TOLERANCE, mesh and static apart, saved per droplet as
+``xpcs_windows_matched.nc``), into ``figures/overview/``:
 ``xpcs_matched_tstar_<sample>[_mesh]_{g2,gamma,params}.png`` and
 ``xpcs_matched_tstar_fits.json``.
 
@@ -58,34 +57,26 @@ import argparse
 import datetime
 import json
 import math
-import shutil
 import subprocess
 import sys
 import time
 import traceback
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from damnit_saxs_figures import (  # noqa: E402
+from _common import FIGURES, REPO
+
+from analysis import plotting
+from analysis.droplets import (
     CONDITIONS,
-    DROPLET_COLOURS,
     DROPLETS,
-    FIGURES,
     MATCH_T,
     MATCH_TOLERANCE,
-    MESH_DROPLETS,
-    REPO,
-    XPCS_GAMMA_BOUNDS,
-    XPCS_STRETCH_BOUNDS,
-    fit_window,
-    folder,
-    group_suffix,
-    group_title,
+    PROPOSAL,
+    condition_title,
     groups,
-    kept_runs,
 )
+from analysis.plotting import DROPLET_COLOURS
+from analysis.xpcs.kww import BASE_BOUNDS, GAMMA_BOUNDS, STRETCH_BOUNDS, fit_rings
 
-PROPOSAL = 10400
 # t/t* bin width (user, 2026-10-21): the SAXS blocks are 0.13-0.18 apart, so a window
 # pools one to two of them
 WINDOW_WIDTH = 0.25
@@ -98,7 +89,7 @@ Q_CMAP_RANGE = (0.0, 0.85)
 
 
 def outdir(droplet):
-    return FIGURES / "droplets_xpcs" / folder(droplet).name
+    return FIGURES / "droplets_xpcs" / droplet.name
 
 
 def load_droplet(droplet, db):
@@ -112,24 +103,14 @@ def load_droplet(droplet, db):
 
     from analysis import cache
     from analysis.common.status import FrameStatus
-    from analysis.utils import droplet_composition
     from analysis.xpcs.damnit import result_file
 
-    droplet_id, _, _, _, peg = droplet
-    runs = kept_runs(droplet)
+    droplet_id = droplet.id
+    runs = droplet.kept_runs
     tl = cache.droplet_timeline(runs, db)
     t_star = float(tl.attrs["t_star_s"])
     tau = tl.elapsed_s / t_star
-    conc = xr.DataArray(
-        droplet_composition(
-            tl.volume_mm3,
-            tl.volume_mm3[0].values,
-            ferritin_mg_per_ml_initial=50.0,
-            peg_percent_wv_initial=peg,
-        ).ferritin_mg_per_ml,
-        dims="trainId",
-        coords={"trainId": tl.trainId},
-    )
+    conc = droplet.ferritin_mg_per_ml(tl)
     terms = (
         "status",
         "train_g2_num",
@@ -166,7 +147,7 @@ def load_droplet(droplet, db):
         "frames_per_train": {str(r): n for r, n in frames.items()},
         "period_s": float(next(iter(parts.values())).attrs["period_s"]),
     }
-    saxs = folder(droplet) / "curves.nc"
+    saxs = FIGURES / "droplets" / droplet.name / "curves.nc"
     if saxs.exists():
         saxs_t_star = float(xr.load_dataset(saxs).attrs["t_star_s"])
         info["saxs_t_star_s"] = saxs_t_star
@@ -289,28 +270,24 @@ def saved_windows(droplet, db, refresh=False, matched=False):
     from analysis import cache
     from analysis.xpcs.damnit import result_file
 
-    droplet_id = droplet[0]
-    runs = kept_runs(droplet)
+    droplet_id = droplet.id
+    runs = droplet.kept_runs
     inputs = {
         "schema": WINDOWS_SCHEMA,
         "window_width": WINDOW_WIDTH,
         "runs": runs,
-        "peg_percent_wv": droplet[4],
+        "peg_percent_wv": droplet.peg_percent_wv,
         "cache_version": cache.CACHE_VERSION,
     }
     if matched:
         inputs |= {"match_t": list(MATCH_T), "match_tolerance": MATCH_TOLERANCE}
-    sources = [cache._source(result_file(PROPOSAL, r)) for r in runs]
-    sources += [cache._source(db[r].file) for r in runs]
+    sources = [cache.file_source(result_file(PROPOSAL, r)) for r in runs]
+    sources += [cache.file_source(db[r].file) for r in runs]
     path = outdir(droplet) / f"xpcs_windows{'_matched' if matched else ''}.nc"
     if path.exists() and not refresh:
         with xr.open_dataset(path, engine="h5netcdf") as ds:
             # every attribute read inside the block (CLAUDE.md pitfall 13)
-            stale = [
-                key
-                for key, now in (("inputs", inputs), ("sources", sources))
-                if json.loads(ds.attrs[key]) != cache._normalised(now)
-            ]
+            stale = cache.stale(ds.attrs, inputs=inputs, sources=sources)
             if stale:
                 raise ValueError(
                     f"{path} was made from other {' and '.join(stale)} than "
@@ -394,28 +371,17 @@ def saved_windows(droplet, db, refresh=False, matched=False):
         "description": "pooled g2 and two-time c2 of the hit trains of each t/t* "
         "window; see scripts/damnit_xpcs_figures.py saved_windows",
     }
-    cache._write(ds, path)
+    cache.write_dataset(ds, path)
     return windows, info
 
 
 def fit_windows(windows):
-    """`fit_window` (β fixed) on every window. Returns (record, g2, fit, ttc) per
-    window, the record extended by the fit's, and each ring's offset b, which
-    `fit_window` does not return: its curve is β_ref exp(−2(Γτ)^α) + b, so b is the
-    curve minus that term."""
-    import numpy as np
-
+    """`fit_rings` (β fixed) on every window. Returns (record, g2, fit, ttc) per
+    window, the record extended by the fit's summary."""
     out = []
     for record, g2, ttc in windows:
-        fit, fitted = fit_window(g2)
-        with np.errstate(invalid="ignore", over="ignore"):
-            decay = fit.beta[:, None] * np.exp(
-                -2 * (fit.gamma[:, None] * fit.tau[None, :]) ** fit.stretch[:, None]
-            )
-        fit.base = np.nanmean(fit.curve - decay, axis=1)
-        fit.q_nm = 10 * fit.q
-        fitted["base"] = fit.base.tolist()
-        out.append((record | fitted, g2, fit, ttc))
+        fit = fit_rings(g2)
+        out.append((record | fit.summary(), g2, fit, ttc))
     return out
 
 
@@ -435,22 +401,15 @@ def window_title(record):
 def make_figures(droplet, windows, info):
     """Every figure of one droplet into its folder. Returns the files written."""
     import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
     import numpy as np
-    import scienceplots  # noqa: F401  (registers the notebook's "science" style)
     from matplotlib.colors import Normalize
-    from matplotlib.ticker import FixedLocator, FuncFormatter, NullFormatter
 
-    plt.style.use("science")
-    droplet_id, sample = droplet[:2]
+    plt = plotting.pyplot()
     out = outdir(droplet)
-    runs = kept_runs(droplet)
-    mesh = droplet_id in MESH_DROPLETS
+    runs = droplet.kept_runs
     head = (
-        f"{droplet_id}: {CONDITIONS[sample]}, r{runs[0]}--{runs[-1]}"
-        + (" (mesh scans, hit trains)" if mesh else "")
+        f"{droplet.id}: {CONDITIONS[droplet.sample]}, r{runs[0]}--{runs[-1]}"
+        + (" (mesh scans, hit trains)" if droplet.mesh else "")
         + f", $t^*$ = {info['t_star_s']:.0f} s"
     )
     q_nm = windows[0][2].q_nm
@@ -483,9 +442,7 @@ def make_figures(droplet, windows, info):
     names = []
 
     def save(fig, name):
-        fig.savefig(out / name, dpi=200, bbox_inches="tight")
-        plt.close(fig)
-        names.append(name)
+        names.append(plotting.save(fig, out / name))
 
     def normalised(g2, fit, r):
         y = (g2.c2.values[r] - fit.base[r]) / fit.beta[r]
@@ -644,17 +601,14 @@ def make_figures(droplet, windows, info):
         row[0].set_ylim(1e3, 1e7)
         row[1].set_ylim(-0.1, 1.3)
         row[1].axhline(1, color="0.5", lw=0.6)
-        row[2].set_ylim(*XPCS_STRETCH_BOUNDS)
+        row[2].set_ylim(*STRETCH_BOUNDS)
         row[2].axhline(1, color="0.5", lw=0.6)
         row[0].set_ylabel(r"$\Gamma$ (s$^{-1}$)")
         row[1].set_ylabel(visible_label)
         row[2].set_ylabel(r"KWW $\alpha$")
         row[1].set_title(window_title(record), fontsize=7)
     for ax in axs[-1]:
-        ax.set_xscale("log")
-        ax.xaxis.set_major_locator(FixedLocator([0.2, 0.3, 0.5, 0.8]))
-        ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}"))
-        ax.xaxis.set_minor_formatter(NullFormatter())
+        plotting.log_q_axis(ax, lim=None, ticks=(0.2, 0.3, 0.5, 0.8))
         ax.set_xlabel(r"$q$ (nm$^{-1}$)")
     fig.suptitle(
         f"{head}\nKWW fit per ring, $\\beta$ fixed at $\\beta_\\mathrm{{ref}}$; "
@@ -743,7 +697,7 @@ def make_figures(droplet, windows, info):
     axs[0, 0].set_yscale("log")
     axs[0, 1].axhline(1, color="0.5", lw=0.6)
     axs[0, 2].axhline(1, color="0.5", lw=0.6)
-    axs[0, 2].set_ylim(0, XPCS_STRETCH_BOUNDS[1] * 1.1)
+    axs[0, 2].set_ylim(0, STRETCH_BOUNDS[1] * 1.1)
     style = {"color": "k", "marker": "o", "ms": 3, "lw": 0.6, "capsize": 2}
     axs[1, 0].errorbar(
         t,
@@ -789,7 +743,7 @@ def make_figures(droplet, windows, info):
 
 
 def run_one(droplet, db, refresh=False):
-    droplet_id, sample = droplet[:2]
+    droplet_id = droplet.id
     out = outdir(droplet)
     out.mkdir(parents=True, exist_ok=True)
     started = time.perf_counter()
@@ -803,9 +757,9 @@ def run_one(droplet, db, refresh=False):
             stale.unlink()
     record = {
         "id": droplet_id,
-        "sample": sample,
-        "runs": kept_runs(droplet),
-        "mesh_scan": droplet_id in MESH_DROPLETS,
+        "sample": droplet.sample,
+        "runs": droplet.kept_runs,
+        "mesh_scan": droplet.mesh,
         "made": datetime.datetime.now().isoformat(timespec="seconds"),
         "git": subprocess.run(
             ["git", "-C", str(REPO), "rev-parse", "--short", "HEAD"],
@@ -816,14 +770,14 @@ def run_one(droplet, db, refresh=False):
         "pooling": "every usable hit train in the window: g2 by "
         "analysis.cache.pool_g2, the two-time maps by summing each run's "
         "XpcsHits.pooled_sums",
-        "model": "damnit_saxs_figures.fit_window, beta fixed: c2 = beta_ref "
+        "model": "analysis.xpcs.kww.fit_rings, beta fixed: c2 = beta_ref "
         "exp(-2 (Gamma tau)^alpha) + b per ring, weighted by sigma, bounded; "
         "resolved = no parameter within AT_BOUND of a bound, 1/Gamma inside the "
-        "lags, sigma_Gamma < Gamma; b recovered from the fit's curve",
+        "lags, sigma_Gamma < Gamma",
         "bounds": {
-            "gamma_per_s": list(XPCS_GAMMA_BOUNDS),
-            "alpha": list(XPCS_STRETCH_BOUNDS),
-            "b": [-1, 1],
+            "gamma_per_s": list(GAMMA_BOUNDS),
+            "alpha": list(STRETCH_BOUNDS),
+            "b": list(BASE_BOUNDS),
         },
         **info,
         "windows": [w[0] for w in windows],
@@ -844,28 +798,22 @@ def matched(sample, mesh, db, refresh=False):
     """`sample`'s droplets (mesh or static) side by side at matched t/t*, as the SAXS
     script's ``saxs_matched_tstar_*``: per MATCH_T every usable hit train within
     MATCH_TOLERANCE pooled (`saved_windows(matched=True)`), each ring fitted by
-    `fit_window` (β fixed), a line per droplet in its DROPLET_COLOURS colour. Three
+    `fit_rings` (β fixed), a line per droplet in its DROPLET_COLOURS colour. Three
     figures into ``figures/overview/``: (c2 − b)/β_ref against τ at MATCHED_RINGS, a
     panel per (ring, t/t*); Γ(q), a panel per t/t*; and against t/t* the slope n of
     Γ ∝ qⁿ, D = Γ/q², the mean α and c2(τ₀)/β_ref at the lowest ring. Returns the
     files written and the windows' records."""
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
     import numpy as np
-    import scienceplots  # noqa: F401  (registers the notebook's "science" style)
-    from matplotlib.ticker import FixedLocator, FuncFormatter, NullFormatter
 
-    plt.style.use("science")
+    plt = plotting.pyplot()
     droplets = [
-        d for d in DROPLETS if d[1] == sample and (d[0] in MESH_DROPLETS) == mesh
+        d for d in DROPLETS if d.figures and (d.sample, d.mesh) == (sample, mesh)
     ]
     if not droplets:
         return [], []
     if len(droplets) > len(DROPLET_COLOURS):
         raise ValueError(
-            f"{len(droplets)} droplets in {group_title(sample, mesh)!r}, "
+            f"{len(droplets)} droplets in {condition_title(sample, mesh)!r}, "
             f"only {len(DROPLET_COLOURS)} colours"
         )
     data = []
@@ -875,7 +823,7 @@ def matched(sample, mesh, db, refresh=False):
         windows = {w[0]["t_target"]: w for w in fit_windows(pooled)}
         data.append((droplet, windows))
         for target in MATCH_T:
-            entry = {"sample": sample, "mesh_scan": mesh, "id": droplet[0]}
+            entry = {"sample": sample, "mesh_scan": mesh, "id": droplet.id}
             if target in windows:
                 entry |= windows[target][0]
             else:
@@ -884,15 +832,14 @@ def matched(sample, mesh, db, refresh=False):
                     "skipped": f"no hit train within {MATCH_TOLERANCE}",
                 }
             record.append(entry)
-        print(f"matched {sample}: {droplet[0]} fitted", flush=True)
-    colours = {d[0]: c for (d, _), c in zip(data, DROPLET_COLOURS, strict=False)}
-    labels = {d[0]: f"{d[0]}: r{kept_runs(d)[0]}-{kept_runs(d)[-1]}" for d, _ in data}
-    stem = f"xpcs_matched_tstar_{sample}{group_suffix(mesh)}"
+        print(f"matched {sample}: {droplet.id} fitted", flush=True)
+    colours = {d.id: c for (d, _), c in zip(data, DROPLET_COLOURS, strict=False)}
+    labels = {d.id: f"{d.id}: {d.run_label}" for d, _ in data}
+    stem = f"xpcs_matched_tstar_{sample}{'_mesh' if mesh else ''}"
     out = FIGURES / "overview"
-    out.mkdir(parents=True, exist_ok=True)
     names = []
     suptitle = (
-        f"{group_title(sample, mesh)}: XPCS at matched $t/t^*$ (hit trains within "
+        f"{condition_title(sample, mesh)}: XPCS at matched $t/t^*$ (hit trains within "
         f"$\\pm${MATCH_TOLERANCE:g} pooled; ferritin range per panel)"
     )
     unresolved = (
@@ -919,9 +866,7 @@ def matched(sample, mesh, db, refresh=False):
         )
 
     def save(fig, name):
-        fig.savefig(out / name, dpi=200, bbox_inches="tight")
-        plt.close(fig)
-        names.append(name)
+        names.append(plotting.save(fig, out / name))
 
     # (c2 - b)/β_ref at four rings, a panel per (ring, t/t*)
     q_nm = next(iter(next(w for _, w in data if w).values()))[2].q_nm
@@ -943,7 +888,7 @@ def matched(sample, mesh, db, refresh=False):
                 if not np.isfinite(fit.gamma[r]):
                     continue
                 ok = fit.resolved[r]
-                colour = colours[droplet[0]]
+                colour = colours[droplet.id]
                 axs[i, j].errorbar(
                     g2.tau,
                     (g2.c2.values[r] - fit.base[r]) / fit.beta[r],
@@ -996,7 +941,7 @@ def matched(sample, mesh, db, refresh=False):
                 continue
             fit = windows[target][2]
             ok = fit.resolved
-            colour = colours[droplet[0]]
+            colour = colours[droplet.id]
             for mask, face in ((ok, colour), (~ok, "none")):
                 ax.errorbar(
                     fit.q_nm[mask],
@@ -1022,13 +967,9 @@ def matched(sample, mesh, db, refresh=False):
                     ls=style,
                     lw=0.8,
                 )
-        ax.set_xscale("log")
+        plotting.log_q_axis(ax, lim=(0.22, 0.9), ticks=(0.3, 0.5, 0.8))
         ax.set_yscale("log")
-        ax.set_xlim(0.22, 0.9)
         ax.set_ylim(1e3, 3e7)
-        ax.xaxis.set_major_locator(FixedLocator([0.3, 0.5, 0.8]))
-        ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}"))
-        ax.xaxis.set_minor_formatter(NullFormatter())
         ax.set_title(title(target), fontsize=8)
     for ax in axs.flat[len(MATCH_T) :]:
         ax.set_visible(False)
@@ -1052,7 +993,7 @@ def matched(sample, mesh, db, refresh=False):
             continue
         t = np.array([r["t_over_tstar_mean"] for r in rows])
         style = {
-            "color": colours[droplet[0]],
+            "color": colours[droplet.id],
             "marker": "o",
             "ms": 3,
             "lw": 0.8,
@@ -1114,8 +1055,8 @@ def matched_all(db, refresh=False):
                     "tolerance": MATCH_TOLERANCE,
                     "pooling": "every usable hit train within the tolerance: "
                     "analysis.cache.pool_g2 over the lags the window's runs share",
-                    "model": "damnit_saxs_figures.fit_window, beta fixed at "
-                    "REFERENCE_BETA; b recovered from the fit's curve",
+                    "model": "analysis.xpcs.kww.fit_rings, beta fixed at "
+                    "REFERENCE_BETA",
                     "windows": record,
                 },
                 indent=1,
@@ -1139,17 +1080,10 @@ def main(argv=None):
         help="only the comparison of each condition's droplets at matched t/t*",
     )
     args = parser.parse_args(argv)
-    unknown = set(args.ids) - {d[0] for d in DROPLETS}
+    unknown = set(args.ids) - {d.id for d in DROPLETS if d.figures}
     if unknown:
         parser.error(f"unknown droplet ids: {sorted(unknown)}")
-    kpsewhich = shutil.which("kpsewhich")
-    found = (
-        kpsewhich
-        and subprocess.run(
-            [kpsewhich, "type1cm.sty"], capture_output=True
-        ).stdout.strip()
-    )
-    if not found:
+    if not plotting.latex_ok():
         parser.error(
             "LaTeX without type1cm.sty on PATH; run `module load texlive/2022` first"
         )
@@ -1162,13 +1096,13 @@ def main(argv=None):
         return 0
     results, failed = [], []
     for droplet in DROPLETS:
-        if args.ids and droplet[0] not in args.ids:
+        if not droplet.figures or (args.ids and droplet.id not in args.ids):
             continue
         try:
             results.append(run_one(droplet, db, args.refresh))
         except Exception:  # one droplet's failure must not stop the rest
-            failed.append(droplet[0])
-            print(f"{droplet[0]}: FAILED\n{traceback.format_exc()}", flush=True)
+            failed.append(droplet.id)
+            print(f"{droplet.id}: FAILED\n{traceback.format_exc()}", flush=True)
     index = FIGURES / "droplets_xpcs" / "index.json"
     previous = json.loads(index.read_text()) if index.exists() else []
     merged = {r["id"]: r for r in previous} | {r["id"]: r for r in results}
