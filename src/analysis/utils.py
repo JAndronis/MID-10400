@@ -11,7 +11,7 @@ from scipy.optimize import curve_fit
 from analysis.damnit_names import stored_in_file
 
 N_A: float = 6.02214076e23
- 
+
 M_APOFERRITIN: float = 481_000.0  # g/mol, horse spleen (Gilbert et al. 1987)
 V_BAR_APOFERRITIN: float = 0.738  # mL/g, 20 C
 M_FE: float = 55.845
@@ -43,8 +43,8 @@ DB_VARIABLES = Literal[
 
 def plot_saxs_series(dataset, ax, step=100, bg=None):
     q = dataset.q.values
-    for i in range(0, len(dataset.trainId)-step, step):
-        iq = dataset.isel(trainId=slice(i, i+step)).mean(["trainId", "pulseId"]).data
+    for i in range(0, len(dataset.trainId) - step, step):
+        iq = dataset.isel(trainId=slice(i, i + step)).mean(["trainId", "pulseId"]).data
         if bg is not None:
             iq -= bg
         ax.loglog(q, iq)
@@ -52,13 +52,15 @@ def plot_saxs_series(dataset, ax, step=100, bg=None):
 
 
 def read_intensity(run_nr, db, variable: DB_VARIABLES):
-    assert variable in get_args(DB_VARIABLES), f"Variable {variable} not in {DB_VARIABLES}"
+    assert variable in get_args(DB_VARIABLES), (
+        f"Variable {variable} not in {DB_VARIABLES}"
+    )
     file = db[run_nr].file
     return xr.open_dataset(file, group=stored_in_file(file, variable)).intensity
 
 
 def read_volume(run_nr, db):
-     return xr.open_dataset(db[run_nr].file, group="droplet_fit").volume
+    return xr.open_dataset(db[run_nr].file, group="droplet_fit").volume
 
 
 def get_train_timestamps(run_nr, db):
@@ -66,22 +68,22 @@ def get_train_timestamps(run_nr, db):
     ts = run.train_timestamps()
     return ts
 
-    
+
 def read_volume_series(run_series, db):
     v0 = xr.open_dataset(db[run_series[0]].file, group="droplet_fit").volume
     ts = get_train_timestamps(run_series[0], db)
-    v = v0.assign_coords(time = ("trainId", ts))
+    v = v0.assign_coords(time=("trainId", ts))
     for run in run_series[1:]:
         _v = xr.open_dataset(db[run].file, group="droplet_fit").volume
         run = ex.RunDirectory(f"/gpfs/exfel/exp/MID/202601/p010400/raw/r{run:04d}")
         ts = run.train_timestamps()
-        _v = _v.assign_coords(time = ("trainId", ts))
+        _v = _v.assign_coords(time=("trainId", ts))
         v = xr.concat([v, _v], dim="trainId")
     return v
 
-    
+
 def gauss(x, mu, sigma, a):
-    return a * np.exp(-(x-mu)**2/(2*sigma**2))
+    return a * np.exp(-((x - mu) ** 2) / (2 * sigma**2))
 
 
 class FerritinProperties(NamedTuple):
@@ -89,8 +91,8 @@ class FerritinProperties(NamedTuple):
     v_bar: float  # mL/g, mass-weighted shell + core
     iron_mass_fraction: float
     protein_mass_fraction: float  # apoferritin mass / whole-particle mass
- 
- 
+
+
 def holoferritin_properties(
     n_fe: float = 1800.0,
     *,
@@ -99,7 +101,7 @@ def holoferritin_properties(
     v_bar_apo: float = V_BAR_APOFERRITIN,
 ) -> FerritinProperties:
     """Effective properties of iron-loaded ferritin at a given mean core loading.
- 
+
     `n_fe` is the mean number of Fe atoms per molecule. Commercial horse spleen
     ferritin is typically 1600-2500; literature values span 1000-4500 and the
     distribution within one batch is broad. Measure it (ICP-MS, AAS, or A420/A280)
@@ -114,11 +116,11 @@ def holoferritin_properties(
         iron_mass_fraction=n_fe * M_FE / m_total,
         protein_mass_fraction=m_apo / m_total,
     )
- 
- 
+
+
 class DropletComposition(NamedTuple):
     """Arrays broadcast to the shape of `volume`; scalars for the last three fields."""
- 
+
     water_volume_fraction: NDArray[np.float64]
     water_mass_fraction: NDArray[np.float64]
     ferritin_mg_per_ml: NDArray[np.float64]  # whole-particle mass basis
@@ -131,8 +133,8 @@ class DropletComposition(NamedTuple):
     concentration_factor: NDArray[np.float64]
     volume_dry: float
     ferritin: FerritinProperties
- 
- 
+
+
 def droplet_composition(
     volume: ArrayLike,
     volume_initial: float,
@@ -146,7 +148,7 @@ def droplet_composition(
     rho_water: float = RHO_WATER_25C,
 ) -> DropletComposition:
     """Composition of a droplet that has evaporated from `volume_initial` to `volume`.
- 
+
     Parameters
     ----------
     volume, volume_initial
@@ -162,30 +164,30 @@ def droplet_composition(
     """
     v = np.asarray(volume, dtype=np.float64)
     fer = holoferritin_properties(n_fe)
- 
+
     c_fer0 = ferritin_mg_per_ml_initial * 1e-3  # g/mL, on the stated basis
     if ferritin_basis == "protein":
         c_fer0 /= fer.protein_mass_fraction  # convert to whole-particle mass
     c_peg0 = peg_percent_wv_initial * 10.0 * 1e-3  # g/mL
- 
+
     mass_ferritin = c_fer0 * volume_initial
     mass_peg = c_peg0 * volume_initial
     vol_ferritin_mass = mass_ferritin * fer.v_bar
     vol_peg = mass_peg * v_bar_peg
     volume_dry = float(vol_ferritin_mass + vol_peg)
- 
+
     n_particles = mass_ferritin / fer.molar_mass * N_A
     v_hs_ml = np.pi / 6.0 * (d_ferritin_nm * 1e-7) ** 3  # nm -> cm, cm^3 == mL
     vol_ferritin_hs = n_particles * v_hs_ml
- 
+
     v_safe = np.where(v >= volume_dry, v, np.nan)
     volume_water = v_safe - volume_dry
     mass_water = rho_water * volume_water
     factor = volume_initial / v_safe
- 
+
     phi_hs = vol_ferritin_hs / v_safe
     peg_nominal = peg_percent_wv_initial * 10.0 * factor
- 
+
     return DropletComposition(
         water_volume_fraction=volume_water / v_safe,
         water_mass_fraction=mass_water / (mass_water + mass_ferritin + mass_peg),
@@ -404,15 +406,15 @@ def droplet_scaling(
 def volume_to_deff_sq(V):
     """Effective sphere-equivalent diameter squared, from volume."""
     D_eff = (6.0 * V / np.pi) ** (1.0 / 3.0)
-    return D_eff ** 2
+    return D_eff**2
 
 
 def deff_sq_to_volume(D2):
     """Inverse of volume_to_deff_sq: back to volume from D_eff^2."""
     D_eff = np.sqrt(D2)
-    return (np.pi / 6.0) * D_eff ** 3
+    return (np.pi / 6.0) * D_eff**3
 
-    
+
 def piecewise_D2(t, D0_sq, k1, k2, t_star):
     """
     Continuous piecewise-linear D^2(t):
@@ -425,7 +427,7 @@ def piecewise_D2(t, D0_sq, k1, k2, t_star):
     branch2 = (D0_sq - k1 * t_star) - k2 * (t - t_star)
     return np.where(t <= t_star, branch1, branch2)
 
-    
+
 def fit_D2_law(t, V, t_star_guess=None, bounds=None):
     """
     t : array of times
@@ -438,24 +440,30 @@ def fit_D2_law(t, V, t_star_guess=None, bounds=None):
     if t_star_guess is None:
         t_star_guess = t[len(t) // 2]
 
-    p0 = [D2[0], 
-          (D2[0] - D2[len(D2)//2]) / (t_star_guess - t[0] + 1e-12),
-          1e-3,
-          t_star_guess]
+    p0 = [
+        D2[0],
+        (D2[0] - D2[len(D2) // 2]) / (t_star_guess - t[0] + 1e-12),
+        1e-3,
+        t_star_guess,
+    ]
 
     if bounds is None:
-        bounds = ([0, 0, -np.inf, t.min()],
-                  [np.inf, np.inf, np.inf, t.max()])
+        bounds = ([0, 0, -np.inf, t.min()], [np.inf, np.inf, np.inf, t.max()])
 
     popt, pcov = curve_fit(piecewise_D2, t, D2, p0=p0, bounds=bounds, maxfev=20000)
     return popt, pcov
 
 
-def style_plot(ax: plt.Axes = None, ylabel: str = r"$I(q)~$(a.u.)", xlabel: str = r"$q~$(nm$^{-1}$)", fig_legend: bool = False) -> None:
+def style_plot(
+    ax: plt.Axes = None,
+    ylabel: str = r"$I(q)~$(a.u.)",
+    xlabel: str = r"$q~$(nm$^{-1}$)",
+    fig_legend: bool = False,
+) -> None:
     ax.set_ylabel(ylabel, fontsize=14)
     ax.set_xlabel(xlabel, fontsize=14)
     handles, labels = ax.get_legend_handles_labels()
-    if len(handles)>=1 and len(labels)>=1:
+    if len(handles) >= 1 and len(labels) >= 1:
         if not fig_legend:
             ax.legend(handles, labels, fontsize=12)
         else:
@@ -467,9 +475,11 @@ def style_plot(ax: plt.Axes = None, ylabel: str = r"$I(q)~$(a.u.)", xlabel: str 
     ax.grid(which="minor", ls=":", alpha=0.1)
     return
 
-    
-def log_interpolate(orig_x:np.ndarray, orig_y:np.ndarray, bins=500) -> tuple[np.ndarray, np.ndarray]:
+
+def log_interpolate(
+    orig_x: np.ndarray, orig_y: np.ndarray, bins=500
+) -> tuple[np.ndarray, np.ndarray]:
     new_x_log = np.logspace(np.log10(orig_x.min()), np.log10(orig_x.max()), num=bins)
-    interpolator = interp1d(orig_x, orig_y, kind='linear')
+    interpolator = interp1d(orig_x, orig_y, kind="linear")
     new_y_log = interpolator(new_x_log)
     return new_x_log, new_y_log
