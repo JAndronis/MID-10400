@@ -4,8 +4,8 @@ Each droplet gets ``figures/droplets/saxs/<id>_<sample>_r<first>-<last>/``:
 ``curves.nc``, its buffer-subtracted I(q) with what made them, and two figures of
 them, ``saxs_subtracted_norm.png`` (normalised to the mean over q 0.80-0.95) and
 ``saxs_subtracted.png`` (per flux*path), coloured by t/t*. ``run.log`` holds the
-droplet's summary, or the traceback when it failed, and ``index.json`` beside the
-folders lists every droplet made.
+droplet's summary, or the traceback when it failed, ``run.json`` its status and
+what made it, and ``index.json`` beside the folders gathers every ``run.json``.
 
 A curve is the mean of N_AVG consecutive complete trains, CURVES_PER_RUN of them
 spread over each run. Every train is scaled per flux*path (`analysis.cache.saxs_run`)
@@ -44,7 +44,13 @@ shared environment:
     $PY scripts/damnit_saxs_figures.py                  # every droplet, then overviews
     $PY scripts/damnit_saxs_figures.py s443 s409        # some droplets, then overviews
     $PY scripts/damnit_saxs_figures.py --overview-only  # overviews from curves.nc
+    $PY scripts/damnit_saxs_figures.py --droplets-only s443  # no index, no overviews
     $PY scripts/damnit_saxs_figures.py --volumes ferritin50  # V/V0 against t/t*
+
+``--droplets-only`` writes nothing outside the droplets' own folders except the
+buffer figure, which it replaces in one rename, so droplets can run as parallel jobs
+(a Slurm array task each); an ``--overview-only`` after them writes ``index.json``
+and the overviews.
 
 The XPCS comparison of the same representatives is scripts/damnit_xpcs_figures.py
 --mesh-vs-static.
@@ -53,6 +59,8 @@ The XPCS comparison of the same representatives is scripts/damnit_xpcs_figures.p
 import argparse
 import datetime
 import json
+import os
+import socket
 import subprocess
 import sys
 import time
@@ -183,7 +191,11 @@ def buffer_library(db):
     ax.set_title(f"buffer r{BUFFER_RUNS[0]}-{BUFFER_RUNS[-1]}", fontsize=14)
     style_plot(ax, ylabel=r"$I(q)$ per flux$\cdot$path")
     fig.tight_layout()
-    plotting.save(fig, droplets_dir("saxs") / BUFFER_NAME / "buffer_library.png", 300)
+    # parallel droplet jobs draw the same figure; a rename never leaves a torn file
+    path = droplets_dir("saxs") / BUFFER_NAME / "buffer_library.png"
+    tmp = path.with_name(f".{path.stem}.{socket.gethostname()}.{os.getpid()}.png")
+    plotting.save(fig, tmp, 300)
+    os.replace(tmp, path)
     return library
 
 
@@ -362,7 +374,7 @@ def run_one(droplet, db, buffer):
         status = "FAILED"
     out.mkdir(parents=True, exist_ok=True)
     (out / "run.log").write_text(log)
-    return {
+    record = {
         "id": droplet.id,
         "sample": droplet.sample,
         "folder": str(out.relative_to(REPO)),
@@ -375,6 +387,23 @@ def run_one(droplet, db, buffer):
         "status": status,
         "seconds": round(time.perf_counter() - started, 1),
     }
+    (out / "run.json").write_text(json.dumps(record, indent=1))
+    return record
+
+
+def write_index():
+    """``index.json``: every droplet's ``run.json``, over the entries of the index
+    already there for folders that have none."""
+    index = droplets_dir("saxs") / "index.json"
+    merged = (
+        {r["id"]: r for r in json.loads(index.read_text())} if index.exists() else {}
+    )
+    for path in droplets_dir("saxs").glob("*/run.json"):
+        record = json.loads(path.read_text())
+        merged[record["id"]] = record
+    index.write_text(
+        json.dumps(sorted(merged.values(), key=lambda r: r["id"]), indent=1)
+    )
 
 
 def load_curves(sample, mesh):
@@ -796,10 +825,16 @@ def volume_timelines(sample):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("ids", nargs="*", help="droplet ids (default: all)")
-    parser.add_argument(
+    only = parser.add_mutually_exclusive_group()
+    only.add_argument(
         "--overview-only",
         action="store_true",
-        help="only remake the overviews from existing curves.nc",
+        help="only remake index.json and the overviews from existing curves.nc",
+    )
+    only.add_argument(
+        "--droplets-only",
+        action="store_true",
+        help="only the droplets' folders, for parallel jobs: no index, no overviews",
     )
     parser.add_argument(
         "--volumes",
@@ -839,12 +874,10 @@ def main(argv=None):
                 f"{r['id']}: {r['status']} in {r['seconds']:.0f} s -> {r['folder']}",
                 flush=True,
             )
-        index = droplets_dir("saxs") / "index.json"
-        previous = json.loads(index.read_text()) if index.exists() else []
-        merged = {r["id"]: r for r in previous} | {r["id"]: r for r in results}
-        index.write_text(
-            json.dumps(sorted(merged.values(), key=lambda r: r["id"]), indent=1)
-        )
+    status = 0 if all(r["status"] == "ok" for r in results) else 1
+    if args.droplets_only:
+        return status
+    write_index()
     for sample, mesh in groups():
         for name in overview(sample, mesh):
             print(f"overview: {shown('saxs', name)}", flush=True)
@@ -852,7 +885,7 @@ def main(argv=None):
         print(f"matched t/t*: {shown('saxs_matched_tstar', name)}", flush=True)
     for name in compare_all():
         print(f"mesh vs static: {shown('saxs_mesh_vs_static', name)}", flush=True)
-    return 0 if all(r["status"] == "ok" for r in results) else 1
+    return status
 
 
 if __name__ == "__main__":
