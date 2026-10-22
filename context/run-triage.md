@@ -267,11 +267,11 @@ two window medians, and it is used for both sides of the boundary. A boundary al
 and any change of camera conditions, which the in-run null does not see.
 
 - **A run without a fit is a member, not a break**, if its class carries a droplet (static, mesh
-  or reference). r349 sits inside the r338–369 droplet the notebooks already treat as one.
+  or reference). r349 sits inside the r338–369 droplet `analysis.droplets` already treats as one.
   Calibration, dark and test runs are never members. r353–355 are calibration runs taken during
   that droplet; they are skipped without breaking it.
-- **A pause is not a break.** r378 → r379 drops from 0.79 to 0.21 mm³ across 16 minutes, and the
-  notebooks use r370–381 as one droplet.
+- **A pause is not a break.** r378 → r379 drops from 0.79 to 0.21 mm³ across 16 minutes, and
+  `analysis.droplets` uses r370–381 as one droplet.
 
 **In-run steps**, per run:
 
@@ -405,7 +405,7 @@ Results (`scripts/run_triage_classify_20261013T222916Z.json`):
 
 - **255 runs: 40 913 hits, 3834 edge, 161 861 off; 3 ambiguous** (r68, r69, r140). The median
   hit fraction is 12 %; p90 is 48 %.
-- **Checked against lowq_report's own rule on r318** (water 0.85–0.95 nm⁻¹ > 2× the median at the
+- **Checked against the water-band rule on r318** (water 0.85–0.95 nm⁻¹ > 2× the median at the
   lowest Z, an independent band): 256 of its 258 hits are ours, all 446 of our off trains are
   its misses, and the agreement is 99.6 % of 705 decided trains. At the upper Z, X spans
   1.48–2.25 mm (its rule: 1.49–2.25).
@@ -493,7 +493,7 @@ ambiguous). The scripts and their CSVs are in `figures/hitfinding/` (gitignored)
   train and keeps f 0.77.
 - **The run cannot pass yet.** Six runs (r318, r349, r356, r382, r423, r450) have no
   `agipd_saxs` in DAMNIT's per-run file today. r318's was rewritten on 2026-10-15. The r318
-  check against lowq_report is null as a result, so the run reports `passed: False`.
+  check against the water-band rule is null as a result, so the run reports `passed: False`.
 
 **Static runs (and reference runs)** are hits except a droplet out of the beam:
 `static_hits`, x more than 5 robust σ below a running 75th percentile over 301 trains (the keep
@@ -502,8 +502,8 @@ absence longer than 25 trains. 56 of 162 runs have such trains, 2557 in all: r46
 explosion), r477 200, r368 178, r438 and r452 148 each, r426 57. WAXS drops with them (z 23–392)
 except in r495.
 - The cross-check reports how far `w_t` agrees with the SAXS classes.
-- **Off-droplet sub-classes** follow `notebooks/lowq_report.ipynb` cell 17 (r318), extended to the
-  fly scan. Each off train stores `dist_mm`, the hexapod distance from the bounding box of the run's
+- **Off-droplet sub-classes** follow the water-band rule's groups on r318 (beam only at the lowest Z;
+  beside the droplet at the upper Z, outside the X range of its hits), extended to the fly scan. Each off train stores `dist_mm`, the hexapod distance from the bounding box of the run's
   `on` trains.
 - `beside` versus `beam_only` is decided in **T3**, at the measured `d_near` where the per-flux
   low-q background stops changing with `dist_mm` (§8 O1).
@@ -771,7 +771,7 @@ saxs-background-subtraction). The cost is measured on one run before the list is
 |---|---|---|
 | **T0** | this spec | reviewed by the user (done 2026-10-01, revised to §1's rule) |
 | **T1** | `triage.samples`, `triage.inventory`, `triage.series`; tests on a mock sqlite and mock DAMNIT files of real shape | every run classified with §3.1's counts and TB (raw total 994.8). Series reproduce r443–452, r464–466, r338–369 (r349 a member without a fit, calibration r353–355 skipped), r370–381 (across the r378→379 pause) and r308–337. §4.2's known cases: r143→144 fresh, and `volume_jump` in r463 and r466. These are checked by the script; the `increase`, `label_suspect` and `underpowered` boundaries are reported for review. **Passed 2026-10-01** |
-| **T2** | `triage.reduce`, `triage.classify`, `triage.xpcs`; `scripts/run_triage.py --phase reduce`; first on r114, r120, r130, r318, r370, r400, r410, r423, r425, r426, r450, then all runs | **XPCS:** the all-train g2 matches DAMNIT's `g2` at k ≤ 10 within σ_g2. The noise-check ratio ρ is 1 within the jackknife's ~10 % on the static acceptance runs (r423: 0.97). β(q) is measured with n_eligible ≥ 3 per plain ROI. The per-slice SNR is reported for every acceptance run, with r450 and r400 extractable. **Mesh:** r318's classes match lowq_report (`on` only at Z ≈ 177.6, X 1.54–2.24). **Bragg:** `z_star` flags ≤ 0.1 % of control trains and does flag r425/426, r114 and r130. **Cost:** per run, measured; it sets the sweep's workers (rule 4) and decides the §6 storage question |
+| **T2** | `triage.reduce`, `triage.classify`, `triage.xpcs`; `scripts/run_triage.py --phase reduce`; first on r114, r120, r130, r318, r370, r400, r410, r423, r425, r426, r450, then all runs | **XPCS:** the all-train g2 matches DAMNIT's `g2` at k ≤ 10 within σ_g2. The noise-check ratio ρ is 1 within the jackknife's ~10 % on the static acceptance runs (r423: 0.97). β(q) is measured with n_eligible ≥ 3 per plain ROI. The per-slice SNR is reported for every acceptance run, with r450 and r400 extractable. **Mesh:** r318's classes match the water-band rule (`on` only at Z ≈ 177.6, X 1.54–2.24). **Bragg:** `z_star` flags ≤ 0.1 % of control trains and does flag r425/426, r114 and r130. **Cost:** per run, measured; it sets the sweep's workers (rule 4) and decides the §6 storage question |
 | **T3** | background characterisation (§4.4 sub-classes, O1–O3, O8, the §7.1 list) | `d_near` measured; per-block background table; extraction list with measured cost |
 | **T4** | `triage.report`; CSV, JSON and markdown | every run has a tier, a kind and reasons; cumulative TB are monotone; tier rules unit-tested on a synthetic table |
 

@@ -722,7 +722,7 @@ properties of the data and stay final. Writing a window updates only its own row
 | `pixel_sums.window_sums(path, windows)` | the sum over those windows |
 | `pixel_sums.detector_sums(run, train_ids=None, *, windows=None)` | the same Dataset `analysis.cache.detector_sums` returns. `train_ids` must be exactly a union of whole windows; otherwise it raises and names the windows that cover them, rather than summing more trains than asked |
 
-Notebook switch: `cache.detector_sums(run, tids, label=…)` → `pixel_sums.detector_sums(run, tids)`.
+Caller switch: `cache.detector_sums(run, tids, label=…)` → `pixel_sums.detector_sums(run, tids)`.
 
 ### 15.5 Phases
 

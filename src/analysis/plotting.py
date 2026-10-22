@@ -1,4 +1,4 @@
-"""What the droplet figures share: the notebook's style, panel grids, colours, q axes.
+"""What the droplet figures share: their style, panel grids, colours, q axes.
 
 The "science" style sets text in LaTeX, and the system TeX on the Maxwell nodes lacks
 ``type1cm.sty``, so run ``module load texlive/2022`` first (`latex_ok` checks).
@@ -39,7 +39,7 @@ DROPLET_COLOURS = (
 )
 KIND_COLOURS = {"static": DROPLET_COLOURS[0], "mesh": DROPLET_COLOURS[1]}
 
-#: The SAXS notebook's normalisation window, nm⁻¹.
+#: The SAXS curves' normalisation window, nm⁻¹.
 NORM_Q = (0.80, 0.95)
 
 
@@ -55,7 +55,7 @@ def latex_ok() -> bool:
 
 
 def pyplot():
-    """``matplotlib.pyplot`` on the Agg backend with the notebook's "science" style."""
+    """``matplotlib.pyplot`` on the Agg backend with the "science" style."""
     import matplotlib
 
     matplotlib.use("Agg")

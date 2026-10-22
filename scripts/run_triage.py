@@ -20,7 +20,7 @@
 * droplet hits for every mesh, static and reference run (``analysis.triage.classify``):
   mesh train classes per attenuator-and-sample block, out-of-beam trains of the rest
 * each block's cut and each run's counts, flags and WAXS check, with their sources
-* checks: r318 against lowq_report's own hit rule, the runs that must come out
+* checks: r318 against the water-band hit rule, the runs that must come out
   ambiguous (r68-69, r140) and all-on (r309-311)
 
 The XPCS phase reads the hit-train results files and raw; the rest, DAMNIT and raw.
@@ -368,7 +368,7 @@ def _signals(run: int):
 
 
 def _r318_against_lowq(classes, tids) -> dict:
-    """lowq_report's own hit rule on r318, train by train, against our classes.
+    """The water-band hit rule on r318, train by train, against our classes.
 
     A train is a hit when its water band (0.85-0.95 nm^-1) per flux exceeds twice
     the band's median over the trains at the lowest Z.

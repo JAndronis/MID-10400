@@ -101,7 +101,7 @@ _PEG6K, _NO_PEG, _PEG1K = "ferritin50-peg6k", "ferritin50", "ferritin50-peg1k"
 #: Every droplet after r240, then those that only enter the V/V0 comparison. Left
 #: out: the silica references (r288, r382-385, r389), r463 (exploded) and the buffer
 #: r464-466 (it is the background). s289's attenuated runs and s402 (attenuator 0.6)
-#: have no flux correction in the SAXS notebook. The mesh droplets before r240 carry
+#: have no flux correction in the SAXS figures. The mesh droplets before r240 carry
 #: DAMNIT's labels, unchecked; s088, s093, s129, s134, s140 and s144 are left out
 #: because their D² fit finds no break (V/V0 0.55-1.6 at the fitted t*, or t* at the
 #: end of the data), so t/t* means nothing for them.

@@ -19,7 +19,6 @@ the XPCS keep rule is `context/run-triage.md` §4.6, the photon-statistics quali
   runs only.
 - Phase D (`*_frames_used` cells) passed 2026-10-14: §6.
 - Phase E (droplet videos, `analysis.camera`) passed 2026-10-14 on r0423, r318 and r0426: §7.
-- Phase F (`notebooks/diagnostics.ipynb`) is left to another session (user, 2026-10-14).
 - The DAMNIT layout (user, 2026-10-14): one preprocessing variable per detector kind reads
   proc; every other column reads its files (§8). The photon statistics come out of the
   `agipd_saxs` pass itself (`context/xpcs-quality.md` §7.2).

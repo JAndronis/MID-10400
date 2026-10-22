@@ -77,7 +77,6 @@ src/amore/              DAMNIT deployment directory (deliberately NOT packaged)
 
 scripts/                acceptance and probe scripts, run by hand on a cluster node
 tests/                  pytest suite (~480 tests), split common/ saxs/ waxs/
-notebooks/              exploratory notebooks (damnit, dask, waxs, extra-speckle masking)
 data/                   local exported detector slices and mask files for offline work (untracked)
 ```
 

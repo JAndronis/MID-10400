@@ -6,8 +6,9 @@ dist/
 wheels/
 *.egg-info
 
-# Jupyter
+# Jupyter: notebooks are personal and stay local
 .ipynb_checkpoints/
+notebooks/
 
 # Virtual environments
 .venv
@@ -34,7 +35,7 @@ data/
 # OS cruft
 .DS_Store
 
-# Figures made by the notebooks (figures/droplets/... per droplet); not committed
+# Figures made by the scripts (figures/droplets/<technique>/, figures/overview/<kind>/)
 figures/
 
 # Logs
