@@ -47,7 +47,6 @@ BASE_BOUNDS = (-1.0, 1.0)
 #: A fitted parameter this close to a bound, as a fraction of the bound interval
 #: (log Γ, α, b, β), marks the ring unresolved: the bound, not the data, set it.
 AT_BOUND = 0.01
-#: Fewer finite points than this and a ring is not fitted.
 MIN_POINTS = 6
 
 BetaMode = Literal["fixed", "bounded"]
