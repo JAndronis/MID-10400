@@ -1,24 +1,11 @@
-import sqlite3
 from datetime import timedelta
 
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 from analysis_helpers import plot_ellipse, process_droplet_batch
 from damnit.context import Cell, Group, Variable
 from extra.components import XGM, Scantool, XrayPulses
 from extra.data import by_id
-
-
-def last_valid_value(var_name, run_number):
-    with sqlite3.connect("runs.sqlite") as db:
-        df = pd.read_sql_query("SELECT * FROM runs", db)
-
-    df_sel = df[["run", var_name]]
-    df_sel = df_sel.loc[df_sel["run"] <= run_number]
-    index = df_sel[var_name].last_valid_index()
-    return df_sel[var_name].iloc[index] if index is not None else None
-
 
 # Run metadata
 

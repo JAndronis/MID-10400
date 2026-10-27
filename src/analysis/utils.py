@@ -308,7 +308,6 @@ def droplet_scaling(
     db,
     *,
     proposal: int = 10400,
-    trains=None,
     n_pulses: int = 155,
     v0_run: int | None = None,
     raw=None,
@@ -332,10 +331,6 @@ def droplet_scaling(
     ----------
     run_nr, db
         Run number and `damnit.Damnit` database (total_transmission, droplet_fit).
-    trains
-        Optional positional selection (int, slice, list) over the run's trains,
-        applied after aligning every input on trainId. The result keeps its trainId
-        labels, so arithmetic with an intensity grid aligns by label, not position.
     n_pulses
         Pulses per train the XGM is averaged over; see `train_pulse_energy`.
     v0_run
@@ -369,8 +364,6 @@ def droplet_scaling(
         }
     ).drop_vars("dim", errors="ignore")
     ds = ds.dropna("trainId", how="any")  # the Dataset aligned with an outer join
-    if trains is not None:
-        ds = ds.isel(trainId=[trains] if np.isscalar(trains) else trains)
 
     if v0_run is None or v0_run == run_nr:
         v0_fit = fit
