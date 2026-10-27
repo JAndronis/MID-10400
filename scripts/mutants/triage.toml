@@ -233,3 +233,59 @@ file = "src/analysis/triage/damnit.py"
 old = "if run is None or HEXAPOD not in run.all_sources:"
 new = "if True:"
 tests = ["tests/triage/test_hit_diagnostics.py"]
+
+[[mutant]]
+name = "override_last_run_excluded"
+file = "src/analysis/triage/samples.py"
+old = "return self.first <= run <= self.last"
+new = "return self.first <= run < self.last"
+tests = ["tests/triage/test_samples.py"]
+
+[[mutant]]
+name = "override_drops_background_role"
+file = "src/analysis/triage/samples.py"
+old = "return Sample(o.sample, o.source, label, o.background_role, o.exclude)"
+new = "return Sample(o.sample, o.source, label, None, o.exclude)"
+tests = ["tests/triage/test_samples.py"]
+
+[[mutant]]
+name = "label_not_canonicalised"
+file = "src/analysis/triage/samples.py"
+old = 'return Sample(CANONICAL_LABELS[label], "DAMNIT label", label)'
+new = 'return Sample(label, "DAMNIT label", label)'
+tests = ["tests/triage/test_samples.py"]
+
+[[mutant]]
+name = "dark_runs_not_calibration"
+file = "src/analysis/triage/inventory.py"
+old = 'if run_type.startswith(("Calibration", "Dark")):'
+new = 'if run_type.startswith("Calibration"):'
+tests = ["tests/triage/test_inventory.py"]
+
+[[mutant]]
+name = "reference_samples_not_recognised"
+file = "src/analysis/triage/inventory.py"
+old = "    if sample in REFERENCE_SAMPLES:\n        return \"reference\""
+new = "    if False:\n        return \"reference\""
+tests = ["tests/triage/test_inventory.py"]
+
+[[mutant]]
+name = "robust_sd_without_normal_factor"
+file = "src/analysis/triage/stats.py"
+old = "return float(MAD_TO_SIGMA * np.median(np.abs(x - np.median(x))))"
+new = "return float(np.median(np.abs(x - np.median(x))))"
+tests = ["tests/triage/test_stats.py"]
+
+[[mutant]]
+name = "z_cut_one_tail_always"
+file = "src/analysis/triage/stats.py"
+old = "tail = expected_false / n_tests / (2 if two_sided else 1)"
+new = "tail = expected_false / n_tests"
+tests = ["tests/triage/test_stats.py"]
+
+[[mutant]]
+name = "empty_band_ignores_window"
+file = "src/analysis/triage/stats.py"
+old = "x = np.sort(x[np.isfinite(x) & (x >= lo) & (x <= hi)])"
+new = "x = np.sort(x[np.isfinite(x)])"
+tests = ["tests/triage/test_stats.py"]
