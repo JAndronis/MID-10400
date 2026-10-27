@@ -54,7 +54,7 @@ file = "src/analysis/waxs/run.py"
 old = "    if cfg.read_noise_kev is not None:\n        return ErrorModel("
 new = "    if cfg.read_noise_kev is not None and classification.read_noise_kev is None:\n        return ErrorModel("
 tests = ["tests/waxs/test_waxs_run.py"]
-expect = "survived"  # sigma_read enters no stored number; wave 3 deletes the error model
+expect = "survived"  # sigma_read enters no stored number; deleting the model moves the WAXS config hash, the user decides
 
 [[mutant]]
 name = "waxs_label_mismatch_counted_as_refused"
