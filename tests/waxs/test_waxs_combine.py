@@ -184,44 +184,29 @@ def test_the_scaling_is_recorded_on_the_result():
 
 
 # ── the adapters ─────────────────────────────────────────────────────────────
-def test_mean_curve_from_a_per_cell_grid(cfg, mock_run_factory, tmp_path):
-    from analysis.waxs.run import run_jungfrau_waxs
-
-    mock, dc = mock_run_factory()
-    grid = run_jungfrau_waxs(
-        cfg, dc=dc, run_dir=mock.path, output_path=tmp_path / "c.h5", reduce="per_cell"
-    )
-    q, intensity, sigma = mean_curve(grid)
-    assert q.shape == intensity.shape == sigma.shape == (cfg.npt,)
+def test_mean_curve_from_a_per_cell_grid(finished):
+    done = finished()
+    q, intensity, sigma = mean_curve(done.grid)
+    assert q.shape == intensity.shape == sigma.shape == (done.cfg.npt,)
     assert np.isfinite(intensity).all()
 
 
-def test_mean_curve_from_pooled_carries_real_errors(cfg, mock_run_factory, tmp_path):
-    from analysis.waxs.run import run_jungfrau_waxs
+def test_mean_curve_from_pooled_carries_real_errors(finished):
+    from analysis.common.writer import pooled_per_train
 
-    mock, dc = mock_run_factory()
-    pooled = run_jungfrau_waxs(
-        cfg, dc=dc, run_dir=mock.path, output_path=tmp_path / "p.h5", reduce="pooled"
-    )
-    q, intensity, sigma = mean_curve(pooled)
+    q, intensity, sigma = mean_curve(pooled_per_train(finished().path))
     assert (sigma[intensity > 0] > 0).all()
 
 
-def test_combine_files_reads_two_finished_runs(
-    config_for_detector, mock_run_factory, tmp_path
-):
+def test_combine_files_reads_two_finished_runs(finished, tmp_path):
+    import shutil
+
     from analysis.waxs.combine import combine_files
-    from analysis.waxs.config import DETECTOR_MODNOS, DETECTOR_NAMES
-    from analysis.waxs.run import run_jungfrau_waxs
 
     paths = {}
     for detector in ("jf1", "jf2"):
-        cfg = config_for_detector(detector, output_root=str(tmp_path / detector))
-        mock, dc = mock_run_factory(
-            detector_name=DETECTOR_NAMES[detector], module=DETECTOR_MODNOS[detector]
-        )
-        run_jungfrau_waxs(cfg, dc=dc, run_dir=mock.path, reduce="none")
-        paths[detector] = cfg.output_file
+        paths[detector] = tmp_path / f"{detector}.h5"
+        shutil.copy2(finished(detector).path, paths[detector])
 
     combined, scaling = combine_files(paths["jf1"], paths["jf2"], min_bins=4)
     assert scaling.factor > 0

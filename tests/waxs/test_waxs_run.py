@@ -28,20 +28,18 @@ from analysis.waxs.run import run_jungfrau_waxs  # noqa: E402
 from analysis.waxs.selftest import SelfTestFailed  # noqa: E402
 
 
-def test_a_whole_run_integrates_and_returns_the_grid(cfg, mock_run_factory, tmp_path):
-    mock, dc = mock_run_factory()
-    grid = run(cfg, mock, dc, output_path=tmp_path / "run.h5")
+def test_a_whole_run_integrates_and_returns_the_grid(finished):
+    done = finished()
+    grid, mock, cfg = done.grid, done.mock, done.cfg
 
     assert grid.dims == ("trainId", "cellId", "q")
     assert grid.shape == (len(mock.train_ids), mock.rows_per_train, cfg.npt)
     assert (grid["n_frames"] == 1).all()
-    with h5py.File(tmp_path / "run.h5") as handle:
+    with h5py.File(done.path) as handle:
         assert (handle["frames/status"][:] == FrameStatus.OK).all()
 
 
-def test_each_row_holds_the_frame_its_memory_cell_labels(
-    cfg, mock_run_factory, tmp_path
-):
+def test_each_row_holds_the_frame_its_memory_cell_labels(finished):
     """The cell id comes from ``data.memoryCell``, never from array position.
 
     The mock stores cell 15 at position 0, as the real detectors do, and gives
@@ -49,9 +47,9 @@ def test_each_row_holds_the_frame_its_memory_cell_labels(
     its cell id lands on the wrong cell and carries that cell's neighbour's rate.
     """
     assert CELL_ORDER[0] == 15
-    mock, dc = mock_run_factory()
-    run(cfg, mock, dc, output_path=tmp_path / "id.h5", reduce="none")
-    with h5py.File(tmp_path / "id.h5") as handle:
+    done = finished()
+    mock = done.mock
+    with h5py.File(done.path) as handle:
         frames = handle["frames"]
         cells = frames["cellId"][:]
         photons = frames["n_photons"][:].astype(np.float64)
@@ -63,17 +61,14 @@ def test_each_row_holds_the_frame_its_memory_cell_labels(
         assert rate[mine] == pytest.approx(lit_rate(cell), rel=0.01), cell
 
 
-def test_a_fully_masked_frame_is_refused_counted_and_tolerated(
-    cfg, mock_run_factory, tmp_path
-):
+def test_a_fully_masked_frame_is_refused_counted_and_tolerated(cfg, finished, tmp_path):
     """A frame with no pixel left is ``DATA_CHECK_FAILED``, never a row of zeros.
 
     It is a property of the data, so by default the run finishes and records it.
     ``allow_data_check_failures=False`` makes the same frame stop the run.
     """
-    mock, dc = mock_run_factory(train_ids=(10000, 10001), dead_frame_train=10001)
-    path = tmp_path / "dead.h5"
-    grid = run(cfg, mock, dc, output_path=path)
+    done = finished(train_ids=(10000, 10001), dead_frame_train=10001)
+    mock, dc, path, grid = done.mock, done.dc, done.path, done.grid
 
     dead_cell = mock.lit_cells[0]
     with h5py.File(path) as handle:
@@ -96,13 +91,11 @@ def test_a_fully_masked_frame_is_refused_counted_and_tolerated(
         run(strict, mock, dc, output_path=tmp_path / "strict.h5")
 
 
-def test_provenance_records_what_was_decided(cfg, mock_run_factory, tmp_path):
-    import json
+def test_provenance_records_what_was_decided(finished):
+    done = finished()
+    cfg, mock = done.cfg, done.mock
 
-    mock, dc = mock_run_factory()
-    run(cfg, mock, dc, output_path=tmp_path / "prov.h5")
-
-    with h5py.File(tmp_path / "prov.h5") as handle:
+    with h5py.File(done.path) as handle:
         attrs = handle["provenance"].attrs
         assert attrs["detector"] == "jf1"
         error_model = json.loads(attrs["error_model"])
@@ -201,7 +194,7 @@ def test_an_extreme_pixel_no_longer_takes_the_run_down(
 def test_a_label_mismatch_still_takes_the_run_down(cfg, mock_run_factory, tmp_path):
     """Only the value check is tolerated: a train that cannot be addressed by
     label is not a property of the data the pass can record and move past."""
-    mock, dc = mock_run_factory(shuffled_cells_train=10001)
+    mock, dc = mock_run_factory(train_ids=(10000, 10001), shuffled_cells_train=10001)
     with pytest.raises(IncompleteRun, match="LABEL_MISMATCH"):
         run(cfg, mock, dc, output_path=tmp_path / "label.h5")
     # A frame that could not be placed is not one the value check refused.
@@ -283,7 +276,7 @@ def test_resume_processes_only_the_missing_blocks(cfg, mock_run_factory, tmp_pat
 
 
 def test_a_pinned_lit_set_that_the_data_contradicts_stops_the_run(
-    cfg, mock_run_factory, tmp_path
+    cfg, finished, tmp_path
 ):
     """Nothing is written when the pinned lit-cell pattern is wrong.
 
@@ -291,16 +284,15 @@ def test_a_pinned_lit_set_that_the_data_contradicts_stops_the_run(
     several readout patterns. ``(0, 1, 2, 3)`` is a pattern a JUNGFRAU can
     read, so only the pin catches it.
     """
-    mock, dc = mock_run_factory(lit_cells=(0, 1, 2, 3))
+    done = finished(lit_cells=(0, 1, 2, 3))
     pinned = dataclasses.replace(cfg, expected_lit_cells=EXPECTED_LIT_CELLS)
     with pytest.raises(UnexpectedLitCells, match="are lit"):
-        run(pinned, mock, dc, output_path=tmp_path / "lit.h5")
+        run(pinned, done.mock, done.dc, output_path=tmp_path / "lit.h5")
     assert not (tmp_path / "lit.h5").exists()
 
     # ...and unpinned the same run is integrated without complaint, because a
     # run that really does read four cells is not a broken run.
-    grid = run(cfg, mock, dc, output_path=tmp_path / "unpinned.h5")
-    assert grid.shape[1] == 4
+    assert done.grid.shape[1] == 4
 
 
 def test_a_run_with_no_lit_cell_returns_nothing_and_says_why(
@@ -313,7 +305,7 @@ def test_a_run_with_no_lit_cell_returns_nothing_and_says_why(
     """
     import logging
 
-    mock, dc = mock_run_factory(lit_cells=())
+    mock, dc = mock_run_factory(train_ids=(10000, 10001), lit_cells=())
     with caplog.at_level(logging.WARNING, logger="analysis.waxs.run"):
         assert run(cfg, mock, dc, output_path=tmp_path / "dark.h5") is None
 
@@ -334,7 +326,7 @@ def test_a_run_with_no_dark_cell_falls_back_to_the_configured_noise(
     """
     import json
 
-    mock, dc = mock_run_factory(lit_cells=tuple(range(16)))
+    mock, dc = mock_run_factory(train_ids=(10000, 10001), lit_cells=tuple(range(16)))
     everything = dataclasses.replace(cfg, expected_lit_cells=tuple(range(16)))
 
     grid = run(everything, mock, dc, output_path=tmp_path / "fallback.h5")
@@ -410,35 +402,19 @@ def test_the_pooled_reducer_is_reachable(cfg, mock_run_factory, tmp_path):
     assert np.isfinite(pooled["intensity"].values).all()
 
 
-def test_both_detectors_run_independently_into_their_own_files(
-    config_for_detector, mock_run_factory, tmp_path
-):
+def test_both_detectors_run_independently_into_their_own_files(finished):
     """Two detectors, two passes, two files, no crosstalk.
 
     The jf2 path differs in more than a name. Its source is
     ``MID_EXP_JF500K2/CORR/JNGFR02:daqOutput``, so it exercises ``first_modno``
     and its own PONI and mask.
     """
-    from analysis.waxs.config import DETECTOR_MODNOS, DETECTOR_NAMES
-    from analysis.waxs.run import run_jungfrau_waxs
-
     outputs = {}
     for detector in ("jf1", "jf2"):
-        cfg = config_for_detector(detector, output_root=str(tmp_path / detector))
-        mock, dc = mock_run_factory(
-            detector_name=DETECTOR_NAMES[detector],
-            module=DETECTOR_MODNOS[detector],
-        )
-        grid = run_jungfrau_waxs(
-            cfg,
-            dc=dc,
-            run_dir=mock.path,
-            pool_factory=InlinePool,
-            reduce="per_cell",
-        )
-        assert (grid["n_frames"] == 1).all()
-        assert cfg.output_file.exists()
-        outputs[detector] = (cfg, grid)
+        done = finished(detector)
+        assert (done.grid["n_frames"] == 1).all()
+        assert done.path.exists()
+        outputs[detector] = (done.cfg, done.grid)
 
     jf1_cfg, jf1_grid = outputs["jf1"]
     jf2_cfg, jf2_grid = outputs["jf2"]

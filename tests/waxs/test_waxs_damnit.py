@@ -15,18 +15,9 @@ from analysis.waxs.config import DETECTORS, default_poni_file  # noqa: E402
 
 
 @pytest.fixture
-def grid(cfg, mock_run_factory, tmp_path):
+def grid(finished):
     """A finished pass over the mock run, as the variable would return it."""
-    from analysis.waxs.run import run_jungfrau_waxs
-
-    mock, dc = mock_run_factory()
-    return run_jungfrau_waxs(
-        dataclasses.replace(cfg, n_workers=1),
-        dc=dc,
-        run_dir=mock.path,
-        output_path=tmp_path / "damnit.h5",
-        reduce="per_cell",
-    )
+    return finished().grid.copy(deep=True)
 
 
 def test_config_for_is_reachable_and_per_detector():
@@ -169,20 +160,9 @@ def test_keV_and_photon_grids_are_never_combined(grid):
 
 
 # ── the file readers ─────────────────────────────────────────────────────────
-def test_the_file_readers_return_the_same_thing_as_the_pass(
-    cfg, mock_run_factory, tmp_path
-):
-    from analysis.waxs.run import run_jungfrau_waxs
-
-    mock, dc = mock_run_factory()
-    path = tmp_path / "readers.h5"
-    returned = run_jungfrau_waxs(
-        dataclasses.replace(cfg, n_workers=1),
-        dc=dc,
-        run_dir=mock.path,
-        output_path=path,
-        reduce="per_cell",
-    )
+def test_the_file_readers_return_the_same_thing_as_the_pass(finished):
+    done = finished()
+    path, returned = done.path, done.grid
     from_file = damnit.per_cell_from_file(path)
     assert from_file.values == pytest.approx(returned.values)
 
@@ -213,7 +193,9 @@ def test_preprocess_reports_each_detector(monkeypatch, tmp_path):
     assert _colour(dark) == COLORS["good"]
 
 
-def test_the_reader_returns_the_grid_and_skips_a_missing_file(grid, cfg, tmp_path):
+def test_the_reader_returns_the_grid_and_skips_a_missing_file(
+    finished, grid, cfg, tmp_path
+):
     import shutil
 
     import xarray as xr
@@ -224,7 +206,7 @@ def test_the_reader_returns_the_grid_and_skips_a_missing_file(grid, cfg, tmp_pat
         cfg.proposal, cfg.run, cfg.detector, output_root=str(root)
     ).output_file
     target.parent.mkdir(parents=True)
-    shutil.copy2(tmp_path / "damnit.h5", target)
+    shutil.copy2(finished().path, target)
     got = damnit.jungfrau_waxs_from_file(
         cfg.proposal, cfg.run, cfg.detector, output_root=str(root)
     )
@@ -238,7 +220,7 @@ def test_the_reader_returns_the_grid_and_skips_a_missing_file(grid, cfg, tmp_pat
 
 @pytest.mark.parametrize("allow", [True, False])
 def test_a_refused_frame_is_tolerated_everywhere_or_nowhere(
-    cfg, mock_run_factory, tmp_path, monkeypatch, allow
+    cfg, finished, tmp_path, monkeypatch, allow
 ):
     """The pass, the per-detector reader and the preprocessing colour agree.
 
@@ -254,9 +236,10 @@ def test_a_refused_frame_is_tolerated_everywhere_or_nowhere(
     from analysis.common.writer import IncompleteRun
     from analysis.diagnostics.damnit import COLORS
 
-    mock, dc = mock_run_factory(train_ids=(10000, 10001), dead_frame_train=10001)
+    done = finished(train_ids=(10000, 10001), dead_frame_train=10001)
+    mock, dc = done.mock, done.dc
     path = tmp_path / "dead.h5"
-    run(cfg, mock, dc, output_path=path, reduce="none")
+    shutil.copy2(done.path, path)
 
     policy = dataclasses.replace(cfg, allow_data_check_failures=allow)
     root = tmp_path / "root"

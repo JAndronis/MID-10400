@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import shutil
 
 import h5py
 import numpy as np
@@ -46,6 +47,13 @@ def forbid_writing(monkeypatch):
     monkeypatch.setattr(worker, "process_block", forbidden)
 
 
+def copied(done, tmp_path):
+    """A private copy of a finished file, for a test that changes or stats it."""
+    path = tmp_path / "run.h5"
+    shutil.copy2(done.path, path)
+    return path
+
+
 def set_pyfai(path, version):
     with h5py.File(path, "r+") as handle:
         attrs = handle["provenance"].attrs
@@ -54,27 +62,26 @@ def set_pyfai(path, version):
 
 
 def test_a_complete_file_is_answered_from_and_nothing_is_written(
-    cfg, mock_run_factory, tmp_path, monkeypatch
+    cfg, finished, tmp_path, monkeypatch
 ):
-    mock, dc = mock_run_factory()
-    path = tmp_path / "run.h5"
-    first = run(cfg, mock, dc, output_path=path)
+    done = finished()
+    path = copied(done, tmp_path)
     assert is_complete(path, cfg)
     before = stats(tmp_path)
     forbid_writing(monkeypatch)
 
-    again = run(cfg, mock, dc, output_path=path)
+    again = run(cfg, done.mock, done.dc, output_path=path)
 
-    xr.testing.assert_identical(again, first)
+    xr.testing.assert_identical(again, done.grid)
     assert stats(tmp_path) == before
 
 
 def test_a_pin_the_stored_cells_contradict_still_refuses(
-    cfg, mock_run_factory, tmp_path, monkeypatch
+    cfg, finished, tmp_path, monkeypatch
 ):
-    mock, dc = mock_run_factory(lit_cells=(0, 1, 2, 3))
-    path = tmp_path / "run.h5"
-    run(cfg, mock, dc, output_path=path)
+    done = finished(lit_cells=(0, 1, 2, 3))
+    mock, dc = done.mock, done.dc
+    path = copied(done, tmp_path)
     before = stats(tmp_path)
     forbid_writing(monkeypatch)
 
@@ -84,10 +91,8 @@ def test_a_pin_the_stored_cells_contradict_still_refuses(
     assert stats(tmp_path) == before
 
 
-def test_another_pyfai_or_operator_is_not_complete(cfg, mock_run_factory, tmp_path):
-    mock, dc = mock_run_factory()
-    path = tmp_path / "run.h5"
-    run(cfg, mock, dc, output_path=path)
+def test_another_pyfai_or_operator_is_not_complete(cfg, finished, tmp_path):
+    path = copied(finished(), tmp_path)
     op = expected_operator(cfg)
     moved = is_complete(
         path, cfg, operator=dataclasses.replace(op, q=op.q * 1.01, sha256="b" * 64)
@@ -98,14 +103,10 @@ def test_another_pyfai_or_operator_is_not_complete(cfg, mock_run_factory, tmp_pa
     assert verdict.reasons == (f"written with pyFAI 2000.1.0 -> {_installed()}",)
 
 
-def test_a_float32_ulp_in_the_stored_solid_angle_is_complete(
-    cfg, mock_run_factory, tmp_path
-):
+def test_a_float32_ulp_in_the_stored_solid_angle_is_complete(cfg, finished, tmp_path):
     """The file stores omega as float32; a one-ULP float64 difference between
     node classes can round to a one-ULP float32 one."""
-    mock, dc = mock_run_factory()
-    path = tmp_path / "run.h5"
-    run(cfg, mock, dc, output_path=path)
+    path = copied(finished(), tmp_path)
     with h5py.File(path, "r+") as handle:
         omega = handle["operator/omega"][()]
         omega[::10] = np.nextafter(omega[::10], np.float32(np.inf))

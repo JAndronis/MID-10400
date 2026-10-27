@@ -2,8 +2,12 @@
 
 Everything here runs without Maxwell and without the real PONI or ``.edf``.
 The geometry is a synthetic PONI written to a temporary directory, as the SAXS
-fixtures use a synthetic ``AGIPD_1MGeometry``. The real-data gate that needs
-``data/`` is in ``test_waxs_real_frames.py`` and skips when the files are absent.
+fixtures use a synthetic ``AGIPD_1MGeometry``. The real-data gate that reads
+proc is in ``test_waxs_real_frames.py`` and skips off Maxwell.
+
+A whole pass over a mock run costs seconds, so the finished files are built
+once per session (:func:`finished`) and shared. A test that changes one copies
+it to its own ``tmp_path`` first.
 """
 
 from __future__ import annotations
@@ -56,28 +60,30 @@ def geometry_files(tmp_path_factory):
     return SimpleNamespace(poni=files["jf1"].poni, mask=files["jf1"].mask, **files)
 
 
+def _config(geometry_files, output_root, detector="jf1", **overrides):
+    """A small config for one detector, pointed at its own synthetic files."""
+    files = getattr(geometry_files, detector)
+    settings = {
+        "poni_file": str(files.poni),
+        "static_mask_file": str(files.mask),
+        "npt": NPT,
+        "trains_per_block": 2,
+        "n_workers": 2,
+        "cell_sample_trains": 2,
+        "selftest_frames": 2,
+        "output_root": str(output_root),
+    }
+    return JungfrauWaxsConfig(
+        proposal=10400, run=423, detector=detector, **(settings | overrides)
+    )
+
+
 @pytest.fixture
 def config_for_detector(geometry_files, tmp_path):
     """Build a config for either detector, pointed at its own synthetic files."""
-    import dataclasses
-
-    from analysis.waxs.config import config_for
 
     def build(detector, **overrides):
-        files = getattr(geometry_files, detector)
-        defaults = {
-            "poni_file": str(files.poni),
-            "static_mask_file": str(files.mask),
-            "npt": NPT,
-            "trains_per_block": 2,
-            "n_workers": 2,
-            "cell_sample_trains": 2,
-            "selftest_frames": 2,
-            "output_root": str(tmp_path / "out"),
-        }
-        return dataclasses.replace(
-            config_for(10400, 423, detector), **(defaults | overrides)
-        )
+        return _config(geometry_files, tmp_path / "out", detector, **overrides)
 
     return build
 
@@ -85,19 +91,43 @@ def config_for_detector(geometry_files, tmp_path):
 @pytest.fixture
 def cfg(geometry_files, tmp_path):
     """A config pointing at the synthetic geometry and a temporary output root."""
-    return JungfrauWaxsConfig(
-        proposal=10400,
-        run=423,
-        detector="jf1",
-        poni_file=str(geometry_files.poni),
-        static_mask_file=str(geometry_files.mask),
-        npt=NPT,
-        trains_per_block=2,
-        n_workers=2,
-        cell_sample_trains=2,
-        selftest_frames=2,
-        output_root=str(tmp_path / "out"),
-    )
+    return _config(geometry_files, tmp_path / "out")
+
+
+@pytest.fixture(scope="session")
+def finished(geometry_files, mock_run_factory, tmp_path_factory):
+    """Finished pass outputs, one per (detector, mock signature), shared read-only.
+
+    ``finished("jf1", **mock_kwargs)`` returns the config, the mock, its
+    ``DataCollection``, the file and the per-cell grid the pass returned. The
+    config's ``output_root`` is the session's, which ``config_hash`` leaves out,
+    so the file is complete for any test's ``cfg``. Copy the file before
+    changing it.
+    """
+    from waxs_harness import run
+
+    from analysis.waxs.config import DETECTOR_MODNOS, DETECTOR_NAMES
+
+    cache = {}
+
+    def build(detector="jf1", **mock_kwargs):
+        key = (detector, tuple(sorted(mock_kwargs.items())))
+        if key not in cache:
+            root = tmp_path_factory.mktemp(f"waxs-finished-{detector}")
+            cfg = _config(geometry_files, root, detector)
+            if detector != "jf1":
+                mock_kwargs = {
+                    "detector_name": DETECTOR_NAMES[detector],
+                    "module": DETECTOR_MODNOS[detector],
+                } | mock_kwargs
+            mock, dc = mock_run_factory(**mock_kwargs)
+            grid = run(cfg, mock, dc, output_path=cfg.output_file)
+            cache[key] = SimpleNamespace(
+                cfg=cfg, mock=mock, dc=dc, path=cfg.output_file, grid=grid
+            )
+        return cache[key]
+
+    return build
 
 
 @pytest.fixture(scope="session")
@@ -133,15 +163,21 @@ def counting(cfg):
     return PhotonCounting.from_config(cfg)
 
 
-@pytest.fixture
-def pipeline(cfg, mock_run_factory, operator):
-    """A mock run with its plan, operator and cell classification built."""
+@pytest.fixture(scope="session")
+def pipeline(geometry_files, mock_run_factory, tmp_path_factory):
+    """The default mock run with its plan, operator and cell classification built.
+
+    Session-scoped, so its config writes nowhere a test would look; tests pass
+    an explicit output path.
+    """
     from analysis.waxs.cells import CellAccumulator
     from analysis.waxs.integrate import ErrorModel
+    from analysis.waxs.operator import build_operator
     from analysis.waxs.plan import build_plan, open_detector
 
+    cfg = _config(geometry_files, tmp_path_factory.mktemp("waxs-pipeline"))
     run, dc = mock_run_factory()
-    op, ai = operator
+    op, ai = build_operator(cfg)
     det = open_detector(cfg, dc)
 
     accumulator = CellAccumulator(cfg, op.static_bad)

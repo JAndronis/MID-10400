@@ -47,9 +47,8 @@ def test_blocks_cover_every_row_exactly_once(pipeline):
     )
 
 
-def test_a_train_with_no_entry_is_no_frames(cfg, mock_run_factory, operator, status_of):
-    run, dc = mock_run_factory(zero_entry_trains=(10002,))
-    op, _ = operator
+def test_a_train_with_no_entry_is_no_frames(cfg, mock_run_factory, status_of):
+    run, dc = mock_run_factory(zero_entry_trains=(10002,), fill=False)
     det = open_detector(cfg, dc)
     plan = build_plan(cfg, LIT_CELLS, dc=dc, control_dc=dc, det=det)
 
@@ -58,10 +57,9 @@ def test_a_train_with_no_entry_is_no_frames(cfg, mock_run_factory, operator, sta
     assert plan.n_frames == (len(run.train_ids) - 1) * len(LIT_CELLS)
 
 
-def test_a_dropped_train_does_not_shift_rows(cfg, mock_run_factory, operator):
+def test_a_dropped_train_does_not_shift_rows(cfg, mock_run_factory):
     """The run has a gap, and the rows after it must not slide onto other trains."""
-    run, dc = mock_run_factory(train_ids=(10000, 10001, 10003, 10004))
-    op, _ = operator
+    run, dc = mock_run_factory(train_ids=(10000, 10001, 10003, 10004), fill=False)
     det = open_detector(cfg, dc)
     plan = build_plan(cfg, LIT_CELLS, dc=dc, control_dc=dc, det=det)
 
@@ -69,8 +67,8 @@ def test_a_dropped_train_does_not_shift_rows(cfg, mock_run_factory, operator):
     assert [t.first_row for t in plan.trains] == [0, 8, 16, 24]
 
 
-def test_a_block_never_straddles_a_gap(cfg, mock_run_factory, operator):
-    run, dc = mock_run_factory(zero_entry_trains=(10001,))
+def test_a_block_never_straddles_a_gap(cfg, mock_run_factory):
+    run, dc = mock_run_factory(zero_entry_trains=(10001,), fill=False)
     det = open_detector(cfg, dc)
     plan = build_plan(cfg, LIT_CELLS, dc=dc, control_dc=dc, det=det)
 

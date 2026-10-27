@@ -66,7 +66,7 @@ def test_a_repeated_memory_cell_is_a_label_mismatch(
     """A repeated cell id leaves rows unplaceable, and position is no substitute."""
     from analysis.waxs.plan import build_plan, open_detector
 
-    run, dc = mock_run_factory(shuffled_cells_train=10001)
+    run, dc = mock_run_factory(train_ids=(10000, 10001), shuffled_cells_train=10001)
     op, ai = operator
     det = open_detector(cfg, dc)
     plan = build_plan(cfg, LIT_CELLS, dc=dc, control_dc=dc, det=det)
