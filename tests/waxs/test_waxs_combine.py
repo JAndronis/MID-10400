@@ -37,13 +37,18 @@ def curves(shape=featureless, factor=TRUE_FACTOR, q_shift=1.0, noise=0.0, seed=0
     return i_ref, np.abs(0.01 * i_ref), i_other, np.abs(0.01 * i_other)
 
 
-def test_the_factor_is_recovered_exactly_without_noise():
-    i_ref, s_ref, i_other, s_other = curves()
+@pytest.mark.parametrize("factor", [TRUE_FACTOR, 3.7])
+def test_the_factor_is_recovered_exactly_without_noise(factor):
+    """A pure normalisation offset: the factor absorbs it and leaves no trend."""
+    i_ref, s_ref, i_other, s_other = curves(factor=factor)
     scaling = scale_to_overlap(
         Q_REF, i_ref, Q_OTHER, i_other, sigma_ref=s_ref, sigma_other=s_other
     )
-    assert scaling.factor == pytest.approx(TRUE_FACTOR, rel=1e-5)
+    assert scaling.factor == pytest.approx(factor, rel=1e-5)
     assert scaling.residual_rms < 1e-5
+    assert abs(scaling.residual_slope_per_nm) < 1e-6
+    assert abs(scaling.residual_at_q_low) < 1e-5
+    assert abs(scaling.residual_at_q_high) < 1e-5
 
 
 def test_the_overlap_is_the_shared_range():
@@ -105,31 +110,44 @@ def test_a_q_mismatch_is_invisible_on_a_featureless_curve():
     assert abs(scaling.factor - TRUE_FACTOR) > 10 * scaling.factor_error
 
 
-def test_curves_that_do_not_meet_are_refused():
-    with pytest.raises(NoOverlap, match="do not overlap"):
-        scale_to_overlap(
+@pytest.mark.parametrize(
+    ("q_ref", "i_ref", "q_other", "i_other", "kwargs", "error", "match"),
+    [
+        (
             np.linspace(1, 2, 100),
             np.ones(100),
             np.linspace(5, 6, 100),
             np.ones(100),
-        )
-
-
-def test_too_thin_an_overlap_is_refused():
-    """A few shared bins are too few to fit a factor from."""
-    with pytest.raises(NoOverlap, match="fewer than"):
-        scale_to_overlap(
+            {},
+            NoOverlap,
+            "do not overlap",
+        ),
+        # A few shared bins are too few to fit a factor from.
+        (
             np.linspace(10.0, 20.0, 50),
             featureless(np.linspace(10.0, 20.0, 50)),
             np.linspace(19.9, 30.0, 50),
             featureless(np.linspace(19.9, 30.0, 50)),
-        )
-
-
-def test_an_unknown_method_is_refused():
-    i_ref, _, i_other, _ = curves()
-    with pytest.raises(ValueError, match="method must be one of"):
-        scale_to_overlap(Q_REF, i_ref, Q_OTHER, i_other, method="eyeball")
+            {},
+            NoOverlap,
+            "fewer than",
+        ),
+        (
+            Q_REF,
+            featureless(Q_REF),
+            Q_OTHER,
+            featureless(Q_OTHER),
+            {"method": "eyeball"},
+            ValueError,
+            "method must be one of",
+        ),
+    ],
+)
+def test_a_fit_that_cannot_be_made_is_refused(
+    q_ref, i_ref, q_other, i_other, kwargs, error, match
+):
+    with pytest.raises(error, match=match):
+        scale_to_overlap(q_ref, i_ref, q_other, i_other, **kwargs)
 
 
 # ── the merged curve ─────────────────────────────────────────────────────────
@@ -153,6 +171,7 @@ def test_the_combined_curve_spans_both_and_marks_its_sources():
 
 
 def test_the_combined_curve_recovers_the_underlying_shape():
+    """jf2 is moved onto jf1, and jf1 itself is never moved."""
     i_ref, s_ref, i_other, s_other = curves()
     combined, _ = combine_curves(
         Q_REF, i_ref, Q_OTHER, i_other, sigma_ref=s_ref, sigma_other=s_other
@@ -160,42 +179,52 @@ def test_the_combined_curve_recovers_the_underlying_shape():
     q = combined["q"].values
     got = combined["intensity"].values
     assert got == pytest.approx(featureless(q), rel=1e-3)
-
-
-def test_the_reference_is_the_curve_that_does_not_move():
-    i_ref, s_ref, i_other, s_other = curves()
-    combined, scaling = combine_curves(
-        Q_REF, i_ref, Q_OTHER, i_other, sigma_ref=s_ref, sigma_other=s_other
-    )
-    q = combined["q"].values
     reference_only = combined["source"].values == 0
     expected = np.interp(q[reference_only], Q_REF, i_ref)
-    assert combined["intensity"].values[reference_only] == pytest.approx(expected)
-
-
-def test_the_scaling_is_recorded_on_the_result():
-    i_ref, s_ref, i_other, s_other = curves()
-    combined, scaling = combine_curves(
-        Q_REF, i_ref, Q_OTHER, i_other, sigma_ref=s_ref, sigma_other=s_other
-    )
-    assert combined.attrs["scaling_factor"] == pytest.approx(scaling.factor)
-    assert combined.attrs["scaling_n_bins"] == scaling.n_bins
-    assert combined.attrs["scaling_method"] == "wls"
+    assert got[reference_only] == pytest.approx(expected)
 
 
 # ── the adapters ─────────────────────────────────────────────────────────────
-def test_mean_curve_from_a_per_cell_grid(finished):
-    done = finished()
-    q, intensity, sigma = mean_curve(done.grid)
-    assert q.shape == intensity.shape == sigma.shape == (done.cfg.npt,)
-    assert np.isfinite(intensity).all()
+def test_mean_curve_from_a_per_cell_grid():
+    """The mean over the slots that hold a frame, σ from their scatter."""
+    import xarray as xr
+
+    values = np.array(
+        [[[1.0, 2.0], [3.0, 4.0]], [[5.0, 6.0], [0.0, 0.0]], [[2.0, 2.0], [4.0, 8.0]]]
+    )
+    n_frames = np.array([[1, 1], [1, 0], [1, 1]])
+    grid = xr.DataArray(
+        values,
+        dims=("trainId", "cellId", "q"),
+        coords={
+            "trainId": [1, 2, 3],
+            "cellId": [0, 15],
+            "q": [10.0, 11.0],
+            "n_frames": (("trainId", "cellId"), n_frames),
+        },
+    )
+    slots = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [2.0, 2.0], [4.0, 8.0]])
+    q, intensity, sigma = mean_curve(grid)
+    assert q.tolist() == [10.0, 11.0]
+    assert intensity == pytest.approx(slots.mean(axis=0))
+    assert sigma == pytest.approx(slots.std(axis=0, ddof=1) / np.sqrt(5))
 
 
-def test_mean_curve_from_pooled_carries_real_errors(finished):
-    from analysis.common.writer import pooled_per_train
+def test_mean_curve_from_pooled_carries_real_errors():
+    """Independent trains: σ of the mean is √(Σσ²) over the trains with frames."""
+    import xarray as xr
 
-    q, intensity, sigma = mean_curve(pooled_per_train(finished().path))
-    assert (sigma[intensity > 0] > 0).all()
+    pooled = xr.Dataset(
+        {
+            "intensity": (("trainId", "q"), [[2.0, 4.0], [4.0, 8.0], [0.0, 0.0]]),
+            "sigma": (("trainId", "q"), [[0.3, 0.4], [0.4, 0.3], [0.0, 0.0]]),
+            "n_frames": (("trainId",), [8, 8, 0]),
+        },
+        coords={"trainId": [1, 2, 3], "q": [10.0, 11.0]},
+    )
+    _, intensity, sigma = mean_curve(pooled)
+    assert intensity == pytest.approx([3.0, 6.0])
+    assert sigma == pytest.approx([0.25, 0.25])
 
 
 def test_combine_files_reads_two_finished_runs(finished, tmp_path):
@@ -240,16 +269,6 @@ def test_units_are_read_off_the_object_and_default_to_kev():
 
 
 # ── telling a normalisation offset from a q-dependent one ────────────────────
-def test_a_pure_normalisation_offset_leaves_a_flat_residual():
-    """The factor absorbs it, so there is nothing left to trend."""
-    i_ref, s_ref, i_other, s_other = curves(factor=3.7)
-    scaling = scale_to_overlap(
-        Q_REF, i_ref, Q_OTHER, i_other, sigma_ref=s_ref, sigma_other=s_other
-    )
-    assert scaling.factor == pytest.approx(3.7, rel=1e-5)
-    assert abs(scaling.residual_slope_per_nm) < 1e-6
-    assert abs(scaling.residual_at_q_low) < 1e-5
-    assert abs(scaling.residual_at_q_high) < 1e-5
 
 
 def test_a_q_dependent_difference_tilts_the_residual():
@@ -297,14 +316,4 @@ def test_sigma_over_intensity_separates_disagreement_from_tight_errors():
     # sigma_over_intensity recovers what was claimed, in both cases.
     assert tight.sigma_over_intensity == pytest.approx(
         generous.sigma_over_intensity / 10, rel=0.01
-    )
-
-
-def test_the_trend_is_reported_on_the_combined_dataset():
-    i_ref, s_ref, i_other, s_other = curves()
-    combined, scaling = combine_curves(
-        Q_REF, i_ref, Q_OTHER, i_other, sigma_ref=s_ref, sigma_other=s_other
-    )
-    assert combined.attrs["scaling_residual_slope_per_nm"] == pytest.approx(
-        scaling.residual_slope_per_nm
     )

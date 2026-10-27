@@ -46,11 +46,16 @@ def write_file(path, *, extra_scatter=0.0, flux_jitter=0.2, seed=0):
 
 def test_a_pure_counting_process_gives_a_ratio_of_one(tmp_path):
     """Flux jitter of 20 % is taken out by the per-frame scaling."""
-    report = frame_scatter(write_file(tmp_path / "poisson.h5"))
+    path = write_file(tmp_path / "poisson.h5")
+    report = frame_scatter(path)
     assert report["n_trains"] == TRAINS
     assert report["sigma_ratio_median"] == pytest.approx(1.0, abs=0.03)
     for band in report["sigma_ratio_by_q_band"]:
         assert band["sigma_ratio"] == pytest.approx(1.0, abs=0.05)
+
+    restricted = frame_scatter(path, q_range=(12.0, 16.0))
+    assert restricted["n_bins"] == pytest.approx(NPT * 4 / 10, abs=2)
+    assert restricted["q_range"] == [12.0, 16.0]
 
 
 def test_noise_the_model_leaves_out_raises_the_ratio(tmp_path):
@@ -73,9 +78,3 @@ def test_a_train_with_a_failed_frame_is_left_out(tmp_path):
         status[3] = FrameStatus.WORKER_ERROR
         handle["frames/status"][:] = status
     assert frame_scatter(path)["n_trains"] == TRAINS - 1
-
-
-def test_a_q_range_restricts_the_bins(tmp_path):
-    report = frame_scatter(write_file(tmp_path / "range.h5"), q_range=(12.0, 16.0))
-    assert report["n_bins"] == pytest.approx(NPT * 4 / 10, abs=2)
-    assert report["q_range"] == [12.0, 16.0]

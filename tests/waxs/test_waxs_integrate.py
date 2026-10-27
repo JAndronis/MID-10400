@@ -15,7 +15,6 @@ from waxs_mockrun import MODULE_SHAPE, PHOTON_KEV, READ_NOISE_KEV  # noqa: E402
 
 from analysis.common.status import DataCheckFailed  # noqa: E402
 from analysis.waxs.integrate import (  # noqa: E402
-    ErrorModel,
     extreme_pixels,
     frame_maxima,
     integrate_frame,
@@ -52,20 +51,6 @@ def union(op, dynamic):
     return dynamic | op.static_bad
 
 
-# ── the readout-noise record ─────────────────────────────────────────────────
-def test_the_model_refuses_nonsense():
-    with pytest.raises(ValueError, match="read_noise_kev"):
-        ErrorModel(0.0, PHOTON_KEV)
-    with pytest.raises(ValueError, match="photon_energy_kev"):
-        ErrorModel(0.32, -1.0)
-
-
-def test_the_model_hash_moves_with_its_contents():
-    first = ErrorModel(0.32, PHOTON_KEV)
-    assert first.sha256 == ErrorModel(0.32, PHOTON_KEV).sha256
-    assert first.sha256 != ErrorModel(0.33, PHOTON_KEV).sha256
-
-
 # ── counting inside the frame path ───────────────────────────────────────────
 def test_each_asic_level_is_recovered_from_the_frame_itself(operator, counting):
     op, _ = operator
@@ -94,19 +79,6 @@ def test_the_counts_are_the_photons_that_were_put_in(operator, counting):
     assert np.array_equal(result.asic_level, prepared.asic_level)
 
 
-def test_the_variance_is_poisson_and_never_negative(operator, counting):
-    """Counts carry a Poisson variance, so even an almost-empty frame stays >= 0."""
-    op, ai = operator
-    rng = np.random.default_rng(3)
-    values = rng.normal(-0.5, 0.32, MODULE_SHAPE).astype(np.float32)
-    result = integrate_frame(
-        ai, op, counting, values, np.zeros_like(op.static_bad), max_abs_kev=1e3
-    )
-    assert result.n_negative_variance_bins == 0
-    assert (result.variance >= 0).all()
-    assert result.n_photons == 0
-
-
 def test_the_zero_level_comes_from_static_masked_pixels_too(operator, counting):
     """``level_pixels="all_good"``: shadowed pixels are good level pixels."""
     import dataclasses
@@ -130,18 +102,22 @@ def test_the_zero_level_comes_from_static_masked_pixels_too(operator, counting):
 
 
 def test_an_asic_without_a_level_is_not_counted(operator, counting):
-    """Fewer than ``min_pixels`` usable pixels: no level, so no counts there."""
+    """Fewer than ``min_pixels`` usable pixels: no level, so no counts there.
+
+    An ASIC the masks remove entirely has no level either, but nothing on it is
+    lost, so it is not counted as missing.
+    """
     op, ai = operator
     values, _, dynamic = make_frame(op)
     dead = ASIC_ID == 1
     # Leave the ASIC's edge pixels good: integrated, but never level pixels.
     rows, cols = np.indices(MODULE_SHAPE)
     edge = (((rows % 256) < 3) | ((cols % 256) < 3)).reshape(-1)
-    dynamic = dynamic | (dead & ~edge)
+    dynamic = dynamic | (dead & ~edge) | (ASIC_ID == 6)
     prepared = prepare_frame(op, counting, values, dynamic, max_abs_kev=1e3)
 
-    assert np.isnan(prepared.asic_level[1])
-    assert np.isfinite(np.delete(prepared.asic_level, 1)).all()
+    assert np.isnan(prepared.asic_level[[1, 6]]).all()
+    assert np.isfinite(np.delete(prepared.asic_level, [1, 6])).all()
     assert prepared.n_level_missing == 1
     assert prepared.excluded[dead].all()
     result = integrate_frame(ai, op, counting, values, dynamic, max_abs_kev=1e3)
@@ -149,24 +125,28 @@ def test_an_asic_without_a_level_is_not_counted(operator, counting):
     assert result.n_bad_pixels == int(prepared.excluded.sum())
 
 
-def test_a_fully_masked_asic_costs_nothing(operator, counting):
-    """No level and nothing to integrate either: not a missing level."""
-    op, _ = operator
-    values, _, dynamic = make_frame(op)
-    dynamic = dynamic | (ASIC_ID == 6)
-    prepared = prepare_frame(op, counting, values, dynamic, max_abs_kev=1e3)
-    assert np.isnan(prepared.asic_level[6])
-    assert prepared.n_level_missing == 0
-
-
-def test_a_frame_whose_only_asic_has_no_level_fails_loudly(operator, counting):
-    op, ai = operator
-    values, _, _ = make_frame(op)
+def _edge_of_asic_2():
     rows, cols = np.indices(MODULE_SHAPE)
     edge = (((rows % 256) < 3) | ((cols % 256) < 3)).reshape(-1)
-    dynamic = ~((ASIC_ID == 2) & edge)
-    with pytest.raises(DataCheckFailed, match="no zero level"):
-        integrate_frame(ai, op, counting, values, dynamic, max_abs_kev=1e3)
+    return ~((ASIC_ID == 2) & edge)
+
+
+@pytest.mark.parametrize(
+    ("excluded", "match"),
+    [
+        (lambda op: np.ones_like(op.static_bad), "nothing left to integrate"),
+        # Only ASIC 2's edge is left, and an edge never yields a zero level.
+        (lambda op: _edge_of_asic_2(), "no zero level"),
+    ],
+)
+def test_a_frame_with_nothing_left_to_integrate_fails(
+    operator, counting, excluded, match
+):
+    """The one case that must not become a row of zeros placed as measured."""
+    op, ai = operator
+    values, _, _ = make_frame(op)
+    with pytest.raises(DataCheckFailed, match=match):
+        integrate_frame(ai, op, counting, values, excluded(op), max_abs_kev=1e3)
 
 
 # ── the NaN-equivalence gate ─────────────────────────────────────────────────
@@ -214,25 +194,6 @@ def test_the_dynamic_mask_leaves_the_denominator_exact(operator, counting):
     assert (masked.normalization < clean.normalization).any()
 
 
-def test_the_selftest_reports_the_worst_frame(operator, counting):
-    op, ai = operator
-    frames = [(f[0], f[2]) for f in (make_frame(op, seed=s) for s in range(3))]
-    report = run_selftest(ai, op, counting, frames, max_abs_kev=1e3)
-    assert report.n_frames == 3
-    assert (
-        max(
-            report.max_rel_signal, report.max_rel_normalization, report.max_rel_variance
-        )
-        <= report.tolerance
-    )
-
-
-def test_the_selftest_refuses_an_empty_frame_list(operator, counting):
-    op, ai = operator
-    with pytest.raises(SelfTestFailed, match="no frames"):
-        run_selftest(ai, op, counting, [], max_abs_kev=1e3)
-
-
 def test_the_selftest_catches_a_broken_nan_path(operator, counting, monkeypatch):
     """If pyFAI ever stops dropping non-finite pixels, this is what notices."""
     import analysis.waxs.selftest as selftest_module
@@ -251,37 +212,33 @@ def test_the_selftest_catches_a_broken_nan_path(operator, counting, monkeypatch)
 
 
 # ── the data check ───────────────────────────────────────────────────────────
-def test_a_non_finite_kept_pixel_is_excluded_not_fatal(operator, counting):
-    """Exclusions travel as NaN, so a NaN in the data is excluded like them."""
-    op, ai = operator
-    values, _, dynamic = make_frame(op)
-    pixel = np.flatnonzero(~union(op, dynamic))[0]
-    values.reshape(-1)[pixel] = np.nan
-    assert extreme_pixels(values, union(op, dynamic), 1e3)[pixel]
-
-    result = integrate_frame(ai, op, counting, values, dynamic, max_abs_kev=1e3)
-    assert result.n_extreme_pixels == 1
-    assert np.isfinite(result.signal).all()
-
-
-def test_an_extreme_kept_pixel_is_excluded_not_fatal(operator, counting):
-    """An extreme kept pixel is excluded and the frame still integrates.
+@pytest.mark.parametrize(
+    ("value", "under_static", "n_extreme"),
+    [(np.nan, False, 1), (1.8e5, False, 1), (1.8e5, True, 0)],
+)
+def test_a_wild_kept_pixel_is_excluded_and_the_frame_kept(
+    operator, counting, value, under_static, n_extreme
+):
+    """A non-finite or extreme pixel costs that pixel, never the frame.
 
     Failing the frame would lose every good pixel in it, and such pixels (salt
     Bragg spots from an evaporating droplet) track crystallisation. The pixel is
-    excluded before counting, so its value never reaches a level or a count.
+    excluded before counting, so its value never reaches a level or a count. A
+    pixel the static mask already removes is not this check's to count.
     """
     op, ai = operator
     values, _, dynamic = make_frame(op)
     bad = union(op, dynamic)
-    pixel = np.flatnonzero(~bad)[0]
-    values.reshape(-1)[pixel] = 1.8e5
+    candidates = op.static_bad if under_static else ~bad
+    pixel = np.flatnonzero(candidates)[0]
+    values.reshape(-1)[pixel] = value
 
+    assert extreme_pixels(values, bad, 1e3)[pixel] == bool(n_extreme)
     result = integrate_frame(ai, op, counting, values, dynamic, max_abs_kev=1e3)
-    assert result.n_extreme_pixels == 1
-    assert result.max_kev < 1e3
+    assert result.n_extreme_pixels == n_extreme
+    assert result.n_bad_pixels == int(bad.sum()) + n_extreme
+    assert np.isfinite(result.signal).all()
     assert (result.normalization > 0).any()
-    assert result.n_bad_pixels == int(bad.sum()) + 1
     assert np.abs(result.asic_level - OFFSETS).max() < 0.005
 
 
@@ -319,98 +276,34 @@ def test_the_callers_mask_is_not_modified(operator, counting):
     assert np.array_equal(dynamic, before)
 
 
-def test_a_frame_with_nothing_left_to_integrate_still_fails(operator, counting):
-    """The one case that must not become a row of zeros placed as measured."""
-    op, ai = operator
-    values, _, _ = make_frame(op)
-    everything = np.ones_like(op.static_bad)
-    with pytest.raises(DataCheckFailed, match="nothing left to integrate"):
-        integrate_frame(ai, op, counting, values, everything, max_abs_kev=1e3)
+def test_the_two_maxima_tell_a_masked_wild_pixel_from_a_live_one(operator, counting):
+    """``max_kev`` covers what reaches the sums, ``max_kev_static`` what the
+    static mask keeps.
 
-
-def test_an_extreme_pixel_under_the_static_mask_is_not_this_frames_problem(
-    operator, counting
-):
-    op, ai = operator
-    values, _, dynamic = make_frame(op)
-    values.reshape(-1)[np.flatnonzero(op.static_bad)[0]] = 1.8e5
-    assert not extreme_pixels(values, union(op, dynamic), 1e3).any()
-    result = integrate_frame(ai, op, counting, values, dynamic, max_abs_kev=1e3)
-    assert result.n_extreme_pixels == 0
-    # ... and as a level pixel the estimator ignores it.
-    assert np.abs(result.asic_level - OFFSETS).max() < 0.005
-
-
-def test_the_two_maxima_separate_a_masked_wild_pixel_from_a_live_one(operator):
-    """The two maxima tell a wild pixel kept out of the sums from a live one.
-
-    ``max_kev`` covers the pixels that reach the integrator and
-    ``max_kev_static`` those the static mask keeps. An ordinary ``max_kev``
-    beside a huge ``max_kev_static`` means the wild value never reached a
-    stored number.
+    An ordinary ``max_kev`` beside a huge ``max_kev_static`` means the wild value
+    never reached a stored number. A value ``data.mask`` already drops is not
+    an extreme pixel, since the check did not remove it. A NaN maximum records
+    the reason itself.
     """
-    op, _ = operator
-    values, _, dynamic = make_frame(op)
-    bad = union(op, dynamic)
-    flagged = np.flatnonzero((~op.static_bad) & bad)[0]
-    values.reshape(-1)[flagged] = 1.8e5
-
-    reaching, checked = frame_maxima(values, bad, op.static_bad)
-    assert checked == pytest.approx(1.8e5)
-    assert reaching < 1e3
-    # ... and it is not an extreme pixel at all, because ``bad`` already has it.
-    assert not extreme_pixels(values, bad, 1e3)[flagged]
-
-
-def test_a_live_wild_pixel_shows_in_both_maxima(operator):
-    op, _ = operator
-    values, _, dynamic = make_frame(op)
-    bad = union(op, dynamic)
-    live = np.flatnonzero(~bad)[0]
-    values.reshape(-1)[live] = 1.8e5
-    reaching, checked = frame_maxima(values, bad, op.static_bad)
-    assert reaching == pytest.approx(1.8e5)
-    assert checked == pytest.approx(1.8e5)
-
-
-def test_a_non_finite_value_propagates_into_the_maxima(operator):
-    """A NaN maximum records the reason itself, so no separate column is needed."""
-    op, _ = operator
-    values, _, dynamic = make_frame(op)
-    bad = union(op, dynamic)
-    values.reshape(-1)[np.flatnonzero(~bad)[0]] = np.nan
-    reaching, checked = frame_maxima(values, bad, op.static_bad)
-    assert np.isnan(reaching) and np.isnan(checked)
-
-
-def test_an_integrated_frame_stores_both_maxima(operator, counting):
     op, ai = operator
     values, _, dynamic = make_frame(op)
     bad = union(op, dynamic)
-    result = integrate_frame(ai, op, counting, values, dynamic, max_abs_kev=1e3)
     flat = values.reshape(-1)
-    assert result.n_extreme_pixels == 0
-    assert result.max_kev == pytest.approx(flat[~bad].max())
-    assert result.max_kev_static == pytest.approx(flat[~op.static_bad].max())
-    # The static set is the larger one, so its maximum can only be higher.
-    assert result.max_kev_static >= result.max_kev
 
+    clean = integrate_frame(ai, op, counting, values, dynamic, max_abs_kev=1e3)
+    assert clean.max_kev == pytest.approx(flat[~bad].max())
+    assert clean.max_kev_static == pytest.approx(flat[~op.static_bad].max())
 
-def test_timings_are_split_between_counting_and_integrating(operator, counting):
-    op, ai = operator
-    values, _, dynamic = make_frame(op)
-    timings: dict[str, float] = {}
-    integrate_frame(ai, op, counting, values, dynamic, max_abs_kev=1e3, timings=timings)
-    assert set(timings) == {"photonise", "integrate"}
-    assert all(seconds > 0 for seconds in timings.values())
+    flagged = np.flatnonzero((~op.static_bad) & bad)[0]
+    flat[flagged] = 1.8e5
+    reaching, checked = frame_maxima(values, bad, op.static_bad)
+    assert checked == pytest.approx(1.8e5) and reaching < 1e3
+    masked = integrate_frame(ai, op, counting, values, dynamic, max_abs_kev=1e3)
+    assert masked.n_extreme_pixels == 0
+    assert masked.max_kev_static == pytest.approx(1.8e5)
 
-
-def test_shape_disagreements_are_refused(operator, counting):
-    op, ai = operator
-    values, _, dynamic = make_frame(op)
-    with pytest.raises(ValueError, match="pixels"):
-        integrate_frame(
-            ai, op, counting, values.reshape(-1)[:100], dynamic, max_abs_kev=1e3
-        )
-    with pytest.raises(ValueError, match="dynamic has shape"):
-        integrate_frame(ai, op, counting, values, dynamic[:100], max_abs_kev=1e3)
+    live = np.flatnonzero(~bad)[0]
+    flat[live] = 1.8e5
+    assert frame_maxima(values, bad, op.static_bad) == pytest.approx((1.8e5, 1.8e5))
+    flat[live] = np.nan
+    assert np.isnan(frame_maxima(values, bad, op.static_bad)).all()

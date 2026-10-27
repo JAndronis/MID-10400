@@ -158,9 +158,7 @@ def write_mock_run(
     cell_order: tuple[int, ...] = CELL_ORDER,
     zero_entry_trains: tuple[int, ...] = (),
     static_fraction: float = 0.4,
-    nonfinite_train: int | None = None,
     extreme_train: int | None = None,
-    extreme_flagged: bool = False,
     dead_frame_train: int | None = None,
     shuffled_cells_train: int | None = None,
     mislabel_train: int | None = None,
@@ -177,13 +175,8 @@ def write_mock_run(
         plan records as ``NO_FRAMES``.
     :param static_fraction: fraction of pixels the returned static mask
         excludes. The real ``.edf`` masks exclude most of the module.
-    :param nonfinite_train: put a NaN on a kept pixel of this train's first lit
-        cell.
     :param extreme_train: put an unflagged 1.8e5 keV pixel on a kept pixel of
         this train's first lit cell, which the value check excludes.
-    :param extreme_flagged: also set that pixel's dynamic bit, so ``data.mask``
-        removes the value before the value check sees it. ``max_kev_static``
-        still records it, and ``n_extreme_pixels`` does not count it.
     :param dead_frame_train: set the dynamic bit on every pixel of this train's
         first lit cell, so that frame has nothing left to integrate.
     :param shuffled_cells_train: give this train a repeated ``memoryCell``
@@ -239,9 +232,7 @@ def write_mock_run(
             cell_order=cell_order,
             static=static,
             seed=seed,
-            nonfinite_train=nonfinite_train,
             extreme_train=extreme_train,
-            extreme_flagged=extreme_flagged,
             dead_frame_train=dead_frame_train,
             shuffled_cells_train=shuffled_cells_train,
             common_mode=common_mode,
@@ -394,9 +385,7 @@ def _fill_frames(
     cell_order: tuple[int, ...],
     static: np.ndarray,
     seed: int,
-    nonfinite_train: int | None,
     extreme_train: int | None,
-    extreme_flagged: bool,
     dead_frame_train: int | None,
     shuffled_cells_train: int | None,
     common_mode: np.ndarray,
@@ -455,12 +444,8 @@ def _fill_frames(
 
             train_id = train_ids[entry] if entry < len(train_ids) else None
             flat_values = values.reshape(CELLS, -1)
-            if train_id is not None and train_id == nonfinite_train:
-                flat_values[first_lit, first_kept] = np.nan
             if train_id is not None and train_id == extreme_train:
                 flat_values[first_lit, first_kept] = 1.8e5
-                if extreme_flagged:
-                    flat_mask[first_lit, first_kept] |= DYNAMIC_BIT
             if train_id is not None and train_id == dead_frame_train:
                 flat_mask[first_lit] |= DYNAMIC_BIT
 

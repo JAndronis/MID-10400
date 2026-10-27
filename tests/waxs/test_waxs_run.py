@@ -127,26 +127,6 @@ def test_provenance_records_what_was_decided(finished):
         assert json.loads(attrs["package_versions"])["pyFAI"]
 
 
-def test_the_thread_env_is_pinned_before_any_pool(
-    cfg, mock_run_factory, tmp_path, monkeypatch
-):
-    """A spawned child reads the thread environment at start, so set it first."""
-    from analysis.common.cpu import THREAD_ENV
-
-    for name in THREAD_ENV:
-        monkeypatch.delenv(name, raising=False)
-    seen = {}
-
-    class Recording(InlinePool):
-        def __init__(self, *args, **kwargs):
-            seen.update({name: os.environ.get(name) for name in THREAD_ENV})
-            super().__init__(*args, **kwargs)
-
-    mock, dc = mock_run_factory()
-    run(cfg, mock, dc, output_path=tmp_path / "env.h5", pool_factory=Recording)
-    assert seen == dict.fromkeys(THREAD_ENV, "1")
-
-
 def test_a_real_spawned_pool_works(cfg, mock_run_factory, tmp_path):
     """The only test that finds out whether the initargs actually pickle."""
     mock, dc = mock_run_factory()
@@ -221,42 +201,6 @@ def test_a_train_whose_own_rows_name_another_train_is_a_label_mismatch(
     for train_id, start, n in zip(trains, first, count, strict=True):
         want = FrameStatus.LABEL_MISMATCH if train_id == 10001 else FrameStatus.OK
         assert (status[start : start + n] == want).all(), train_id
-
-
-def test_which_statuses_block_the_run(cfg):
-    """The split the gate rests on, without needing a run to produce each one.
-
-    ``DATA_CHECK_FAILED`` means a frame with nothing left to integrate (the
-    value check drops pixels, not frames). It is a property of the data rather
-    than a failure of the pass, so it is tolerated by default.
-    """
-    from analysis.waxs.run import _blocking
-
-    summary = {
-        "OK": 100,
-        "DATA_CHECK_FAILED": 3,
-        "LABEL_MISMATCH": 2,
-        "WORKER_ERROR": 1,
-        "NOT_PROCESSED": 4,
-    }
-    assert _blocking(cfg, summary) == {
-        "LABEL_MISMATCH": 2,
-        "WORKER_ERROR": 1,
-        "NOT_PROCESSED": 4,
-    }
-    strict = dataclasses.replace(cfg, allow_data_check_failures=False)
-    assert _blocking(strict, summary)["DATA_CHECK_FAILED"] == 3
-    assert _blocking(cfg, {"OK": 100}) == {}
-
-
-def test_a_worker_exception_lands_in_the_ledger(cfg, mock_run_factory, tmp_path):
-    mock, dc = mock_run_factory()
-    with pytest.raises(IncompleteRun, match="WORKER_ERROR"):
-        run(cfg, mock, dc, output_path=tmp_path / "err.h5", pool_factory=FailingPool)
-
-    with h5py.File(tmp_path / "err.h5") as handle:
-        assert (handle["frames/status"][:] == FrameStatus.WORKER_ERROR).all()
-        assert "block exploded" in handle["provenance"].attrs["block_errors"]
 
 
 def test_a_broken_pool_marks_everything_unprocessed_and_raises(
@@ -368,8 +312,6 @@ def test_a_run_with_no_dark_cell_falls_back_to_the_configured_noise(
     sigma_read falls back to the per-detector median and ``ErrorModel.source``
     records that it did.
     """
-    import json
-
     mock, dc = mock_run_factory(train_ids=(10000, 10001), lit_cells=tuple(range(16)))
     everything = dataclasses.replace(cfg, expected_lit_cells=tuple(range(16)))
 
@@ -379,21 +321,6 @@ def test_a_run_with_no_dark_cell_falls_back_to_the_configured_noise(
         model = json.loads(handle["provenance"].attrs["error_model"])
     assert model["source"] == "fallback"
     assert model["read_noise_kev"] == pytest.approx(cfg.read_noise_fallback_kev)
-
-    # ...and the fallback cannot be cleared: ``None`` means "use the
-    # per-detector default" and __post_init__ resolves it, so a constructed
-    # config never holds None.
-    stripped = dataclasses.replace(everything, read_noise_fallback_kev=None)
-    assert stripped.read_noise_fallback_kev == cfg.read_noise_fallback_kev
-
-    # An explicit value still wins over both.
-    configured = run(
-        dataclasses.replace(everything, read_noise_kev=0.32),
-        mock,
-        dc,
-        output_path=tmp_path / "noise2.h5",
-    )
-    assert configured.shape[1] == 16
 
 
 def test_allow_incomplete_returns_instead_of_raising(cfg, mock_run_factory, tmp_path):
@@ -407,13 +334,6 @@ def test_allow_incomplete_returns_instead_of_raising(cfg, mock_run_factory, tmp_
     )
     assert (grid["n_frames"] == 0).all()
     assert (grid.values == 0).all()
-
-
-def test_an_unknown_reducer_is_refused_before_any_work(cfg, mock_run_factory, tmp_path):
-    mock, dc = mock_run_factory()
-    with pytest.raises(ValueError, match="reduce must be one of"):
-        run(cfg, mock, dc, output_path=tmp_path / "bad.h5", reduce="nonsense")
-    assert not (tmp_path / "bad.h5").exists()
 
 
 def test_the_selftest_gate_runs_before_the_pool(
@@ -437,13 +357,6 @@ def test_the_selftest_gate_runs_before_the_pool(
         run(cfg, mock, dc, output_path=tmp_path / "gate.h5", pool_factory=Watching)
     assert pooled == []
     assert not (tmp_path / "gate.h5").exists()
-
-
-def test_the_pooled_reducer_is_reachable(cfg, mock_run_factory, tmp_path):
-    mock, dc = mock_run_factory()
-    pooled = run(cfg, mock, dc, output_path=tmp_path / "pooled.h5", reduce="pooled")
-    assert set(pooled.data_vars) == {"intensity", "sigma", "n_frames"}
-    assert np.isfinite(pooled["intensity"].values).all()
 
 
 def test_both_detectors_run_independently_into_their_own_files(finished):

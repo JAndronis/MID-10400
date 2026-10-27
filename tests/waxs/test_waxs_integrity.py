@@ -156,6 +156,9 @@ def test_a_rerun_retries_worker_error_blocks(cfg, mock_run_factory, tmp_path):
     path = tmp_path / "run.h5"
     with pytest.raises(IncompleteRun, match="WORKER_ERROR"):
         run(cfg, mock, dc, output_path=path, pool_factory=FailingPool)
+    with h5py.File(path, "r") as handle:
+        assert (handle["frames/status"][:] == FrameStatus.WORKER_ERROR).all()
+        assert "block exploded" in handle["provenance"].attrs["block_errors"]
 
     grid = run(cfg, mock, dc, output_path=path)
 

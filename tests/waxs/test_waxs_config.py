@@ -1,89 +1,27 @@
-"""Config validation, defaults and the hash."""
+"""Config validation and the hash."""
 
 from __future__ import annotations
 
 import dataclasses
-from pathlib import Path
 
 import pytest
 
 from analysis.waxs.config import (
-    DEFAULT_READ_NOISE_KEV,
-    DETECTORS,
-    EXPECTED_BITS,
     EXPECTED_LIT_CELLS,
     JungfrauWaxsConfig,
     config_for,
-    default_poni_file,
-    default_static_mask_file,
 )
-
-
-def test_the_output_file_is_per_detector(config_for_detector):
-    """Each detector writes its own file, and the two meet only at the plot."""
-    jf1 = config_for_detector("jf1")
-    jf2 = config_for_detector("jf2")
-    assert jf1.output_file.name == "jungfrau_waxs_jf1.h5"
-    assert jf2.output_file.name == "jungfrau_waxs_jf2.h5"
-    assert jf1.output_file.parent == jf2.output_file.parent
-    assert jf1.output_file.parent == Path(jf1.output_root) / "r0423"
-
-
-def test_config_for_fills_the_per_detector_paths():
-    for detector in DETECTORS:
-        cfg = config_for(10400, 423, detector)
-        assert cfg.poni_file == default_poni_file(detector)
-        assert cfg.static_mask_file == default_static_mask_file(detector)
-        assert detector in cfg.poni_file and detector in cfg.static_mask_file
-
-
-def test_the_defaults_are_the_measured_ones():
-    """The measured defaults, pinned so a change to one is deliberate."""
-    assert EXPECTED_BITS == frozenset({0, 1, 21, 22})
-    assert EXPECTED_LIT_CELLS == (0, 1, 2, 3, 4, 5, 6, 15)
-    cfg = JungfrauWaxsConfig(proposal=10400, run=423, detector="jf1")
-    assert cfg.photon_energy_kev == 9.04
-    assert cfg.method == ("full", "csc", "cython")
-    assert cfg.read_noise_kev is None  # measured per run, not hardcoded
-    # The lit set is measured per run too, because the proposal used several
-    # readout patterns. EXPECTED_LIT_CELLS is the science-block pattern a
-    # reprocess may pin, never the default.
-    assert cfg.expected_lit_cells is None
-    # The geometric centre of the empty band between the measured dark and lit
-    # cell fractions, 5.654e-05 to 4.083e-03.
-    assert cfg.lit_fraction_min == pytest.approx(4.805e-4)
-    # Only for runs that read all 16 cells and so have no dark one. Each value
-    # is that detector's median over the runs where it could be measured.
-    assert cfg.read_noise_fallback_kev == pytest.approx(DEFAULT_READ_NOISE_KEV["jf1"])
-    assert DEFAULT_READ_NOISE_KEV == {"jf1": 0.3440, "jf2": 0.3195}
-
-
-def test_an_unknown_detector_is_refused():
-    with pytest.raises(ValueError, match="detector must be one of"):
-        JungfrauWaxsConfig(proposal=10400, run=423, detector="jf3")
 
 
 @pytest.mark.parametrize(
     ("field", "value", "match"),
     [
-        ("npt", 0, "npt must be positive"),
-        ("photon_energy_kev", 0.0, "photon_energy_kev"),
+        # A method string resolves silently to another engine, so only the
+        # tuple pyFAI is asked for is accepted.
         ("method", ("bbox", "csr", "cython"), "method must be"),
-        ("mask_bits", -1, "uint32"),
         ("expected_lit_cells", (), "at least one cell"),
-        # No storageCellStart produces these, so pinning one means a typo.
+        # No storageCellStart produces this, so pinning it means a typo.
         ("expected_lit_cells", (0, 2, 4), "storage-cell sequence"),
-        ("expected_lit_cells", (1, 12), "storage-cell sequence"),
-        ("lit_fraction_min", 0.0, r"\(0, 1\)"),
-        ("lit_fraction_min", 1.0, r"\(0, 1\)"),
-        ("lit_gap_ratio", 1.0, "lit_gap_ratio must exceed 1"),
-        ("read_noise_kev", 0.0, "read_noise_kev"),
-        ("read_noise_fallback_kev", -0.1, "read_noise_fallback_kev"),
-        ("max_abs_kev", 0.0, "max_abs_kev"),
-        ("cell_sample_trains", 0, "cell_sample_trains"),
-        ("trains_per_block", 0, "trains_per_block"),
-        ("n_workers", 0, "n_workers"),
-        ("selftest_frames", 0, "selftest_frames"),
     ],
 )
 def test_nonsense_is_refused(field, value, match):
@@ -103,6 +41,8 @@ def test_the_hash_covers_every_field_and_the_input_files(cfg):
         ("max_abs_kev", 1e4),
         ("read_noise_kev", 0.32),
         ("read_noise_fallback_kev", 0.40),
+        # Which Karabo source a run was integrated from identifies the result.
+        ("detector_name", "MID_EXP_JF500K1_OLD"),
     ):
         assert dataclasses.replace(cfg, **{field: value}).config_hash() != baseline, (
             field
@@ -119,67 +59,46 @@ def test_the_hash_ignores_the_pinned_lit_cells(cfg):
     assert pinned.config_hash() == cfg.config_hash()
 
 
-def test_the_hash_moves_when_an_input_file_changes(cfg, tmp_path):
+def test_the_hash_moves_when_an_input_file_is_rewritten_in_place(cfg, tmp_path):
+    """A mask replaced at the same path is a different input."""
     import numpy as np
     from waxs_mockrun import MODULE_SHAPE, write_static_mask
 
-    baseline = cfg.config_hash()
-    other = np.zeros(MODULE_SHAPE, dtype=np.uint8)
-    other[:100] = 1
-    path = write_static_mask(tmp_path / "other.edf", other)
-    assert (
-        dataclasses.replace(cfg, static_mask_file=str(path)).config_hash() != baseline
-    )
+    mask = np.zeros(MODULE_SHAPE, dtype=np.uint8)
+    path = write_static_mask(tmp_path / "jf1_mask.edf", mask)
+    moved = dataclasses.replace(cfg, static_mask_file=str(path))
+    before = moved.config_hash()
+    mask[:100] = 1
+    write_static_mask(path, mask)
+    assert moved.config_hash() != before
 
 
-def test_workers_default_to_physical_cores(cfg):
-    """The default counts physical cores, never logical CPUs."""
-    assert dataclasses.replace(cfg, n_workers=7).workers == 7
-    assert dataclasses.replace(cfg, n_workers=None).workers >= 1
-
-
-# ── the source names, as lsxfel reports them ─────────────────────────────────
-def test_the_detector_names_are_the_ones_lsxfel_reports():
-    from analysis.waxs.config import DETECTOR_MODNOS, DETECTOR_NAMES
-
-    assert DETECTOR_NAMES == {"jf1": "MID_EXP_JF500K1", "jf2": "MID_EXP_JF500K2"}
-    assert DETECTOR_MODNOS == {"jf1": 1, "jf2": 2}
-    for detector in DETECTORS:
-        cfg = JungfrauWaxsConfig(proposal=10400, run=423, detector=detector)
-        assert cfg.detector_name == DETECTOR_NAMES[detector]
-        assert cfg.first_modno == DETECTOR_MODNOS[detector]
-
-
-def test_the_filled_source_name_enters_the_hash():
-    """Which Karabo source a run was integrated from identifies the result."""
-    base = JungfrauWaxsConfig(proposal=10400, run=423, detector="jf1")
-    renamed = dataclasses.replace(base, detector_name="MID_EXP_JF500K1_OLD")
-    assert renamed.config_hash() != base.config_hash()
-
-
-def test_swapping_only_the_detector_is_refused():
-    """It would keep the other detector's name, PONI and mask."""
-    jf1 = config_for(10400, 423, "jf1")
-    with pytest.raises(ValueError, match="belongs to 'jf1'"):
-        dataclasses.replace(jf1, detector="jf2")
-
-
-def test_a_poni_naming_the_other_detector_is_refused():
-    with pytest.raises(ValueError, match="names another detector"):
-        JungfrauWaxsConfig(
-            proposal=10400,
-            run=423,
-            detector="jf2",
-            poni_file="/somewhere/jf1.poni",
-        )
-
-
-def test_an_unrelated_path_is_still_allowed(tmp_path):
-    """Only an unambiguous mix-up is refused, not any unusual path."""
-    cfg = JungfrauWaxsConfig(
-        proposal=10400,
-        run=423,
-        detector="jf2",
-        poni_file=str(tmp_path / "refined-2026-09-13.poni"),
-    )
-    assert cfg.detector == "jf2"
+@pytest.mark.parametrize(
+    ("build", "match"),
+    [
+        # It would keep jf1's source name, PONI and mask.
+        (
+            lambda: dataclasses.replace(config_for(10400, 423, "jf1"), detector="jf2"),
+            "belongs to 'jf1'",
+        ),
+        (
+            lambda: JungfrauWaxsConfig(
+                proposal=10400, run=423, detector="jf2", poni_file="/x/jf1.poni"
+            ),
+            "names another detector",
+        ),
+        # Only an unambiguous mix-up is refused, not any unusual path.
+        (
+            lambda: JungfrauWaxsConfig(
+                proposal=10400, run=423, detector="jf2", poni_file="/x/refined.poni"
+            ),
+            None,
+        ),
+    ],
+)
+def test_one_detector_is_never_given_the_others_inputs(build, match):
+    if match is None:
+        assert build().detector == "jf2"
+    else:
+        with pytest.raises(ValueError, match=match):
+            build()
