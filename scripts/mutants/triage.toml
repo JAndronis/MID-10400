@@ -191,3 +191,17 @@ file = "src/analysis/diagnostics/xpcs.py"
 old = "da = opened.kbar(None if trains is None else np.asarray(trains, dtype=np.uint64))"
 new = "da = opened.kbar(None)"
 tests = ["tests/diagnostics/test_diagnostics_xpcs.py"]
+
+[[mutant]]
+name = "block_cut_needs_no_separation"
+file = "src/analysis/triage/classify.py"
+old = "if band is None or not on_mode >= SEPARATION_BANDS * off_cut:"
+new = "if band is None:"
+tests = ["tests/triage/test_classify.py"]
+
+[[mutant]]
+name = "neighbour_read_once"
+file = "src/analysis/triage/classify.py"
+old = "for attempt in range(MEMBER_TRIES):"
+new = "for attempt in range(MEMBER_TRIES - 5):"
+tests = ["tests/triage/test_classify.py"]

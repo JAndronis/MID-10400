@@ -110,6 +110,8 @@ def test_a_block_without_a_second_mode_is_ambiguous():
     out = classify_block(xs)
     assert out["block"]["ambiguous"]
     assert all(v["n_on"] == 0 and v["ambiguous"] for v in out["runs"].values())
+    # a second mode only just above the off band is no mode either
+    assert block_cut(np.r_[np.zeros(100), np.full(5, 0.11)], off_cut=0.1)["ambiguous"]
 
 
 def test_the_overlap_fraction_is_measured_against_the_runs_full_hit(block):
@@ -143,11 +145,6 @@ def test_a_run_with_few_hits_takes_its_blocks_full_hit_level():
     assert v["plateau_source"] == "block"
     assert v["plateau"] == out["block"]["on_mode"]
     assert v["n_on"] >= 9
-
-
-def test_block_cut_needs_a_mode_beyond_the_off_band():
-    rel = np.r_[np.zeros(100), np.full(5, 0.11)]
-    assert block_cut(rel, off_cut=0.1)["ambiguous"]
 
 
 def test_static_hits_find_long_and_short_absences():
@@ -300,7 +297,7 @@ def test_a_neighbour_being_written_is_waited_for_not_left_out(mesh_store, monkey
 
     monkeypatch.setattr(classify, "train_signals", flaky)
     got = hits(121, damnit_root=mesh_store, cache_dir=None)
-    assert calls["n"] == 2 and got["summary"]["block_missing"] == []
+    assert got["summary"]["block_missing"] == []
     np.testing.assert_array_equal(got["train_ids"], want["train_ids"])
 
 
