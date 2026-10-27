@@ -648,6 +648,14 @@ def test_a_train_without_every_module_is_refused(proc_run, tmp_path):
 def test_sums_are_cached_and_rebuilt_on_new_trains_a_changed_run_or_refresh(
     proc_run, tmp_path, monkeypatch
 ):
+    """Five builds; threads stand in for the spawned pool the read test uses."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from analysis.common import cpu
+
+    monkeypatch.setattr(
+        cpu, "default_pool", lambda n, **kw: ThreadPoolExecutor(max_workers=n, **kw)
+    )
     reads = []
     real = cache._read_sums
     monkeypatch.setattr(
@@ -684,12 +692,13 @@ XPCS_FAILED = 3  # a hit train with no sums
 XPCS_FRAMES, XPCS_ENV, XPCS_RINGS = 14, 300, 3
 
 
-@pytest.fixture
-def xpcs(tmp_path, xgm_by_raw):
+@pytest.fixture(scope="module")
+def xpcs_sources(tmp_path_factory):
     """Run 1: seven hit trains in a real results file, one of them failed.
 
     The DAMNIT side has droplet entries for eight trains, so every hit has a train
-    timestamp and a scaling; the hit trains are not the run's first seven.
+    timestamp and a scaling; the hit trains are not the run's first seven. Built
+    once; each test gets its own copies of the two files.
     """
     rng = np.random.default_rng(5)
     rings = make_rings(rng, XPCS_ENV, XPCS_RINGS)
@@ -702,18 +711,40 @@ def xpcs(tmp_path, xgm_by_raw):
         for k in XPCS_OFFSETS
     ]
     failed_id = int(train_ids(1, XPCS_FAILED)[0])
-    path = tmp_path / "xpcs_hits.h5"
-    build_results(path, photons, rings, failed={failed_id: FrameStatus.MISSING_MODULES})
+    root = tmp_path_factory.mktemp("xpcs")
+    build_results(
+        root / "xpcs_hits.h5",
+        photons,
+        rings,
+        failed={failed_id: FrameStatus.MISSING_MODULES},
+    )
     tids = train_ids(8)
-    db = {1: damnit_run(tmp_path / "x1.h5", tids, 2.2 - 0.01 * np.arange(8))}
+    damnit_run(root / "x1.h5", tids, 2.2 - 0.01 * np.arange(8))
+    return {
+        "root": root,
+        "tids": tids,
+        "failed": failed_id,
+        "hit_ids": np.array(sorted([*(t.train_id for t in photons), failed_id])),
+    }
+
+
+@pytest.fixture
+def xpcs(xpcs_sources, tmp_path, xgm_by_raw):
+    import shutil
+
+    src = xpcs_sources
+    path = Path(shutil.copy(src["root"] / "xpcs_hits.h5", tmp_path))
+    damnit_file = shutil.copy(src["root"] / "x1.h5", tmp_path)
+    tids = src["tids"]
+    transmission = xr.DataArray(np.ones(8), dims="trainId", coords={"trainId": tids})
     xgm = xr.DataArray(300.0 + np.arange(8.0), dims="trainId", coords={"trainId": tids})
     raw = FakeRaw(timestamps(tids), xgm)
     return {
-        "db": db,
+        "db": {1: FakeRun(damnit_file, transmission)},
         "raw": raw,
         "path": path,
-        "failed": failed_id,
-        "hit_ids": np.array(sorted([*(t.train_id for t in photons), failed_id])),
+        "failed": src["failed"],
+        "hit_ids": src["hit_ids"],
         "kw": {"results_file": path, "raw": raw, "cache_dir": tmp_path / "c"},
         "dir": tmp_path / "c",
     }
