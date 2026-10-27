@@ -760,11 +760,10 @@ three of them touched the wider windows `BRAGG_WINDOWS_NM` (0.57–0.65 and 0.68
 `triage.roi_kinds` and `saxs.photon_stats.default_rings` import them from there; nothing else
 restates a band edge.
 
-**The rings.** `RINGS_NM` is computed: 0.045 nm⁻¹ rings stepped up from extra-speckle's lower
-bound and down from its upper bound, each stopping before the windows. That gives nine rings,
-0.225 → 0.540 and 0.770 → 0.860, all "plain". They are §13's nine that touched no window, with the
-same edges to within a float ULP, and the outer bounds are still extra-speckle's floats, so the
-envelope and every photon store stay valid. Dropped: 0.540–0.585, 0.640–0.685 and 0.725–0.770
+**The rings.** `RINGS_NM` keeps §13's nine rings that touch no window, with their edges bit for
+bit: 0.225 → 0.540 and 0.770 → 0.860 nm⁻¹, all "plain". The gap between the windows is narrower
+than a ring. The outer bounds are still extra-speckle's floats, so the envelope and every photon
+store stay valid. Dropped: 0.540–0.585, 0.640–0.685 and 0.725–0.770
 nm⁻¹ (centres 0.05625, 0.06625, 0.07475 Å⁻¹), and with them their three `REFERENCE_BETA`
 entries; the other nine β values stand.
 

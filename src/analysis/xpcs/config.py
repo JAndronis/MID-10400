@@ -64,28 +64,13 @@ def touches_bragg(lo: float, hi: float) -> bool:
     return any(lo < w_hi and hi > w_lo for w_lo, w_hi in BRAGG_WINDOWS_NM)
 
 
-def _rings_clear_of_bragg(
-    lo: float, hi: float, width: float
-) -> tuple[tuple[float, float], ...]:
-    """Rings of ``width`` stepped up from ``lo`` and down from ``hi``, each
-    stopping before the Bragg windows.
-
-    The gap between the two windows is narrower than ``width``, so no ring fits
-    there.
-    """
-    n = int((hi - lo) // width)
-    up = [(lo + k * width, lo + (k + 1) * width) for k in range(n)]
-    down = [(hi - (k + 1) * width, hi - k * width) for k in reversed(range(n))]
-    first, last = BRAGG_WINDOWS_NM[0][0], BRAGG_WINDOWS_NM[-1][1]
-    return tuple(r for r in up if r[1] <= first) + tuple(
-        r for r in down if r[0] >= last
-    )
-
-
-#: The XPCS rings [nm⁻¹], 0.045 wide, clear of ``BRAGG_WINDOWS_NM``. The outer
-#: bounds equal those of ``ES_RINGS_NM``, so both ring sets give the same
+#: The XPCS rings [nm⁻¹], 0.045 wide, clear of ``BRAGG_WINDOWS_NM``. The gap
+#: between the two windows is narrower than a ring, so none sits there. The
+#: outer bounds equal those of ``ES_RINGS_NM``, so both ring sets give the same
 #: envelope and the same photon store.
-RINGS_NM = _rings_clear_of_bragg(ES_RINGS_NM[0][0], ES_RINGS_NM[-1][1], 0.045)
+RINGS_NM: tuple[tuple[float, float], ...] = _contiguous_nm(
+    (0.0225, 0.027, 0.0315, 0.036, 0.0405, 0.045, 0.0495, 0.054)
+) + _contiguous_nm((0.077, 0.0815, 0.086))
 
 #: Bump when what either file holds changes.
 STORE_SCHEMA = 1
