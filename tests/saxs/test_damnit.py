@@ -10,6 +10,7 @@ because a dropped train shifts every later frame's position.
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -30,8 +31,8 @@ from analysis.saxs import damnit  # noqa: E402
 from analysis.saxs.writer import per_pulse  # noqa: E402
 
 
-@pytest.fixture
-def finished(run_cfg, geom, mock_run_factory, tmp_path):
+@pytest.fixture(scope="module")
+def finished(run_cfg, geom, mock_run_factory, tmp_path_factory):
     """A completed pass over the awkward mock run, and its output file.
 
     The run has a dropped train, a train short of modules and a zero-frame
@@ -40,6 +41,7 @@ def finished(run_cfg, geom, mock_run_factory, tmp_path):
     from analysis.saxs.run import run_agipd_saxs
 
     run, dc = mock_run_factory(**AWKWARD)
+    tmp_path = tmp_path_factory.mktemp("finished")
     output = tmp_path / "out.h5"
     run_agipd_saxs(
         run_cfg,
@@ -52,6 +54,15 @@ def finished(run_cfg, geom, mock_run_factory, tmp_path):
         reduce="none",
     )
     return run, output
+
+
+@pytest.fixture
+def editable(finished, tmp_path):
+    """A copy of the finished frame table, for the tests that alter it."""
+    run, output = finished
+    copy = tmp_path / "out.h5"
+    shutil.copy2(output, copy)
+    return run, copy
 
 
 # ── the per-pulse grid ────────────────────────────────────────────────────────
@@ -92,9 +103,9 @@ def test_every_frame_lands_on_the_slot_its_labels_name(finished):
             assert np.allclose(grid.values[t, p], expected, rtol=1e-6, atol=0)
 
 
-def test_a_slot_with_no_frame_is_zero_not_nan(finished):
+def test_a_slot_with_no_frame_is_zero_not_nan(editable):
     """An empty slot holds zeros and a status count, never a NaN sentinel."""
-    _, output = finished
+    _, output = editable
     with h5py.File(output, "r+") as handle:
         handle["frames/status"][0] = FrameStatus.DATA_CHECK_FAILED
         train = int(handle["frames/trainId"][0])
@@ -109,9 +120,9 @@ def test_a_slot_with_no_frame_is_zero_not_nan(finished):
     assert json.loads(grid.attrs["unplaced"]) == {FrameStatus.DATA_CHECK_FAILED.name: 1}
 
 
-def test_unwritten_rows_are_counted_never_guessed_onto_a_slot(finished):
+def test_unwritten_rows_are_counted_never_guessed_onto_a_slot(editable):
     """An unprocessed row carries trainId 0, so it must not be placed anywhere."""
-    _, output = finished
+    _, output = editable
     with h5py.File(output, "r+") as handle:
         n = int(handle["trains/count"][0])
         handle["frames/status"][:n] = FrameStatus.NOT_PROCESSED
@@ -123,9 +134,9 @@ def test_unwritten_rows_are_counted_never_guessed_onto_a_slot(finished):
     assert 0 not in set(grid["trainId"].values.tolist())
 
 
-def test_per_pulse_refuses_duplicate_train_pulse_slots(finished):
+def test_per_pulse_refuses_duplicate_train_pulse_slots(editable):
     """Two frames in one slot would silently overwrite; that must not pass."""
-    _, output = finished
+    _, output = editable
     with h5py.File(output, "r+") as handle:
         handle["frames/reader_pulseId"][1] = handle["frames/reader_pulseId"][0]
         handle["frames/trainId"][1] = handle["frames/trainId"][0]
@@ -134,8 +145,8 @@ def test_per_pulse_refuses_duplicate_train_pulse_slots(finished):
         per_pulse(output)
 
 
-def test_per_pulse_refuses_an_unknown_train(finished):
-    _, output = finished
+def test_per_pulse_refuses_an_unknown_train(editable):
+    _, output = editable
     with h5py.File(output, "r+") as handle:
         handle["frames/trainId"][0] = 999_999_999
 
@@ -363,15 +374,15 @@ def _roots(tmp_path):
     }
 
 
-@pytest.fixture
-def preprocessed(mock_pipeline, geom, tmp_path):
+@pytest.fixture(scope="module")
+def preprocessed(mock_pipeline, geom, tmp_path_factory):
     """The mock run written at its config's own paths, as ``preprocess`` writes it,
     and the overrides that rebuild that config through ``config_for``."""
     from dataclasses import fields, replace
 
     from analysis.saxs.run import run_agipd_saxs
 
-    cfg = replace(mock_pipeline.cfg, **_roots(tmp_path))
+    cfg = replace(mock_pipeline.cfg, **_roots(tmp_path_factory.mktemp("roots")))
     run_agipd_saxs(
         cfg,
         dc=mock_pipeline.dc,

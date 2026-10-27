@@ -615,10 +615,12 @@ def test_the_default_root_is_not_scratch():
 
 
 # ── the reader ────────────────────────────────────────────────────────────────
-@pytest.fixture
-def written(run_cfg, geom, mock_run_factory, tmp_path):
+@pytest.fixture(scope="module")
+def written(run_cfg, geom, mock_run_factory, tmp_path_factory):
+    """The awkward run's window sums, read and never altered by the reader tests."""
     run, dc = mock_run_factory(**AWKWARD)
-    return run, run_pass(run_cfg, geom, (run, dc), tmp_path, pixel_sum_trains=3)
+    out = tmp_path_factory.mktemp("written")
+    return run, run_pass(run_cfg, geom, (run, dc), out, pixel_sum_trains=3)
 
 
 def test_the_reader_sums_several_windows_like_the_cache(written, reference):
