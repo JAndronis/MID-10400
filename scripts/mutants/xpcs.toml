@@ -1,0 +1,93 @@
+# Mutants for the hit-train XPCS pass. Format as in common.toml.
+
+[[mutant]]
+name = "xpcs_partner_gap_exclusive"
+file = "src/analysis/xpcs/kernel.py"
+old = "elif last is not None and tid - int(train_ids[last]) <= max_gap:"
+new = "elif last is not None and tid - int(train_ids[last]) < max_gap:"
+tests = ["tests/xpcs/test_xpcs_partners.py"]
+
+[[mutant]]
+name = "xpcs_last_lag_bin_open"
+file = "src/analysis/xpcs/result.py"
+old = "inside = (lags >= lo) & ((lags < hi) | (b == BIN_COUNT - 1))"
+new = "inside = (lags >= lo) & (lags < hi)"
+tests = ["tests/xpcs/test_xpcs_result.py"]
+
+[[mutant]]
+name = "xpcs_c2_jackknife_factor"
+file = "src/analysis/xpcs/result.py"
+old = "(count - 1) / count * np.nansum((loo - np.nanmean(loo, 0)) ** 2, 0)"
+new = "1 / count * np.nansum((loo - np.nanmean(loo, 0)) ** 2, 0)"
+tests = ["tests/xpcs/test_xpcs_result.py"]
+
+[[mutant]]
+name = "xpcs_es_baseline_not_symmetrised"
+file = "src/analysis/xpcs/result.py"
+old = """            off = 0.5 * (off + off.swapaxes(-1, -2))
+        off[~self.has_off[rows]] = np.nan"""
+new = """        off[~self.has_off[rows]] = np.nan"""
+tests = ["tests/xpcs/test_xpcs_result.py"]
+
+[[mutant]]
+name = "xpcs_es_zero_norm_nan"
+file = "src/analysis/xpcs/result.py"
+old = "            norm[norm == 0] = 1.0"
+new = "            norm[norm == 0] = np.nan"
+tests = ["tests/xpcs/test_xpcs_result.py"]
+
+[[mutant]]
+name = "xpcs_mean_intensity_per_train"
+file = "src/analysis/xpcs/figures.py"
+old = "value = s_on.sum(axis=(1, 2)) / (total_pixels * hits.n_frames)"
+new = "value = s_on.sum(axis=(1, 2)) / total_pixels"
+tests = ["tests/xpcs/test_xpcs_figures.py"]
+
+[[mutant]]
+name = "xpcs_q_rings_fallback_inverted"
+file = "src/analysis/xpcs/figures.py"
+old = "mean[(ratio < OUTLIER_THRESHOLDS[0]) | (ratio > OUTLIER_THRESHOLDS[1])] = np.nan"
+new = "mean[(ratio >= OUTLIER_THRESHOLDS[0]) & (ratio <= OUTLIER_THRESHOLDS[1])] = np.nan"
+tests = ["tests/xpcs/test_xpcs_figures.py"]
+
+[[mutant]]
+name = "xpcs_beamcenter_merit"
+file = "src/analysis/xpcs/figures.py"
+old = "merit = float(np.nanmean(np.nanvar(np.log(cones.values), axis=0)))"
+new = "merit = float(np.nanmean(np.nanstd(cones.values, axis=0)))"
+tests = ["tests/xpcs/test_xpcs_figures.py"]
+
+[[mutant]]
+name = "xpcs_beamcenter_deviation_sign"
+file = "src/analysis/xpcs/figures.py"
+old = "mean[in_ring & (cone == c)].mean() / ring_mean - 1.0"
+new = "ring_mean / mean[in_ring & (cone == c)].mean() - 1.0"
+tests = ["tests/xpcs/test_xpcs_figures.py"]
+
+[[mutant]]
+name = "xpcs_kbar_wrapper_draws_ttcf"
+file = "src/analysis/xpcs/damnit.py"
+old = "return figures.figure_kbar(_open(proposal, run_no, None, overrides))"
+new = "return figures.figure_ttcfs(_open(proposal, run_no, None, overrides))"
+tests = ["tests/xpcs/test_xpcs_figures.py", "tests/xpcs/test_xpcs_damnit.py"]
+
+[[mutant]]
+name = "xpcs_dispersion_weights_inverted"
+file = "src/analysis/xpcs/figures.py"
+old = "a = float(np.average(gamma / q / q, weights=err_gamma / q / q))"
+new = "a = float(np.average(gamma / q / q, weights=q * q / err_gamma))"
+tests = ["tests/xpcs/test_xpcs_figures.py"]
+
+[[mutant]]
+name = "xpcs_prelude_ignores_pulse_ids"
+file = "src/analysis/xpcs/run.py"
+old = "elif not np.array_equal(own, pattern):"
+new = "elif False:"
+tests = ["tests/xpcs/test_xpcs_run.py", "tests/xpcs/test_xpcs_result.py"]
+
+[[mutant]]
+name = "xpcs_writer_partner_guard_removed"
+file = "src/analysis/xpcs/result.py"
+old = "if int(f[\"hits/partner\"][row]) != sums.partner_id:"
+new = "if False:"
+tests = ["tests/xpcs"]

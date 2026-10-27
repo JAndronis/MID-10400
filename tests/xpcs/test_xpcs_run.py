@@ -118,6 +118,43 @@ def test_trains_that_gave_no_photons_are_accounted_for_not_dropped(pipeline):
         assert f["hits/partner"][row_of[10003]] == 10001
 
 
+def test_a_train_with_another_pulse_pattern_is_not_correlated(cfg, tmp_path):
+    """The same frame count but other pulse ids is a label mismatch, not a lag."""
+    from dataclasses import replace
+
+    from xpcs_fakes import make_dense, make_flags, make_train, merge_trains
+
+    from analysis.xpcs.run import build_prelude
+    from analysis.xpcs.store import FlagBase
+
+    rng = np.random.default_rng(4)
+    n_env, n_frames = 50, 6
+    trains = [
+        make_train(
+            t, make_dense(rng, n_frames, n_env), make_flags(rng, n_frames, n_env)
+        )
+        for t in (1, 2, 3, 4, 5)
+    ]
+    trains[2] = replace(
+        trains[2], pulse_ids=(200 + 4 * np.arange(n_frames)).astype(np.uint32)
+    )
+    trains[4] = replace(trains[4], pulse_ids=trains[4].pulse_ids[:-1])
+    envelope = np.arange(n_env, dtype=np.int32)
+    path = tmp_path / "store.h5"
+    with RingPhotonStore.create(path, "a" * 64, envelope, FlagBase.empty()) as store:
+        merge_trains(store, trains)
+        prelude = build_prelude(store, HitSet.of([1, 2, 3, 4, 5]), cfg)
+    assert prelude.status.tolist() == [
+        FrameStatus.OK,
+        FrameStatus.OK,
+        FrameStatus.LABEL_MISMATCH,
+        FrameStatus.OK,
+        FrameStatus.DATA_CHECK_FAILED,
+    ]
+    assert prelude.pairing.partner.tolist() == [0, 1, 0, 2, 0]
+    assert prelude.pattern.tolist() == (200 + 2 * np.arange(n_frames)).tolist()
+
+
 def test_a_complete_run_is_answered_from_the_file_and_writes_nothing(
     pipeline, tmp_path
 ):

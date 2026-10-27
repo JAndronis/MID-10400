@@ -69,6 +69,15 @@ def make_train(
     )
 
 
+def merge_trains(store, trains, name: str = "block_000000.h5") -> int:
+    """Put ``trains`` into ``store`` as the pass does: a block file, then a merge."""
+    from analysis.xpcs.store import block_dir_for, write_block_file
+
+    path = block_dir_for(store.path) / name
+    write_block_file(path, store.extract_hash, trains)
+    return store.merge_block(path)
+
+
 def load_extra_speckle_module(relative: str):
     """A file of the installed extra_speckle, loaded without importing the package.
 

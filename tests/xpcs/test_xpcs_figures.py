@@ -571,3 +571,98 @@ def test_the_wrappers_skip_a_missing_file_and_refuse_an_unfinished_one(tmp_path)
     build_results(path, photons, rings, failed={999: FrameStatus.NOT_PROCESSED})
     with pytest.raises(IncompleteRun):
         xd.kbar_figure(10400, 423, **empty)
+
+
+def test_the_dispersion_weights_each_ring_by_its_error_as_extra_speckle_does():
+    """``fit_dr``'s ``weightedaverage`` weights by the errors, not their inverses."""
+    q = np.array([0.03, 0.04, 0.05, 0.06])
+    diffusion = np.array([1e8, 3e8, 6e8, 2e8])
+    tau = np.geomspace(4e-7, 6e-5, 30)
+    values = 0.04 * np.exp(-2 * np.outer(diffusion * q**2, tau)) + 0.002
+    values += 1e-4 * np.random.default_rng(8).standard_normal(values.shape)
+    g2 = xr.DataArray(values, dims=("roi_q", "tau"), coords={"roi_q": q, "tau": tau})
+    fit = F.fit_g2(g2)
+    weights = fit.err_gamma / q**2
+    np.testing.assert_allclose(
+        fit.dr_a, np.average(diffusion, weights=weights), rtol=1e-2
+    )
+    assert abs(fit.dr_a - diffusion.mean()) > 0.3 * diffusion.mean()
+    np.testing.assert_allclose(fit.dr_a_err, np.std(fit.gamma / q**2), rtol=1e-12)
+
+
+def dipole_detector(epsilon, n_chi=720, n_q=40):
+    """Two rings of pixels on a regular (q, χ) grid, the mean ∝ 1 + ε cos χ."""
+    chi = np.tile((np.arange(n_chi) + 0.5) * 360 / n_chi - 180, n_q)
+    q = np.repeat(np.linspace(0.021, 0.059, n_q), n_chi)
+    mean = 400 * (1 + epsilon * np.cos(np.radians(chi)))
+    return F.DetectorMean(
+        total=np.tile(mean.astype(np.float32), (3, 1)) * 4,
+        n_trains=4,
+        train_ids=np.arange(4),
+        pixel=np.arange(chi.size),
+        ring=(q >= 0.04).astype(np.int8),
+        q_A=q,
+        chi_deg=chi,
+        ring_bounds_A=np.array([[0.02, 0.04], [0.04, 0.06]]),
+        geometry=None,
+        beam_center=None,
+        run="7",
+    )
+
+
+@pytest.mark.parametrize("epsilon", [0.0, 0.05, 0.1])
+def test_the_beamcenter_figure_shows_each_cones_deviation_and_the_merit(epsilon):
+    import re
+
+    fig = F.figure_beamcenter(dipole_detector(epsilon))
+    lo = np.radians(45 * np.arange(F.N_CONES))
+    cos_in_cone = (np.sin(lo + np.radians(45)) - np.sin(lo)) / np.radians(45)
+    for line in fig.axes[1].lines[:2]:
+        np.testing.assert_allclose(line.get_ydata(), epsilon * cos_in_cone, atol=1e-6)
+    merit = float(re.search(r"cone merit (\S+) ", fig.get_suptitle()).group(1))
+    expected = np.var(np.log1p(epsilon * cos_in_cone))
+    assert merit == pytest.approx(expected, rel=5e-3, abs=1e-12)
+
+
+def test_the_ring_image_without_an_applied_mask_blanks_the_recomputed_outliers(geom):
+    n = 4000
+    total = np.full((3, n), 40.0, np.float32)
+    total[:, 100] *= 30  # hot
+    total[:, 1500] = 0  # dead
+    det = F.DetectorMean(
+        total=total,
+        n_trains=4,
+        train_ids=np.arange(4),
+        pixel=np.arange(n) * 97,
+        ring=(np.arange(n) * 2 // n).astype(np.int8),
+        q_A=np.linspace(0.02, 0.06, n),
+        chi_deg=np.linspace(-179, 179, n),
+        ring_bounds_A=np.array([[0.02, 0.04], [0.04, 0.06]]),
+        geometry=geom,
+        beam_center=None,
+        run="7",
+    )
+    shown = image_axes(F.figure_q_rings(det))[0].images[0].get_array().filled(np.nan)
+    finite = shown[np.isfinite(shown)]
+    assert finite.size == n - 2
+    np.testing.assert_allclose(np.sort(finite), np.full(n - 2, 10.0), rtol=1e-6)
+
+
+def test_each_results_wrapper_draws_the_view_it_names(written):
+    hits = xd._open(10400, 423, None, written)
+    kbar = hits.kbar().values
+    trace = xd.kbar_figure(10400, 423, **written).axes[0]
+    plotted = np.array([y for line in trace.lines for y in line.get_ydata()])
+    np.testing.assert_allclose(
+        np.sort(plotted[np.isfinite(plotted)]), np.sort(kbar[np.isfinite(kbar)])
+    )
+    curve = xd.g2_figure(10400, 423, **written).axes[0].lines[0]
+    np.testing.assert_allclose(
+        curve.get_ydata(), hits.g2()["c2"].values[0], equal_nan=True
+    )
+    panel = image_axes(xd.ttcfs_figure(10400, 423, **written))[1]
+    np.testing.assert_allclose(
+        panel.images[0].get_array().filled(np.nan),
+        hits.ttcf()["c2"].values[1],
+        equal_nan=True,
+    )

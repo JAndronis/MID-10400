@@ -333,7 +333,8 @@ def test_the_error_of_c2_comes_from_leaving_out_blocks_of_both_terms(world, resu
     on, den_on, off, den_off = (
         a[paired] for a in reference_lag_terms(sums, results.lags())
     )
-    blocks = np.array_split(np.arange(paired.sum()), 2)
+    # Three blocks, where the jackknife factor (n - 1)/n differs from 1/n.
+    blocks = np.array_split(np.arange(paired.sum()), 3)
     loo = np.stack(
         [
             ratio(on.sum(0) - on[b].sum(0), den_on.sum(0) - den_on[b].sum(0))
@@ -341,9 +342,9 @@ def test_the_error_of_c2_comes_from_leaving_out_blocks_of_both_terms(world, resu
             for b in blocks
         ]
     )
-    expected = np.sqrt(0.5 * ((loo - loo.mean(0)) ** 2).sum(0))
+    expected = np.sqrt(2 / 3 * ((loo - loo.mean(0)) ** 2).sum(0))
     np.testing.assert_allclose(
-        results.g2(binned=False, n_blocks=2).sigma.values, expected, rtol=1e-9
+        results.g2(binned=False, n_blocks=3).sigma.values, expected, rtol=1e-9
     )
 
 
@@ -589,3 +590,42 @@ def test_sums_read_by_a_pool_of_slabs_pool_to_the_serial_ones(many_rows):
     assert_same_datasets(
         many_rows.ttcf(sums=parallel), many_rows.ttcf(sums=serial), rtol=1e-12
     )
+
+
+def test_sums_made_against_another_partner_are_refused_and_the_row_left_open(
+    world, tmp_path
+):
+    from analysis.common.plan import Block
+    from analysis.xpcs.hits import HitSet
+    from analysis.xpcs.kernel import partners
+    from analysis.xpcs.result import Prelude, ResultWriter
+
+    rings, _, _, photons = world
+    hits = HitSet.of(IDS)
+    ok = np.ones(len(IDS), bool)
+    pairing = partners(hits.train_ids, ok, np.zeros(len(IDS)), Kernel.CLEAN, 10)
+    assert pairing.partner[1] == IDS[0]
+    prelude = Prelude(
+        np.zeros(len(IDS), np.uint8),
+        pairing,
+        np.zeros(len(IDS), np.int32),
+        photons[0].pulse_ids,
+    )
+    wrong = train_sums(photons[1], photons[2], rings, Kernel.CLEAN)
+    with ResultWriter.open_or_create(
+        tmp_path / "xpcs_hits.h5",
+        hits=hits,
+        prelude=prelude,
+        rings=rings,
+        merge_hash="m" * 64,
+        extract_hash="e" * 64,
+        attrs={},
+    ) as out:
+        with pytest.raises(ValueError, match="summed against"):
+            out.write_block(
+                Block(1, (IDS[1],), (1,), (1,)), SimpleNamespace(sums=[wrong])
+            )
+        assert out.unfinished() == len(IDS)
+    with h5py.File(tmp_path / "xpcs_hits.h5", "r") as f:
+        assert f["hits/status"][1] == FrameStatus.NOT_PROCESSED
+        assert not f["sums/on"][1].any()
