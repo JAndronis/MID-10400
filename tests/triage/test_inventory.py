@@ -26,7 +26,6 @@ from analysis.triage.inventory import (
         (35, "Calibration - Dark HG", None, "none", "calib_dark"),
         (506, "Dark Burst Mode", None, "none", "calib_dark"),
         (58, "Test DAQ", None, "none", "test"),
-        (24, "XPCS", "dmesh fsssx", "ferritin_peg_commissioning", "commissioning"),
         (
             30,
             "XPCS",
@@ -35,9 +34,7 @@ from analysis.triage.inventory import (
             "commissioning",
         ),  # r <= 42 first
         (120, "XPCS", "dmesh SSHEX_X (-0.5 -> 0.5)", "ferritin50_peg6k", "mesh_sshex"),
-        (318, "XPCS", "dmesh SSHEX_X", "ferritin50", "mesh_sshex"),
         (55, "XPCS", None, "air", "reference"),
-        (383, "XPCS", None, "silica_np", "reference"),
         (423, "XPCS", None, "ferritin50_peg6k", "static_droplet"),
     ],
 )

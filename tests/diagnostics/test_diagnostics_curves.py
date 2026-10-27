@@ -101,11 +101,6 @@ def test_svd_finds_a_changing_shape(tmp_path):
     r = np.corrcoef(result.weight.sel(component=1), b)[0, 1]
     assert abs(r) > 0.95
     assert result.explained.sum() <= 1 + 1e-12
-
-
-def test_svd_refuses_an_empty_matrix(tmp_path):
-    flux = flux_array(n=4)
-    path, _ = run_file(tmp_path, flux)
     with pytest.raises(ValueError, match="nothing to decompose"):
         svd(per_train(path), q_range=(5.0, 6.0))
 
@@ -122,13 +117,8 @@ def test_chi2_is_one_for_pure_noise_and_flags_an_outlier(tmp_path):
     assert (chi2.n_bins == NPT).all()
     # without dividing by a 10 % flux, the flux scatter dominates χ²
     assert float(chi2_vs_median(ds).chi2.median()) > 20
-
-
-def test_chi2_needs_sigma(tmp_path):
-    flux = flux_array(n=4)
-    path, _ = run_file(tmp_path, flux)
     with pytest.raises(ValueError, match="sigma"):
-        chi2_vs_median(per_train(path).intensity)
+        chi2_vs_median(ds.intensity)
 
 
 def test_xgm_scatter_before_and_after():
@@ -144,12 +134,9 @@ def test_xgm_scatter_before_and_after():
         xr.full_like(flux, 1.0) * (1 + 0.05 * rng.standard_normal(flux.size)), flux
     )
     assert unrelated.ratio > 1.5  # dividing by an unrelated flux adds its scatter
-
-
-def test_xgm_scatter_drops_trains_without_flux():
-    flux = flux_array(n=10)
-    flux[:4] = np.nan
-    assert xgm_scatter(flux * 3, flux).n_trains == 6
+    gaps = flux.copy()
+    gaps[:4] = np.nan
+    assert xgm_scatter(gaps * 3, gaps).n_trains == N_TRAINS - 4
 
 
 def test_cell_correlation_separates_lit_from_dark(tmp_path):

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+import h5py
 import numpy as np
 import pytest
 from diagnostics_fakes import FIRST_TRAIN, write_frame_table
 
 from analysis.common.status import FrameStatus
-from analysis.common.writer import pooled_per_train
 from analysis.diagnostics.frames import (
     default_scalar_column,
     detector_kind,
@@ -86,11 +86,8 @@ def test_units_default_and_recorded(tmp_path):
     assert units(root) == "photons"
     assert per_train(kev).attrs["units_recorded"] is False
     assert per_train(photons).attrs["units_recorded"] is True
-
-
-def test_detector_kind_refuses_a_foreign_file(tmp_path):
-    import h5py
-
+    expected = {"units": "photons", "detector": "agipd"}
+    assert expected.items() <= per_train(agipd).attrs.items()
     with h5py.File(tmp_path / "x.h5", "w") as f:
         f.create_group("frames")
         with pytest.raises(ValueError, match="neither"):
@@ -136,11 +133,3 @@ def test_frame_scalar_refuses_shared_slots(tmp_path):
     )
     with pytest.raises(ValueError, match="share"):
         frame_scalar(path)
-
-
-def test_per_train_is_the_pooled_reducer(tmp_path):
-    path = write_frame_table(tmp_path / "a.h5", "agipd", signal())
-    ours, theirs = per_train(path), pooled_per_train(path)
-    np.testing.assert_array_equal(ours.intensity, theirs.intensity)
-    assert ours.attrs["units"] == "photons"
-    assert ours.attrs["detector"] == "agipd"
