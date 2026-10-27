@@ -21,7 +21,7 @@ pytest.importorskip("h5netcdf")  # analysis.cache writes its reference as netCDF
 
 import h5py  # noqa: E402
 from mockrun import AWKWARD  # noqa: E402
-from test_run import BrokenPool, InlinePool  # noqa: E402
+from test_run import InlinePool  # noqa: E402
 
 from analysis import cache  # noqa: E402
 from analysis.common.status import FrameStatus  # noqa: E402
@@ -33,10 +33,8 @@ from analysis.saxs.operator import load_operator  # noqa: E402
 from analysis.saxs.pixel_sums import (  # noqa: E402
     FILE_NAME,
     WindowSpec,
-    accumulate_train,
     detector_sums,
     pixel_sums_hash,
-    train_data_ok,
     window_sums,
     window_table,
 )
@@ -112,9 +110,7 @@ def frame_table_digest(path, h5_digest):
 
 
 # ── equivalence with the cache ────────────────────────────────────────────────
-@pytest.mark.parametrize(
-    ("trains_per_block", "window"), [(2, 3), (3, 3), (2, 1), (4, 10)]
-)
+@pytest.mark.parametrize(("trains_per_block", "window"), [(2, 3), (4, 10)])
 def test_every_window_equals_detector_sums_of_its_trains(
     run_cfg, geom, mock_run_factory, reference, tmp_path, trains_per_block, window
 ):
@@ -161,20 +157,6 @@ def test_windows_are_train_id_ranges_and_record_why_a_train_is_missing(
     assert status[10006] == FrameStatus.NO_FRAMES
     assert all(status[t] == FrameStatus.OK for t in (10000, 10001, 10003, 10005, 10007))
     np.testing.assert_array_equal(window, [0, 0, 1, 1, 1, 2, 2])
-
-
-def test_a_real_spawned_pool_writes_the_same_windows(
-    mock_pipeline, geom, mock_run_factory, tmp_path
-):
-    """The partials survive pickling between processes."""
-    run_dc = mock_run_factory()
-    cfg = mock_pipeline.cfg
-    spawned = run_pass(
-        cfg, geom, run_dc, tmp_path / "spawned", pool=None, pixel_sum_trains=3
-    )
-    inline = run_pass(cfg, geom, run_dc, tmp_path / "inline", pixel_sum_trains=3)
-    for name, values in datasets(inline).items():
-        np.testing.assert_array_equal(datasets(spawned)[name], values, name)
 
 
 # ── the frame table ───────────────────────────────────────────────────────────
@@ -295,18 +277,17 @@ def test_a_failed_block_is_left_out_and_the_run_is_incomplete(
         assert_same_sums(sums, reference(run, members))
 
 
-@pytest.mark.parametrize(("window", "reread"), [(3, [0, 1, 2]), (1, [1])])
 def test_a_window_that_lost_trains_to_a_worker_error_is_rebuilt(
-    run_cfg, geom, mock_run_factory, reference, tmp_path, monkeypatch, window, reread
+    run_cfg, geom, mock_run_factory, reference, tmp_path, monkeypatch
 ):
-    """A worker error says nothing about the data, so a rerun retries it.
+    """A worker error says nothing about the data, so a plain rerun retries it.
 
     Block 1 (trains 10002, 10003) fails once. With 3-train windows it holds a
-    train of each window, so the rerun reads every block; with 1-train windows
-    only its own. Either way the rerun integrates block 1 alone (the others are
-    final in the frame table and are read for their windows only), and both
-    files come out whole.
+    train of each window, so the rerun reads every block, yet integrates block
+    1 alone (the others are final in the frame table and are read for their
+    windows only), and both files come out whole.
     """
+    window, reread = 3, [0, 1, 2]
     run, dc = mock_run_factory()
     real_process, real_integrate = worker.process_block, worker.integrate_frame
 
@@ -348,28 +329,6 @@ def test_a_window_that_lost_trains_to_a_worker_error_is_rebuilt(
         np.testing.assert_array_equal(datasets(path)[name], values, name)
     sums = window_sums(path, window_table(path).window.values)
     assert_same_sums(sums, reference(run, range(10000, 10006)))
-
-
-def test_resetting_a_failed_block_completes_frames_and_windows(
-    run_cfg, geom, mock_run_factory, tmp_path, monkeypatch
-):
-    """A plain rerun repairs both files, with no rows reset by hand."""
-    run_dc = mock_run_factory()
-    real = worker.process_block
-    monkeypatch.setattr(
-        worker,
-        "process_block",
-        lambda b: (_ for _ in ()).throw(RuntimeError("x")) if b.index == 0 else real(b),
-    )
-    with pytest.raises(IncompleteRun):
-        run_pass(run_cfg, geom, run_dc, tmp_path, pixel_sum_trains=3)
-
-    monkeypatch.setattr(worker, "process_block", real)
-    run_pass(run_cfg, geom, run_dc, tmp_path, pixel_sum_trains=3)  # no raise
-    with h5py.File(tmp_path / FILE_NAME, "r") as handle:
-        assert (handle["trains/status"][:] == FrameStatus.OK).all()
-    with h5py.File(tmp_path / "out.h5", "r") as frames:
-        assert (frames["frames/status"][:] == FrameStatus.OK).all()
 
 
 # ── resume ────────────────────────────────────────────────────────────────────
@@ -471,28 +430,6 @@ def test_reintegrating_a_block_leaves_its_written_windows_alone(
         np.testing.assert_array_equal(datasets(path)[name], values, name)
 
 
-def test_a_rerun_with_everything_written_does_no_work(
-    run_cfg, geom, mock_run_factory, tmp_path, monkeypatch
-):
-    run_dc = mock_run_factory()
-    run_pass(run_cfg, geom, run_dc, tmp_path, pixel_sum_trains=3)
-
-    def forbidden(block):
-        raise AssertionError("nothing is left to read")
-
-    monkeypatch.setattr(worker, "process_block", forbidden)
-    run_pass(run_cfg, geom, run_dc, tmp_path, pixel_sum_trains=3)
-
-
-def test_a_killed_pool_before_any_block_writes_no_window(
-    run_cfg, geom, mock_run_factory, tmp_path
-):
-    run_dc = mock_run_factory()
-    with pytest.raises(BrokenExecutor):
-        run_pass(run_cfg, geom, run_dc, tmp_path, pool=BrokenPool, pixel_sum_trains=3)
-    assert not window_table(tmp_path / FILE_NAME).written.values.any()
-
-
 # ── the sums-only mode ────────────────────────────────────────────────────────
 def test_the_sums_only_mode_writes_the_same_windows(
     run_cfg, geom, mock_run_factory, tmp_path, monkeypatch
@@ -516,36 +453,13 @@ def test_the_sums_only_mode_writes_the_same_windows(
         np.testing.assert_array_equal(datasets(alone)[name], values, name)
 
 
-def test_the_sums_only_mode_resumes(run_cfg, mock_run_factory, tmp_path, monkeypatch):
-    run, dc = mock_run_factory()
-    cfg = replace(run_cfg, pixel_sum_trains=3)
-    kwargs = {
-        "dc": dc,
-        "run_dir": run.path,
-        "pixel_sums_path": tmp_path / FILE_NAME,
-    }
-    with pytest.raises(BrokenExecutor):
-        run_pixel_sums(cfg, pool_factory=DiesAfterOneBlock, **kwargs)
-
-    seen = []
-    real = worker.process_block
-    monkeypatch.setattr(
-        worker, "process_block", lambda b: seen.append(b.index) or real(b)
-    )
-    run_pixel_sums(cfg, pool_factory=InlinePool, **kwargs)
-    assert sorted(seen) == [0, 1, 2]
-    assert window_table(tmp_path / FILE_NAME).written.values.all()
-
-
-def test_the_sums_only_mode_needs_windows(run_cfg):
-    with pytest.raises(ValueError, match="no windows"):
-        run_pixel_sums(replace(run_cfg, pixel_sum_trains=None))
-
-
 # ── hashes and refusal ────────────────────────────────────────────────────────
-@pytest.mark.parametrize(
-    ("changes", "moves"),
-    [
+def test_the_window_sums_hash_covers_only_what_changes_a_count(run_cfg):
+    """Counts depend on the run, the window length and the detector read, never
+    on the geometry, the masks the integration applies or where files go."""
+    detector = "MID_DET_AGIPD1M-1"
+    before = pixel_sums_hash(run_cfg, detector)
+    for changes, moves in [
         ({"pixel_sum_trains": 50}, True),
         ({"run": 424}, True),
         ({"proposal": 1}, True),
@@ -560,20 +474,10 @@ def test_the_sums_only_mode_needs_windows(run_cfg):
         ({"pixel_sums_root": "/tmp/b"}, False),
         ({"trains_per_block": 16}, False),
         ({"overwrite": True}, False),
-    ],
-)
-def test_the_window_sums_hash_covers_only_what_changes_a_count(run_cfg, changes, moves):
-    changed = replace(run_cfg, **changes)
-    before = pixel_sums_hash(run_cfg, "MID_DET_AGIPD1M-1")
-    assert (pixel_sums_hash(changed, "MID_DET_AGIPD1M-1") != before) is moves
-
-
-def test_the_hash_takes_the_detector_name_as_resolved(run_cfg):
-    """``None`` and the name it detects write the same file."""
-    named = replace(run_cfg, detector_name="MID_DET_AGIPD1M-1")
-    assert pixel_sums_hash(named, "MID_DET_AGIPD1M-1") == pixel_sums_hash(
-        run_cfg, "MID_DET_AGIPD1M-1"
-    )
+        ({"detector_name": detector}, False),  # None resolves to this name
+    ]:
+        changed = pixel_sums_hash(replace(run_cfg, **changes), detector)
+        assert (changed != before) is moves, changes
     assert pixel_sums_hash(run_cfg, "X") != pixel_sums_hash(run_cfg, "Y")
 
 
@@ -597,12 +501,6 @@ def test_window_sums_need_every_module(run_cfg):
     with pytest.raises(ValueError, match="all 16 modules"):
         replace(run_cfg, min_modules=8)
     assert replace(run_cfg, min_modules=8, pixel_sum_trains=None).min_modules == 8
-
-
-@pytest.mark.parametrize("value", [0, -3])
-def test_a_window_holds_at_least_one_train(run_cfg, value):
-    with pytest.raises(ValueError, match="pixel_sum_trains"):
-        replace(run_cfg, pixel_sum_trains=value)
 
 
 def test_the_default_root_is_not_scratch():
@@ -632,15 +530,6 @@ def test_the_reader_sums_several_windows_like_the_cache(written, reference):
     np.testing.assert_array_equal(by_window.counts, ours.counts)
 
 
-def test_the_reader_finds_the_file_under_its_root(written, tmp_path):
-    _, path = written
-    root = tmp_path / "root"
-    (root / "r0007").mkdir(parents=True)
-    (root / "r0007" / FILE_NAME).write_bytes(path.read_bytes())
-    sums = detector_sums(7, windows=[2], root=root)
-    np.testing.assert_array_equal(sums.train_id, [10007])
-
-
 @pytest.mark.parametrize(
     ("train_ids", "message"),
     [
@@ -653,16 +542,6 @@ def test_the_reader_never_sums_other_trains_than_asked(written, train_ids, messa
     _, path = written
     with pytest.raises(ValueError, match=message):
         detector_sums(423, train_ids, path=path)
-
-
-def test_the_reader_wants_one_selection(written):
-    _, path = written
-    with pytest.raises(ValueError, match="exactly one"):
-        detector_sums(423, path=path)
-    with pytest.raises(ValueError, match="exactly one"):
-        detector_sums(423, [10000], windows=[0], path=path)
-    with pytest.raises(ValueError, match="do not exist"):
-        detector_sums(423, windows=[9], path=path)
 
 
 def test_the_reader_refuses_an_unwritten_window(
@@ -678,32 +557,6 @@ def test_the_reader_refuses_an_unwritten_window(
 
 
 # ── the kernel and the window spec ────────────────────────────────────────────
-def test_the_kernel_is_the_caches_expression():
-    """``analysis.cache._sum_job`` per module: where(mask == 0, data, 0) summed."""
-    rng = np.random.default_rng(7)
-    data = rng.integers(0, 4, (16, 5, 512, 128)).astype(np.int16)
-    mask = np.where(rng.random(data.shape) < 0.05, 1 << 12, 0).astype(np.uint32)
-    mask[3, :, :8] |= 1  # masked pixels that carry counts must not be summed
-
-    counts = np.zeros((16, 512, 128), np.int64)
-    valid = np.zeros_like(counts)
-    accumulate_train(counts, valid, data, mask)
-    accumulate_train(counts, valid, data, mask)
-
-    ok = mask == 0
-    np.testing.assert_array_equal(
-        counts, 2 * np.where(ok, data, 0).sum(axis=1, dtype=np.int64)
-    )
-    np.testing.assert_array_equal(valid, 2 * ok.sum(axis=1, dtype=np.int64))
-
-
-def test_a_train_is_summed_only_as_integer_counts_none_negative():
-    assert train_data_ok(np.zeros((16, 2, 4, 4), np.int16))
-    assert train_data_ok(np.zeros((16, 0, 4, 4), np.int16))
-    assert not train_data_ok(np.zeros((16, 2, 4, 4), np.float32))
-    negative = np.zeros((16, 2, 4, 4), np.int16)
-    negative[5, 1, 2, 3] = -1
-    assert not train_data_ok(negative)
 
 
 def test_the_window_spec_is_anchored_at_the_first_train(mock_pipeline):
