@@ -330,3 +330,10 @@ old = """                "outlier": None
 new = """                "outlier": None
                 if True"""
 tests = ["tests/xpcs/test_xpcs_config.py", "tests/xpcs/test_xpcs_outliers.py"]
+
+[[mutant]]
+name = "xpcs_extract_trusts_the_index_train_id"
+file = "src/analysis/xpcs/extract.py"
+old = "or not np.all(row_labels == train_id)"
+new = "or not np.all(train_ids == train_id)"
+tests = ["tests/xpcs/test_xpcs_run.py"]

@@ -9,7 +9,7 @@ import h5py
 import numpy as np
 import pytest
 from mockrun import source
-from xpcs_fakes import EMPTY, FRAMES, GOOD, SHORT, BrokenPool, InlinePool
+from xpcs_fakes import EMPTY, FRAMES, GOOD, SHORT, TRAIN_IDS, BrokenPool, InlinePool
 
 from analysis.common.lock import OutputBusy, output_lock
 from analysis.common.status import FrameStatus
@@ -257,6 +257,34 @@ def test_a_train_whose_modules_sit_in_different_sequence_files_is_not_chained(
 
     monkeypatch.setattr(extract, "train_sequences", split)
     path = pipeline.run(GOOD)
+    row_of, status = rows(path)
+    assert status[row_of[10005]] == FrameStatus.LABEL_MISMATCH
+    assert (status[[row_of[t] for t in GOOD if t != 10005]] == FrameStatus.OK).all()
+
+
+def test_a_train_whose_rows_name_another_train_is_not_extracted(
+    cfg, geom, mock_run_factory, tmp_path
+):
+    """The frames' own ``image.trainId``, not the INDEX, says whose they are."""
+    from dataclasses import replace
+
+    from analysis.xpcs.run import run_xpcs_hits
+
+    run, dc = mock_run_factory(
+        train_ids=TRAIN_IDS,
+        frames_per_train=FRAMES,
+        short_module_trains=(SHORT,),
+        zero_frame_trains=(EMPTY,),
+        mislabel_train=10005,
+    )
+    path = run_xpcs_hits(
+        replace(cfg, output_root=str(tmp_path)),
+        HitSet.of(GOOD),
+        dc=dc,
+        geometry=geom,
+        run_dir=run.path,
+        pool_factory=InlinePool,
+    )
     row_of, status = rows(path)
     assert status[row_of[10005]] == FrameStatus.LABEL_MISMATCH
     assert (status[[row_of[t] for t in GOOD if t != 10005]] == FrameStatus.OK).all()
