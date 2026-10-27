@@ -17,6 +17,8 @@ TRAIN_IDS = tuple(range(10000, 10010))
 #: A train module 0 reports no frames for, and one nobody wrote a frame for.
 SHORT, EMPTY = 10002, 10004
 FRAMES = 12
+#: The mock run's trains that read whole.
+GOOD = (10000, 10001, 10003, 10005, 10006, 10007, 10009)
 
 
 def make_rings(rng, n_env=300, n_rings=3, outside=0.25) -> Rings:

@@ -14,6 +14,7 @@ import pytest
 import xarray as xr
 from matplotlib.figure import Figure
 from xpcs_fakes import (
+    GOOD,
     any_flagged,
     build_results,
     make_dense,
@@ -34,7 +35,6 @@ from analysis.xpcs.store import RingPhotonStore  # noqa: E402
 
 IDS = (100, 101, 104, 140, 141, 145)
 N_ENV, P, R = 300, 14, 3
-GOOD = (10000, 10001, 10003, 10005, 10006, 10007, 10009)
 
 
 @pytest.fixture(scope="module")
@@ -393,8 +393,7 @@ def test_the_cone_curves_split_the_detector_into_equal_azimuthal_sectors():
 @pytest.fixture
 def stored(pipeline):
     """The mock run's results and the config whose store holds its photons."""
-    path = pipeline.run(GOOD)
-    return XpcsHits(path), pipeline.cfg(), pipeline
+    return XpcsHits(pipeline.finished()), pipeline.cfg(), pipeline
 
 
 def test_the_detector_mean_is_the_photons_of_the_ring_pixels_of_the_store(stored):

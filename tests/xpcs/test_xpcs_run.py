@@ -9,7 +9,7 @@ import h5py
 import numpy as np
 import pytest
 from mockrun import source
-from xpcs_fakes import EMPTY, FRAMES, SHORT, TRAIN_IDS, BrokenPool, InlinePool
+from xpcs_fakes import EMPTY, FRAMES, GOOD, SHORT, TRAIN_IDS, BrokenPool, InlinePool
 
 from analysis.common.lock import OutputBusy, output_lock
 from analysis.common.status import FrameStatus
@@ -22,7 +22,6 @@ from analysis.xpcs.kernel import PairStatus
 from analysis.xpcs.rings import build_envelope, build_rings, pixel_map
 from analysis.xpcs.store import RingPhotonStore, block_dir_for
 
-GOOD = (10000, 10001, 10003, 10005, 10006, 10007, 10009)
 VOLATILE = frozenset(
     {
         "config_hash", "host", "input_file_sha256", "lock", "lock_takeover",
@@ -62,7 +61,7 @@ def read_mock_train(run_path, train_id):
 
 
 def test_sums_equal_an_independent_reading_of_the_mock_files(pipeline):
-    path = pipeline.run(GOOD)
+    path = pipeline.finished()
     cfg = pipeline.cfg()
     pixels = pixel_map(cfg, pipeline.geom)
     envelope = build_envelope(pixels, cfg)
@@ -158,7 +157,7 @@ def test_a_train_with_another_pulse_pattern_is_not_correlated(cfg, tmp_path):
 def test_a_complete_run_is_answered_from_the_file_and_writes_nothing(
     pipeline, tmp_path
 ):
-    path = pipeline.run(GOOD)
+    path = pipeline.finished()
     cfg = pipeline.cfg()
     files = (path, cfg.store_file)
     before = [(os.stat(p).st_ino, os.stat(p).st_mtime_ns, sha(p)) for p in files]
@@ -169,7 +168,7 @@ def test_a_complete_run_is_answered_from_the_file_and_writes_nothing(
 
 
 def test_the_same_hits_with_a_broken_pool_still_answer_from_the_file(pipeline):
-    pipeline.run(GOOD)
+    pipeline.finished()
     pipeline.run(GOOD, pool=BrokenPool)  # no pool is ever asked for work
 
 
@@ -284,7 +283,7 @@ def test_a_larger_hit_set_extracts_only_the_new_trains(pipeline, monkeypatch):
 
 
 def test_a_partner_gap_change_rebuilds_the_sums_and_never_touches_the_store(pipeline):
-    path = pipeline.run(GOOD)
+    path = pipeline.finished()
     store = pipeline.cfg().store_file
     stored = sha(store)
     row_of, _ = rows(path)
@@ -300,7 +299,7 @@ def test_a_partner_gap_change_rebuilds_the_sums_and_never_touches_the_store(pipe
 
 
 def test_another_kernel_rebuilds_the_sums_from_the_same_store(pipeline):
-    path = pipeline.run(GOOD)
+    path = pipeline.finished()
     store = pipeline.cfg().store_file
     stored = sha(store)
     pipeline.run(GOOD, kernel=Kernel.ES)
@@ -313,7 +312,7 @@ def test_another_kernel_rebuilds_the_sums_from_the_same_store(pipeline):
 def test_a_store_made_for_another_envelope_is_refused_and_kept(pipeline):
     from analysis.xpcs.store import StoreMismatch
 
-    pipeline.run(GOOD)
+    pipeline.finished()
     store = pipeline.cfg().store_file
     stored = sha(store)
     with pytest.raises(StoreMismatch):
@@ -324,29 +323,28 @@ def test_a_store_made_for_another_envelope_is_refused_and_kept(pipeline):
 def test_worker_count_and_block_size_change_no_stored_number(
     pipeline, mock_run, geom, tmp_path, h5_digest
 ):
-    """Spawned workers: 1 worker in blocks of 4 against 3 workers in blocks of 1."""
+    """Three spawned workers in blocks of one against two inline in blocks of two."""
     from dataclasses import replace
 
     from analysis.xpcs.run import run_xpcs_hits
 
     run, dc = mock_run
-    digests = []
-    for workers, block in ((1, 4), (3, 1)):
-        cfg = replace(
-            pipeline.cfg(),
-            output_root=str(tmp_path / f"w{workers}"),
-            n_workers=workers,
-            trains_per_block=block,
-        )
-        out = run_xpcs_hits(
-            cfg, HitSet.of(GOOD), dc=dc, geometry=geom, run_dir=run.path
-        )
-        digests.append((h5_digest(cfg.store_file, VOLATILE), h5_digest(out, VOLATILE)))
-    assert digests[0] == digests[1]
+    inline = pipeline.finished()
+    cfg = replace(
+        pipeline.cfg(),
+        output_root=str(tmp_path / "spawned"),
+        n_workers=3,
+        trains_per_block=1,
+    )
+    out = run_xpcs_hits(cfg, HitSet.of(GOOD), dc=dc, geometry=geom, run_dir=run.path)
+    assert h5_digest(cfg.store_file, VOLATILE) == h5_digest(
+        pipeline.cfg().store_file, VOLATILE
+    )
+    assert h5_digest(out, VOLATILE) == h5_digest(inline, VOLATILE)
 
 
 def test_inline_and_spawned_pools_agree(pipeline, mock_run, geom, tmp_path, h5_digest):
-    pipeline.run(GOOD)
+    pipeline.finished()
     from dataclasses import replace
 
     from analysis.xpcs.run import run_xpcs_hits
@@ -369,7 +367,7 @@ def test_inline_and_spawned_pools_agree(pipeline, mock_run, geom, tmp_path, h5_d
 
 
 def test_the_results_name_the_inputs_that_made_them(pipeline):
-    path = pipeline.run(GOOD)
+    path = pipeline.finished()
     with h5py.File(path, "r") as f:
         assert f.attrs["hits_sha256"] == HitSet.of(GOOD).sha256
         assert f.attrs["n_frames"] == FRAMES
@@ -383,6 +381,7 @@ def test_the_public_entry_point_returns_a_reader_over_the_run(pipeline, mock_run
     from analysis.xpcs import XpcsHits, xpcs_hits
 
     run, dc = mock_run
+    pipeline.finished()
     result = xpcs_hits(
         pipeline.cfg(),
         HitSet.of(GOOD),
@@ -436,7 +435,7 @@ def test_a_block_that_fails_to_sum_is_reported_and_retried(pipeline, monkeypatch
 
 
 def test_a_finished_run_leaves_no_block_files(pipeline):
-    pipeline.run(GOOD)
+    pipeline.finished()
     assert not block_dir_for(pipeline.cfg().store_file).exists()
 
 

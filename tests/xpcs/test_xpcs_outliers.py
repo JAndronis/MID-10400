@@ -5,14 +5,12 @@ from __future__ import annotations
 import h5py
 import numpy as np
 import pytest
-from xpcs_fakes import InlinePool, make_train
+from xpcs_fakes import GOOD, InlinePool, make_train
 
 from analysis.xpcs.config import XpcsConfig
 from analysis.xpcs.outliers import BLOCK_LIMIT, accumulate, outlier_mask, q_interval
 from analysis.xpcs.result import XpcsHits
 from analysis.xpcs.store import FlagBase
-
-GOOD = (10000, 10001, 10003, 10005, 10006, 10007, 10009)
 
 
 def reference(dense, flags, candidate, q, q_range, thresholds, q_bins):
@@ -131,6 +129,7 @@ def test_the_merge_hash_names_the_outlier_settings(with_config):
 
 
 def test_the_pass_removes_the_outliers_from_every_ring_and_records_them(pipeline):
+    pipeline.finished()
     path = pipeline.run(GOOD, outlier_thresholds=(0.9, 1.1))
     hits = XpcsHits(path)
     applied, before = hits.outlier()
@@ -151,6 +150,7 @@ def test_the_pass_removes_the_outliers_from_every_ring_and_records_them(pipeline
 
 
 def test_the_mask_does_not_depend_on_workers_or_blocks(pipeline):
+    pipeline.finished()
     one = XpcsHits(pipeline.run(GOOD, outlier_thresholds=(0.9, 1.1), n_workers=1))
     first = one.outlier()[0].mask.copy()
     three = XpcsHits(
@@ -160,6 +160,7 @@ def test_the_mask_does_not_depend_on_workers_or_blocks(pipeline):
 
 
 def test_a_complete_run_is_answered_without_the_statistic(pipeline, monkeypatch):
+    pipeline.finished()
     path = pipeline.run(GOOD, outlier_thresholds=(0.9, 1.1))
     before = path.stat().st_mtime_ns
     from analysis.xpcs import outliers
@@ -180,5 +181,6 @@ def test_a_failed_block_stops_the_merge(pipeline, monkeypatch):
         raise OSError("disk")
 
     monkeypatch.setattr(outliers, "process_block", boom)
+    pipeline.finished()
     with pytest.raises(OutlierFailed):
         pipeline.run(GOOD, outlier_thresholds=(0.9, 1.1), pool=InlinePool)
