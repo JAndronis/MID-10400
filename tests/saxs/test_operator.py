@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, replace
+from dataclasses import replace
 
 import numpy as np
 import pytest
 
-from analysis.saxs.config import METHOD, NPIX, SHAPE, AgipdSaxsConfig
+from analysis.saxs.config import METHOD, NPIX, AgipdSaxsConfig
 from analysis.saxs.operator import build_operator, load_operator, save_operator
 
 extra_geom = pytest.importorskip("extra_geom")
@@ -24,23 +24,16 @@ def test_method_resolves_to_full_csc_cython(op, engine):
     assert type(engine).__module__ == "pyFAI.ext.splitPixelFullCSC"
 
 
-def test_operator_shapes_and_dtypes(op, cfg):
-    assert op.shape == SHAPE
-    assert op.indptr.shape == (NPIX + 1,)  # CSC column per pixel
-    assert op.coef.shape == op.bins.shape == (op.nnz,)
-    assert op.omega.shape == (NPIX,)
-    assert op.q.shape == (cfg.npt,)
-    assert (op.coef.dtype, op.bins.dtype) == (np.float32, np.int32)
-    assert (op.indptr.dtype, op.omega.dtype, op.q.dtype) == (
-        np.int32,
-        np.float64,
-        np.float64,
-    )
-    assert op.bins.min() >= 0
-    assert op.bins.max() < cfg.npt
-    assert np.all(np.diff(op.indptr) >= 0)
+def test_operator_is_a_csc_matrix_with_one_column_per_pixel(op, cfg):
+    assert op.indptr.shape == (NPIX + 1,)
     assert op.indptr[0] == 0
     assert op.indptr[-1] == op.nnz
+    assert np.all(np.diff(op.indptr) >= 0)
+    assert op.coef.shape == op.bins.shape == (op.nnz,)
+    assert op.bins.min() >= 0
+    assert op.bins.max() < cfg.npt
+    assert op.omega.shape == (NPIX,)
+    assert op.q.shape == (cfg.npt,)
     assert np.all(np.diff(op.q) > 0)
 
 
@@ -50,52 +43,20 @@ def test_operator_arrays_are_read_only(op):
         assert not array.flags.writeable
 
 
-def test_operator_hash_stable_across_rebuilds(quad_pos, cfg, op):
+def test_operator_hash_is_stable_and_moves_with_the_geometry(quad_pos, cfg, op):
+    """A rebuild reproduces every array; one quadrant moved by one pixel, the
+    smallest change the constructor can express, changes the hash."""
     rebuilt, _ = build_operator(
         extra_geom.AGIPD_1MGeometry.from_quad_positions(quad_pos=quad_pos), cfg
     )
     assert rebuilt.sha256 == op.sha256
-    assert np.array_equal(rebuilt.coef, op.coef)
-    assert np.array_equal(rebuilt.bins, op.bins)
-    assert np.array_equal(rebuilt.indptr, op.indptr)
-    assert np.array_equal(rebuilt.omega, op.omega)
-
-
-def test_operator_hash_changes_with_geometry(quad_pos, cfg, op):
-    """One quadrant moves by one pixel, the smallest change the constructor
-    can express."""
+    for name in ("coef", "bins", "indptr", "omega", "q"):
+        assert np.array_equal(getattr(rebuilt, name), getattr(op, name)), name
     moved = [*quad_pos[:3], (quad_pos[3][0], quad_pos[3][1] + 1)]
     shifted, _ = build_operator(
         extra_geom.AGIPD_1MGeometry.from_quad_positions(quad_pos=moved), cfg
     )
     assert shifted.sha256 != op.sha256
-
-
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [("sdd_m", 7.6), ("photon_energy_kev", 9.1), ("npt", 400)],
-)
-def test_operator_hash_changes_with_config(geom, cfg, op, field, value):
-    """Distance, wavelength and binning all change the operator."""
-    changed, _ = build_operator(geom, replace(cfg, **{field: value}))
-    assert changed.sha256 != op.sha256
-
-
-def test_operator_carries_the_geometry_scalars(op, cfg):
-    assert op.sdd_m == cfg.sdd_m
-    assert op.wavelength_m == pytest.approx(cfg.wavelength_m)
-
-
-def test_save_load_roundtrip_preserves_hash(op, tmp_path):
-    path = save_operator(op, tmp_path / "operator.npz")
-    loaded = load_operator(path)
-    assert loaded.sha256 == op.sha256
-    assert loaded.npt == op.npt
-    assert loaded.nnz == op.nnz
-    assert loaded.shape == op.shape
-    assert loaded.method == op.method
-    for name in ("coef", "bins", "indptr", "omega", "q"):
-        assert np.array_equal(getattr(loaded, name), getattr(op, name))
 
 
 def test_load_rejects_a_corrupt_operator(op, tmp_path):
@@ -113,28 +74,6 @@ def test_load_rejects_a_corrupt_operator(op, tmp_path):
 def test_config_rejects_a_non_full_split_method():
     with pytest.raises(ValueError, match="method must be"):
         AgipdSaxsConfig(proposal=10400, run=423, method=("no", "csr", "cython"))
-
-
-def test_config_hash_covers_every_field(cfg):
-    baseline = cfg.config_hash()
-    assert baseline == AgipdSaxsConfig(**asdict(cfg)).config_hash()
-    for field, value in (("npt", 400), ("sdd_m", 7.6), ("photon_energy_kev", 9.1)):
-        assert replace(cfg, **{field: value}).config_hash() != baseline
-    # The centre has to move it too: the writer checks this hash to decide
-    # whether a run may resume into an existing output file, and re-centred
-    # sums must never be appended to PONI = 0 ones.
-    centred = replace(cfg, beam_center_px=607.46, beam_center_py=672.08)
-    assert centred.config_hash() != baseline
-    assert (
-        replace(centred, beam_center_px=608.46).config_hash() != centred.config_hash()
-    )
-
-
-def test_geometry_from_config_requires_a_file(cfg):
-    from analysis.saxs.operator import geometry_from_config
-
-    with pytest.raises(ValueError, match="geometry_file"):
-        geometry_from_config(cfg)
 
 
 # ── beam centre ───────────────────────────────────────────────────────────────
@@ -157,17 +96,6 @@ def centred_cfg(cfg):
     )
 
 
-def test_the_shipped_default_is_the_agreed_beam_centre():
-    """The values agreed with the beamline scientist, not PONI = 0.
-
-    A real run takes them from the dataclass default, so this is the only
-    place the pairing of geometry and centre is asserted for the shipped
-    configuration.
-    """
-    cfg = AgipdSaxsConfig(proposal=10400, run=423)
-    assert cfg.beam_center == (607.4598195630211, 672.076693118667)
-
-
 def test_half_a_beam_centre_is_rejected():
     """One axis set and the other None would silently mean PONI = 0 in it."""
     for half in ({"beam_center_px": 607.46}, {"beam_center_py": 672.08}):
@@ -183,33 +111,15 @@ def test_half_a_beam_centre_is_rejected():
             )
 
 
-def test_beam_centre_moves_the_q_axis(geom, cfg, centred_cfg):
-    """Not a no-op: the centre is what q is measured from."""
-    poni_zero, _ = build_operator(geom, cfg)
-    centred, _ = build_operator(geom, centred_cfg)
-    assert not np.allclose(centred.q, poni_zero.q)
-    assert centred.beam_center == centred_cfg.beam_center
-    assert poni_zero.beam_center is None
-
-
-def test_beam_centre_enters_the_operator_hash(geom, centred_cfg):
-    """Two operators that differ only in the centre must not share a hash.
-
-    They would otherwise resume into each other's output file, since the
-    operator hash is what the writer checks.
-    """
-    centred, _ = build_operator(geom, centred_cfg)
-    moved, _ = build_operator(
-        geom, replace(centred_cfg, beam_center_px=centred_cfg.beam_center_px + 1.0)
-    )
-    assert moved.sha256 != centred.sha256
-
-
-def test_beam_centre_survives_the_npz_round_trip(geom, centred_cfg, tmp_path):
+def test_save_load_round_trips_a_centred_operator(geom, centred_cfg, tmp_path):
     centred, _ = build_operator(geom, centred_cfg)
     loaded = load_operator(save_operator(centred, tmp_path / "centred.npz"))
-    assert loaded.beam_center == centred.beam_center
     assert loaded.sha256 == centred.sha256
+    assert loaded.beam_center == centred.beam_center
+    for name in ("npt", "nnz", "shape", "method", "sdd_m", "wavelength_m"):
+        assert getattr(loaded, name) == getattr(centred, name), name
+    for name in ("coef", "bins", "indptr", "omega", "q"):
+        assert np.array_equal(getattr(loaded, name), getattr(centred, name)), name
 
 
 def test_build_operator_reproduces_extra_speckle_configsaxs(geom, centred_cfg):

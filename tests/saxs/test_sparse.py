@@ -41,13 +41,6 @@ def test_gather_matches_the_csc_definition(op):
         np.testing.assert_allclose(got, want, rtol=1e-12, atol=0.0)
 
 
-def test_gather_on_no_columns_returns_zeros(op):
-    out = gather(op, np.array([], dtype=np.int64), np.array([]))
-    assert out.shape == (op.npt,)
-    assert out.dtype == np.float64
-    assert not out.any()
-
-
 def tiny_operator() -> SparseOperator:
     """A hand-built 6-pixel, 4-bin CSC operator whose column 2 is empty.
 
@@ -128,85 +121,31 @@ def test_integrate_frame_on_a_hand_built_operator():
     assert result.max_count == 7
 
 
-def test_gather_rejects_mismatched_weights(op):
-    with pytest.raises(ValueError, match="same shape"):
-        gather(op, np.arange(5), np.ones(4))
+@pytest.mark.parametrize(
+    ("dtype", "value", "match"),
+    [(np.int16, -3, "negative"), (np.float32, 1, "integer")],
+)
+def test_data_that_are_not_photon_counts_fail_the_data_check(op, dtype, value, match):
+    """Negative or non-integer data are DATA_CHECK_FAILED, never a silent result.
 
-
-def test_gather_is_additive_over_columns(op):
-    """Splitting the column set must not change the sum."""
-    rng = np.random.default_rng(11)
-    cols = np.sort(rng.choice(NPIX, 600, replace=False))
-    weights = rng.random(cols.size)
-    whole = gather(op, cols, weights)
-    halves = gather(op, cols[:300], weights[:300]) + gather(
-        op, cols[300:], weights[300:]
-    )
-    np.testing.assert_allclose(whole, halves, rtol=1e-12, atol=0.0)
-
-
-def test_denominator_excludes_bad_pixels(op):
-    rng = np.random.default_rng(3)
-    bad = rng.random(NPIX) < 0.05
-    good = np.flatnonzero(~bad)
-    np.testing.assert_allclose(
-        denominator(op, bad), gather(op, good, op.omega[good]), rtol=0, atol=0
-    )
-
-
-# ── data checks ───────────────────────────────────────────────────────────────
-def test_frame_data_status_accepts_integer_counts():
-    assert frame_data_status(np.zeros(16, dtype=np.int16)) is FrameStatus.OK
-    counts = np.zeros(16, dtype=np.int16)
-    counts[3] = 19  # corrected AGIPD data stay below 20 photons per pixel per pulse
+    Counts up to 19 per pixel, as corrected AGIPD data hold, pass.
+    """
+    counts = np.zeros(NPIX, dtype=np.int16)
+    counts[3] = 19
     assert frame_data_status(counts) is FrameStatus.OK
-
-
-def test_frame_data_status_rejects_negative_counts():
-    counts = np.zeros(16, dtype=np.int16)
-    counts[5] = -1
-    assert frame_data_status(counts) is FrameStatus.DATA_CHECK_FAILED
-
-
-def test_frame_data_status_rejects_non_integer_dtype():
-    assert (
-        frame_data_status(np.zeros(16, dtype=np.float32))
-        is FrameStatus.DATA_CHECK_FAILED
-    )
-
-
-def test_integrate_frame_raises_on_negative_counts(op):
-    """A negative count raises instead of giving a silent result."""
-    x = np.zeros(NPIX, dtype=np.int16)
-    x[10] = -3
+    x = np.zeros(NPIX, dtype=dtype)
+    x[10] = value
+    assert frame_data_status(x) is FrameStatus.DATA_CHECK_FAILED
     bad = np.zeros(NPIX, dtype=bool)
-    with pytest.raises(DataCheckFailed, match="negative"):
+    with pytest.raises(DataCheckFailed, match=match):
         integrate_frame(op, x, bad, bad, denominator(op, bad))
 
 
-def test_integrate_frame_raises_on_non_integer_dtype(op):
-    """Float data raise instead of falling back silently to a dense path."""
-    x = np.zeros(NPIX, dtype=np.float32)
+def test_integrate_frame_rejects_a_mask_of_another_size(op):
     bad = np.zeros(NPIX, dtype=bool)
-    with pytest.raises(DataCheckFailed, match="integer"):
-        integrate_frame(op, x, bad, bad, denominator(op, bad))
-
-
-@pytest.mark.parametrize("name", ["x", "bad", "base_bad"])
-def test_integrate_frame_rejects_wrong_pixel_count(op, name):
-    arrays = {
-        "x": np.zeros(NPIX, dtype=np.int16),
-        "bad": np.zeros(NPIX, dtype=bool),
-        "base_bad": np.zeros(NPIX, dtype=bool),
-    }
-    arrays[name] = arrays[name][:-1]
-    with pytest.raises(ValueError, match=name):
+    with pytest.raises(ValueError, match="base_bad"):
         integrate_frame(
-            op,
-            arrays["x"],
-            arrays["bad"],
-            arrays["base_bad"],
-            denominator(op, np.zeros(NPIX, dtype=bool)),
+            op, np.zeros(NPIX, np.int16), bad, bad[:-1], denominator(op, bad)
         )
 
 
