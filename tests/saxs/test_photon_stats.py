@@ -1,4 +1,4 @@
-"""The photon-statistics pass on the mock AGIPD run.
+"""The photon statistics the agipd_saxs pass writes, on the mock AGIPD run.
 
 Every frame's histogram must equal a dense count over the same pixels, rows must sit
 where the frame table puts them, and a frame that is not photon counts is recorded,
@@ -26,8 +26,7 @@ from analysis.saxs.photon_stats import (  # noqa: E402
     PhotonStatsConfig,
     default_rings,
     frame_stats,
-    ring_labels,
-    run_photon_stats,
+    ring_labels_from,
 )
 from analysis.xpcs.config import touches_bragg  # noqa: E402
 
@@ -67,14 +66,6 @@ def mock(mock_run_factory):
     return mock_run_factory()
 
 
-def pass_on(mock, run_cfg, geom, path, *, pool=InlinePool, **changes):
-    run, dc = mock
-    cfg = PhotonStatsConfig(saxs=run_cfg, **changes)
-    run_photon_stats(cfg, dc=dc, geometry=geom, static_bad=np.zeros(NPIX, bool),
-                     run_dir=run.path, output_path=path, pool_factory=pool)  # fmt: skip
-    return cfg, path
-
-
 def test_the_default_rings_leave_out_the_bragg_bands():
     for lo, hi in default_rings():
         assert not touches_bragg(lo, hi), (lo, hi)
@@ -86,11 +77,12 @@ def test_every_frame_equals_a_dense_count_of_the_proc_frame(fused, mock_pipeline
     from extra_data.components import AGIPD1M
 
     from analysis.saxs.masks import build_static_bad
+    from analysis.saxs.operator import build_operator
     from analysis.saxs.photon_stats import FILE_NAME
 
     run, dc = mock_pipeline.run, mock_pipeline.dc
     cfg, path = PhotonStatsConfig.for_saxs(mock_pipeline.cfg), fused / FILE_NAME
-    labels, _ = ring_labels(cfg, geom)
+    labels = ring_labels_from(build_operator(geom, cfg.saxs)[1], cfg)
     static = build_static_bad(mock_pipeline.cfg).bad
     det = AGIPD1M(dc, min_modules=cfg.saxs.min_modules)
     with h5py.File(path, "r") as f:
@@ -144,18 +136,27 @@ def test_the_hash_ignores_what_changes_no_count(run_cfg):
 
 
 def test_a_frame_that_is_not_counts_is_recorded_not_histogrammed(
-    mock_run_factory, run_cfg, geom, tmp_path
+    mock_run_factory, mock_pipeline, geom, tmp_path
 ):
-    """Through the standalone pass: the fused one refuses this run earlier, at
-    its self-test, which samples the negative frame."""
-    bad = mock_run_factory(negative_counts_module=3)
-    with pytest.raises(IncompleteRun):
-        pass_on(bad, run_cfg, geom, tmp_path / "ps.h5")
-    with h5py.File(tmp_path / "ps.h5", "r") as f:
+    """The -1 sits in train 10002, which the self-test (first and last train) does
+    not sample, so the pass reaches it and must flag it rather than count it."""
+    from analysis.saxs.photon_stats import FILE_NAME
+    from analysis.saxs.run import run_agipd_saxs
+
+    run, dc = mock_run_factory(negative_counts_module=3, negative_counts_train=10002)
+    with pytest.raises(IncompleteRun, match="DATA_CHECK_FAILED"):
+        run_agipd_saxs(
+            mock_pipeline.cfg, dc=dc, geometry=geom, run_dir=run.path,
+            output_path=tmp_path / "out.h5", work_dir=tmp_path,
+            pool_factory=InlinePool,
+        )  # fmt: skip
+    with h5py.File(tmp_path / FILE_NAME, "r") as f:
         status = f["frames/status"][:]
-        assert (status == FrameStatus.DATA_CHECK_FAILED).any()
-        assert (f["frames/hist"][:][status != FrameStatus.OK] == 0).all()
-    pass_on(bad, replace(run_cfg, allow_incomplete=True), geom, tmp_path / "again.h5")
+        hist = f["frames/hist"][:]
+    failed = np.flatnonzero(status != FrameStatus.OK)
+    np.testing.assert_array_equal(failed, [run.first_row(10002)])
+    assert status[failed[0]] == FrameStatus.DATA_CHECK_FAILED
+    assert (hist[failed] == 0).all()
 
 
 # ── written by the agipd_saxs pass from its own read ─────────────────────────

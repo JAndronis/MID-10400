@@ -91,3 +91,11 @@ file = "src/analysis/saxs/complete.py"
 old = "            if frame_train_ids is not None and not np.array_equal("
 new = "            if False and not np.array_equal("
 tests = ["tests/saxs/test_integrity.py", "tests/saxs/test_photon_stats.py", "tests/saxs/test_pixel_sums.py"]
+
+[[mutant]]
+name = "saxs_fused_histograms_non_count_frames"
+file = "src/analysis/saxs/worker.py"
+old = "                    if photon is not None:\n                        photon.status[row] = FrameStatus.DATA_CHECK_FAILED\n"
+new = "                    if photon is not None:\n                        histogram_frame(photon, row, counts, bad, spec.labels, *state.rings, spec.k_max)\n"
+tests = ["tests/saxs/test_photon_stats.py"]
+expect = "killed"

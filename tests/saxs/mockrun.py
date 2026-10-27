@@ -103,6 +103,7 @@ def write_mock_run(
     zero_frame_trains: tuple[int, ...] = (),
     float_data_module: int | None = None,
     negative_counts_module: int | None = None,
+    negative_counts_train: int | None = None,
     mislabel_train: int | None = None,
 ) -> MockRun:
     """Write an ``n_modules``-module proc-like run under ``root``.
@@ -114,6 +115,9 @@ def write_mock_run(
     :param zero_frame_trains: trains written with no frames in any module.
     :param float_data_module: give this module float ``image/data``, to drive
         ``DATA_CHECK_FAILED``.
+    :param negative_counts_module: this module's first frame of
+        ``negative_counts_train`` (default: the first train) carries a -1, so the
+        frame is not photon counts.
     :param mislabel_train: module 0's ``image/trainId`` rows for this train
         carry another train's id, while ``INDEX`` still files them under it:
         the frames' own labels disagree with the index that places them.
@@ -129,6 +133,10 @@ def write_mock_run(
     else:
         counts = list(frames_per_train)
     frames_by_train = dict(zip(train_ids, counts, strict=True))
+    negative_train = (
+        train_ids[0] if negative_counts_train is None else negative_counts_train
+    )
+    negative_row = sum(counts[: train_ids.index(negative_train)])
 
     for module in range(n_modules):
         path = root / f"CORR-R0423-AGIPD{module:02d}-S00000.h5"
@@ -156,7 +164,7 @@ def write_mock_run(
             occupancy=occupancy,
             seed=module,
             float_data=(module == float_data_module),
-            negative_counts=(module == negative_counts_module),
+            negative_row=negative_row if module == negative_counts_module else None,
         )
 
     return MockRun(
@@ -220,7 +228,7 @@ def _rewrite_images(
     occupancy: float,
     seed: int,
     float_data: bool = False,
-    negative_counts: bool = False,
+    negative_row: int | None = None,
 ) -> None:
     """Replace ``image/data`` and ``image/mask`` with proc-like content."""
     with h5py.File(path, "r+") as handle:
@@ -251,8 +259,8 @@ def _rewrite_images(
             # per frame: a few pixels, as bits 12/13 behave in the real data
             flat_mask[frame, rng.choice(N_MODULE_PX, 5, replace=False)] |= DYNAMIC_BIT
 
-        if negative_counts and n_frames:
-            flat_data[0, 0] = -1
+        if negative_row is not None and n_frames:
+            flat_data[negative_row, 0] = -1
 
         for name, values in (("data", data), ("mask", mask)):
             group.create_dataset(

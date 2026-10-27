@@ -1,9 +1,8 @@
 """Photon-count histograms per frame and ring, the XPCS quality product.
 
 Written by the ``agipd_saxs`` pass from the same read of proc as the frame table
-and the window sums (``AgipdSaxsConfig.photon_stats``, on by default), or by
-:func:`run_photon_stats` alone for a run whose other products are complete. For
-every frame and each narrow ring tiling the plain XPCS ROIs, over the frame's
+and the window sums (``AgipdSaxsConfig.photon_stats``, on by default). For every
+frame and each narrow ring tiling the plain XPCS ROIs, over the frame's
 valid pixels:
 
     n_valid        valid pixels
@@ -29,7 +28,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -37,12 +35,11 @@ from typing import Any
 import numpy as np
 
 from analysis.common.config import restore_by_name, state_by_name
-from analysis.common.cpu import file_sha256, set_thread_env
-from analysis.common.masks import frame_bad
+from analysis.common.cpu import file_sha256
 from analysis.common.plan import Block
-from analysis.common.run import base_provenance, fan_out
+from analysis.common.run import base_provenance
 from analysis.common.status import FrameStatus
-from analysis.common.writer import FrameTableWriter, IncompleteRun
+from analysis.common.writer import FrameTableWriter
 from analysis.saxs.config import (
     DEFAULT_PHOTON_STATS_ROOT,
     NPIX,
@@ -63,9 +60,7 @@ __all__ = [
     "frame_stats",
     "histogram_frame",
     "photon_stats_reasons",
-    "ring_labels",
     "ring_labels_from",
-    "run_photon_stats",
 ]
 
 log = logging.getLogger(__name__)
@@ -180,19 +175,6 @@ class PhotonStatsConfig:
 
 
 # ── rings ─────────────────────────────────────────────────────────────────────
-
-
-def ring_labels(cfg: PhotonStatsConfig, geometry: Any = None) -> tuple[np.ndarray, str]:
-    """Each pixel's ring (−1: none) in the SAXS pass's geometry, and the operator sha.
-
-    The q of a pixel is that of its centre, from the same `build_operator` the
-    integrator uses, with its beam centre and pixel corners.
-    """
-    from analysis.saxs.operator import build_operator, geometry_from_config
-
-    geom = geometry if geometry is not None else geometry_from_config(cfg.saxs)
-    op, ai = build_operator(geom, cfg.saxs)
-    return ring_labels_from(ai, cfg), op.sha256
 
 
 def ring_labels_from(ai: Any, cfg: PhotonStatsConfig) -> np.ndarray:
@@ -421,104 +403,6 @@ def histogram_frame(
     result.status[row] = FrameStatus.OK
 
 
-@dataclass(slots=True)
-class _State:
-    cfg: PhotonStatsConfig
-    labels: np.ndarray
-    static_bad: np.ndarray
-    ring_n: np.ndarray
-    in_ring: np.ndarray
-    detector: Any
-
-
-_STATE: _State | None = None
-
-
-def init(cfg: PhotonStatsConfig, labels, static_bad, run_dir: str | None = None):
-    """Process initializer: open the run, keep the ring map and the static mask."""
-    set_thread_env()
-    from extra_data import RunDirectory, open_run
-    from extra_data.components import AGIPD1M
-
-    dc = (
-        RunDirectory(run_dir) if run_dir
-        else open_run(cfg.saxs.proposal, cfg.saxs.run, data="proc")
-    )  # fmt: skip
-    detector = AGIPD1M(
-        dc, detector_name=cfg.saxs.detector_name, min_modules=cfg.saxs.min_modules
-    )
-    labels = np.asarray(labels, dtype=np.int16)
-    in_ring = labels >= 0
-    global _STATE
-    _STATE = _State(
-        cfg=cfg,
-        labels=labels,
-        static_bad=np.asarray(static_bad, dtype=bool),
-        ring_n=np.bincount(labels[in_ring].astype(np.intp), minlength=cfg.npt),
-        in_ring=in_ring,
-        detector=detector,
-    )
-
-
-def process_block(block: Block) -> PhotonBlockResult:
-    """Read one block's trains and histogram every frame (the standalone pass).
-
-    Identity comes from the reader's coordinates; a train whose labels or frame
-    count disagree with the plan is ``LABEL_MISMATCH``, a frame that is not integer
-    photon counts ``DATA_CHECK_FAILED``, exactly as in the integrator, whose
-    worker does the same from its own read (``analysis.saxs.worker``).
-    """
-    if _STATE is None:
-        raise RuntimeError("photon_stats.init has not run in this process")
-    from extra_data import by_id
-
-    from analysis.saxs.sparse import frame_data_status
-
-    st = _STATE
-    k_max = st.cfg.k_max
-    result = empty_result(block, st.cfg.npt, k_max + 2)
-    timings = {"read_data": 0.0, "read_mask": 0.0, "histogram": 0.0}
-    offset = 0
-    for train_id, expected in zip(block.train_ids, block.expected_frames, strict=True):
-        rows = slice(offset, offset + expected)
-        offset += expected
-        selected = st.detector.select_trains(by_id[[train_id]])
-        started = time.perf_counter()
-        data = selected["image.data"].ndarray(decompress_threads=1)
-        timings["read_data"] += time.perf_counter() - started
-        started = time.perf_counter()
-        mask = selected["image.mask"].ndarray(decompress_threads=1)
-        timings["read_mask"] += time.perf_counter() - started
-        key = selected["image.data"]
-        train_ids = key.train_id_coordinates()
-        if (
-            train_ids.size != expected
-            or data.shape[1] != expected
-            or mask.shape[1] != expected
-            or not np.all(train_ids == train_id)
-        ):
-            result.status[rows] = FrameStatus.LABEL_MISMATCH
-            continue
-        result.train_id[rows] = train_ids
-        result.pulse_id[rows] = key.pulse_id_coordinates()
-        result.cell_id[rows] = key.cell_id_coordinates()
-        result.bits_present |= int(np.bitwise_or.reduce(mask, axis=None))
-        started = time.perf_counter()
-        for frame in range(expected):
-            row = rows.start + frame
-            counts = data[:, frame].reshape(-1)
-            if frame_data_status(counts) != FrameStatus.OK:
-                result.status[row] = FrameStatus.DATA_CHECK_FAILED
-                continue
-            bad = frame_bad(mask[:, frame], st.cfg.saxs.mask_bits, st.static_bad)
-            histogram_frame(
-                result, row, counts, bad, st.labels, st.ring_n, st.in_ring, k_max
-            )
-        timings["histogram"] += time.perf_counter() - started
-    result.timings = timings
-    return result
-
-
 # ── completeness ──────────────────────────────────────────────────────────────
 
 
@@ -570,92 +454,3 @@ def photon_provenance(
     provenance["rings_nm"] = [list(r) for r in cfg.rings_nm]
     provenance["photon_stats_config"] = json.dumps(asdict(cfg), default=str)
     return provenance
-
-
-def run_photon_stats(
-    cfg: PhotonStatsConfig,
-    *,
-    dc: Any = None,
-    geometry: Any = None,
-    static_bad: np.ndarray | None = None,
-    run_dir: Path | None = None,
-    output_path: Path | None = None,
-    pool_factory: Any = None,
-) -> Path:
-    """Write only a run's photon statistics; resume a file of the same hash.
-
-    For a run whose frame table and window sums are complete. Otherwise the
-    ``agipd_saxs`` pass writes the statistics from its own read
-    (``AgipdSaxsConfig.photon_stats``). A complete file is left untouched, and
-    the file is locked while written.
-
-    :param geometry: an AGIPD geometry object instead of ``cfg.saxs.geometry_file``
-        (the tests' synthetic one).
-    :param static_bad: the static mask instead of `build_static_bad` (tests).
-    :raises IncompleteRun: some frame did not reach ``OK`` and
-        ``cfg.saxs.allow_incomplete`` is False.
-    """
-    from analysis.common.lock import output_lock
-    from analysis.saxs.masks import build_static_bad
-    from analysis.saxs.plan import build_plan
-
-    set_thread_env()
-    started_at, started = time.time(), time.perf_counter()
-    setup: dict[str, float] = {}
-    t = time.perf_counter()
-    labels, op_sha = ring_labels(cfg, geometry)
-    setup["rings"] = time.perf_counter() - t
-    path = Path(output_path) if output_path else cfg.output_file
-
-    with output_lock(path):
-        if not cfg.overwrite and not photon_stats_reasons(path, cfg, labels):
-            log.info("r%d: %s is complete; nothing written", cfg.saxs.run, path)
-            return _check_ok(cfg, path)
-        t = time.perf_counter()
-        plan = build_plan(cfg.saxs, dc=dc)
-        setup["plan"] = time.perf_counter() - t
-        if static_bad is None:
-            static_bad = build_static_bad(cfg.saxs).bad
-        with PhotonStatsWriter.open_or_create(cfg, plan, path) as out:
-            out.store_rings(cfg, labels, op_sha)
-            todo = [b for b in plan.blocks if not out.block_complete(b)]
-            log.info(
-                "r%d: %d of %d blocks to do", cfg.saxs.run, len(todo), len(plan.blocks)
-            )
-            totals = fan_out(
-                out,
-                todo,
-                process=process_block,
-                n_workers=cfg.saxs.workers,
-                initializer=init,
-                initargs=(cfg, labels, static_bad, str(run_dir) if run_dir else None),
-                pool_factory=pool_factory,
-            )
-            out.finalise(
-                photon_provenance(
-                    cfg,
-                    plan,
-                    out,
-                    op_sha,
-                    started_at=started_at,
-                    started=started,
-                    totals=totals,
-                    setup_timings=setup,
-                )  # fmt: skip
-            )
-    return _check_ok(cfg, path)
-
-
-def _check_ok(cfg: PhotonStatsConfig, path: Path) -> Path:
-    """Raise ``IncompleteRun`` for a file holding frames that are not ``OK``."""
-    import h5py
-
-    from analysis.common.writer import status_counts
-
-    with h5py.File(path, "r") as handle:
-        summary = status_counts(handle["frames/status"][:], nonzero_only=True)
-    if set(summary) - {FrameStatus.OK.name} and not cfg.saxs.allow_incomplete:
-        raise IncompleteRun(
-            f"r{cfg.saxs.run}: not every frame was histogrammed: {summary}"
-        )
-    return path

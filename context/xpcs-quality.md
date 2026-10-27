@@ -247,8 +247,11 @@ diagnostic(run) = diagnostic over hits(run) only; n_hits always reported beside 
 **Changed on 2026-10-14** (user: "minimize duplicate calculations… if one variable calculates
 detector sums, another variable should make use of them. Same with statistics"). The
 `agipd_saxs` workers now histogram every frame from the read they already make, with
-`AgipdSaxsConfig.photon_stats` on by default. The separate pass is kept, as
-`run_photon_stats`, for backfills. §7.2 has the design and its measurement. What follows is
+`AgipdSaxsConfig.photon_stats` on by default. The separate pass, `run_photon_stats`, was
+kept for backfills until 2026-10-27 and then deleted (last version: `git show
+7edd1ed:src/analysis/saxs/photon_stats.py`); a backfill is `agipd_saxs` on a run whose frame
+table is complete, which histograms without integrating. §7.2 has the design and its
+measurement. What follows is
 the 2026-10-13 record.
 
 The user chose a separate pass. Ideally the histograms would come out of an XPCS worker, beside
@@ -295,7 +298,7 @@ workers over trains:
 
 ## 7. As built (Q1, 2026-10-14)
 
-**The pass: `analysis.saxs.photon_stats`**, beside the window sums since it is AGIPD's.
+**The pass: `analysis.saxs.photon_stats`** (this standalone pass is deleted; §6), beside the window sums since it is AGIPD's.
 - `PhotonStatsConfig(saxs=AgipdSaxsConfig(...))` with `rings_nm` (`default_rings()`: the 17
   rings, Bragg overlap refused) and `k_max` = 15. Its hash covers what changes a count: rings,
   K, sdd, energy, beam centre, mask bits, seams, min_modules, and the geometry and pixel-mask
@@ -441,8 +444,8 @@ In the low-k̄ limit its R3 is the negative binomial's times two factors:
 - **Worker.** It gets a `PhotonSpec`: the ring map, the static mask, K and the blocks to
   histogram. In the frame loop it calls `histogram_frame` after the frame's mask and data
   check, so a frame has one status in both files.
-- **Output.** `agipd_photon_stats.h5` is the standalone pass's format and hash, so the two
-  paths write interchangeable files.
+- **Output.** `agipd_photon_stats.h5` kept the standalone pass's format and hash, so files
+  written by either path are interchangeable.
 - **Locking and completeness.** The file joins S1's locked outputs and `is_complete`.
   - `photon_stats_reasons`: the frame table's checks, then the ring edges, K and the pixel
     → ring map, label by label.
@@ -450,8 +453,7 @@ In the low-k̄ limit its R3 is the negative binomial's times two factors:
 - **Only incomplete products are opened.** A run whose frame table is complete gets its sums
   or statistics with no base masks, no self-test, no `operator.npz`/`masks.npz`, and neither
   the frame table nor the sums reopened.
-- **Standalone.** `run_photon_stats` remains for backfills. It is now locked too, and returns
-  without writing when its file is complete.
+- **Standalone.** `run_photon_stats` was deleted on 2026-10-27 (see §6).
 
 **Acceptance** (`scripts/photon_stats_fused_acceptance.py`, job 25297714, max-exfl473, EPYC
 9374F, 32 workers, commit 80a09e1, r0423; JSON
