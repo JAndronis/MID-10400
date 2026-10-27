@@ -202,6 +202,27 @@ def test_a_label_mismatch_still_takes_the_run_down(cfg, mock_run_factory, tmp_pa
         assert json.loads(handle["provenance"].attrs["data_check"]) == {}
 
 
+def test_a_train_whose_own_rows_name_another_train_is_a_label_mismatch(
+    cfg, mock_run_factory, tmp_path
+):
+    """INDEX files the entry under one train, its ``data.trainId`` says another.
+
+    The reader's train coordinate comes from INDEX, so only the entry's own
+    ``trainId`` row can tell the frames belong elsewhere.
+    """
+    mock, dc = mock_run_factory(train_ids=(10000, 10001), mislabel_train=10001)
+    path = tmp_path / "mislabel.h5"
+    with pytest.raises(IncompleteRun, match="LABEL_MISMATCH"):
+        run(cfg, mock, dc, output_path=path)
+    with h5py.File(path) as handle:
+        status = handle["frames/status"][:]
+        trains = handle["trains/trainId"][:]
+        first, count = handle["trains/first"][:], handle["trains/count"][:]
+    for train_id, start, n in zip(trains, first, count, strict=True):
+        want = FrameStatus.LABEL_MISMATCH if train_id == 10001 else FrameStatus.OK
+        assert (status[start : start + n] == want).all(), train_id
+
+
 def test_which_statuses_block_the_run(cfg):
     """The split the gate rests on, without needing a run to produce each one.
 
@@ -251,23 +272,46 @@ def test_a_broken_pool_marks_everything_unprocessed_and_raises(
         assert (handle["frames/status"][:] == FrameStatus.NOT_PROCESSED).all()
 
 
-def test_resume_processes_only_the_missing_blocks(cfg, mock_run_factory, tmp_path):
-    from concurrent.futures import BrokenExecutor
+def test_resume_processes_only_the_missing_blocks(
+    cfg, mock_run_factory, tmp_path, monkeypatch
+):
+    """A rerun integrates only the blocks the ledger lacks, in a pinned env.
+
+    The first attempt writes block 0 and loses every later block to a worker
+    error. A spawned child reads the thread environment at start, so the pool
+    must also find it set before it is built.
+    """
+    from analysis.common.cpu import THREAD_ENV
 
     mock, dc = mock_run_factory()
     path = tmp_path / "resume.h5"
-    with pytest.raises(BrokenExecutor):
-        run(cfg, mock, dc, output_path=path, pool_factory=BrokenPool)
 
-    submitted = []
+    class FirstOnly(InlinePool):
+        def submit(self, fn, *args):
+            if args[0].index == 0:
+                return super().submit(fn, *args)
+            return FailingPool.submit(self, fn, *args)
+
+    with pytest.raises(IncompleteRun, match="WORKER_ERROR"):
+        run(cfg, mock, dc, output_path=path, pool_factory=FirstOnly)
+
+    for name in THREAD_ENV:
+        monkeypatch.delenv(name, raising=False)
+    submitted, env = [], {}
 
     class Counting(InlinePool):
+        def __init__(self, *args, **kwargs):
+            env.update({name: os.environ.get(name) for name in THREAD_ENV})
+            super().__init__(*args, **kwargs)
+
         def submit(self, fn, *args):
             submitted.append(args[0].index)
             return super().submit(fn, *args)
 
     grid = run(cfg, mock, dc, output_path=path, pool_factory=Counting)
-    assert len(submitted) == len(set(submitted))
+    n_blocks = -(-len(mock.detector_trains) // cfg.trains_per_block)
+    assert sorted(submitted) == list(range(1, n_blocks))
+    assert env == dict.fromkeys(THREAD_ENV, "1")
     assert (grid["n_frames"] == 1).all()
 
     submitted.clear()

@@ -163,6 +163,7 @@ def write_mock_run(
     extreme_flagged: bool = False,
     dead_frame_train: int | None = None,
     shuffled_cells_train: int | None = None,
+    mislabel_train: int | None = None,
     fill: bool = True,
     seed: int = 0,
 ) -> MockRun:
@@ -187,6 +188,9 @@ def write_mock_run(
         first lit cell, so that frame has nothing left to integrate.
     :param shuffled_cells_train: give this train a repeated ``memoryCell``
         entry, so its rows cannot be filled by label.
+    :param mislabel_train: write another train id into this train's own
+        ``data/trainId`` entry while ``INDEX`` still files it under this train,
+        as a DAQ that misfiled an entry would.
     :param fill: write frame content. ``False`` leaves ``data/adc``,
         ``data/mask`` and ``data/memoryCell`` created but unwritten, which for
         a chunked dataset means no space is allocated for them at all, so the
@@ -217,6 +221,10 @@ def write_mock_run(
         chunksize=1,
     )
     _renumber_trains(path, detector_name, train_ids, module)
+    if mislabel_train is not None:
+        with h5py.File(path, "r+") as handle:
+            rows = handle[f"INSTRUMENT/{source(detector_name, module)}/data/trainId"]
+            rows[train_ids.index(mislabel_train)] = mislabel_train + 1000
     if zero_entry_trains:
         _zero_entry_counts(path, detector_name, train_ids, zero_entry_trains, module)
     if legacy_alias:
