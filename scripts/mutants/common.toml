@@ -176,49 +176,49 @@ name = "writer_trusts_the_worker_s_train_id"
 file = "src/analysis/common/writer.py"
 old = 'frames["trainId"][start:stop] = expected_trains'
 new = 'frames["trainId"][start:stop] = result.train_id'
-tests = ["tests/common/test_writer.py"]
+tests = ["tests/common/test_common_writer.py"]
 
 [[mutant]]
 name = "writer_skips_the_label_check"
 file = "src/analysis/common/writer.py"
 old = "mislabelled = integrated & (result.train_id != expected_trains)"
 new = "mislabelled = integrated & False"
-tests = ["tests/common/test_writer.py"]
+tests = ["tests/common/test_common_writer.py"]
 
 [[mutant]]
 name = "writer_places_rows_by_block_position"
 file = "src/analysis/common/writer.py"
 old = "start, stop = int(rows[0]), int(rows[-1]) + 1"
 new = "start, stop = 3 * block.index, 3 * block.index + rows.size"
-tests = ["tests/common/test_writer.py"]
+tests = ["tests/common/test_common_writer.py"]
 
 [[mutant]]
 name = "block_complete_ignores_worker_errors"
 file = "src/analysis/common/writer.py"
 old = "np.isin(status, [int(code) for code in UNFINISHED])"
 new = "np.isin(status, [int(FrameStatus.NOT_PROCESSED)])"
-tests = ["tests/common/test_writer.py"]
+tests = ["tests/common/test_common_writer.py"]
 
 [[mutant]]
 name = "reopening_recreates_the_file"
 file = "src/analysis/common/writer.py"
 old = "        if path.exists() and not cfg.overwrite:"
 new = "        if False:"
-tests = ["tests/common/test_writer.py"]
+tests = ["tests/common/test_common_writer.py"]
 
 [[mutant]]
 name = "overwrite_is_ignored"
 file = "src/analysis/common/writer.py"
 old = "        if cfg.overwrite or not path.exists():"
 new = "        if not path.exists():"
-tests = ["tests/common/test_writer.py"]
+tests = ["tests/common/test_common_writer.py"]
 
 [[mutant]]
 name = "config_hash_of_the_file_not_checked"
 file = "src/analysis/common/writer.py"
 old = "        if stored != config_hash:"
 new = "        if False:"
-tests = ["tests/common/test_writer.py"]
+tests = ["tests/common/test_common_writer.py"]
 
 [[mutant]]
 name = "missing_column_not_checked"
@@ -227,42 +227,42 @@ old = '''        if missing:
             raise SchemaMismatch('''
 new = '''        if False:
             raise SchemaMismatch('''
-tests = ["tests/common/test_writer.py"]
+tests = ["tests/common/test_common_writer.py"]
 
 [[mutant]]
 name = "mark_remaining_stamps_every_frame"
 file = "src/analysis/common/writer.py"
 old = "current[current == FrameStatus.NOT_PROCESSED] = status"
 new = "current[:] = status"
-tests = ["tests/common/test_writer.py"]
+tests = ["tests/common/test_common_writer.py"]
 
 [[mutant]]
 name = "retried_block_keeps_its_error"
 file = "src/analysis/common/writer.py"
 old = "        self._resolve_block_error(block)"
 new = "        pass"
-tests = ["tests/common/test_writer.py"]
+tests = ["tests/common/test_common_writer.py"]
 
 [[mutant]]
 name = "pooling_counts_every_frame"
 file = "src/analysis/common/writer.py"
 old = "ok = status[rows] == FrameStatus.OK"
 new = "ok = status[rows] < 255"
-tests = ["tests/common/test_writer.py"]
+tests = ["tests/common/test_common_writer.py"]
 
 [[mutant]]
 name = "pooled_sigma_roots_the_ratio"
 file = "src/analysis/common/writer.py"
 old = "np.sqrt(variance[positive]) / normalization[positive]"
 new = "np.sqrt(variance[positive] / normalization[positive])"
-tests = ["tests/common/test_writer.py"]
+tests = ["tests/common/test_common_writer.py"]
 
 [[mutant]]
 name = "a_block_straddles_a_gap"
 file = "src/analysis/common/plan.py"
 old = "        elif current:"
 new = "        elif False:"
-tests = ["tests/common/test_writer.py"]
+tests = ["tests/common/test_common_writer.py"]
 
 # ── fan-out ──────────────────────────────────────────────────────────────────
 [[mutant]]
@@ -310,35 +310,35 @@ name = "frame_bad_ignores_mask_bits"
 file = "src/analysis/common/masks.py"
 old = "return ((flat & np.uint32(mask_bits)) != 0) | static_bad"
 new = "return (flat != 0) | static_bad"
-tests = ["tests/common/test_masks.py"]
+tests = ["tests/common/test_common_masks.py"]
 
 [[mutant]]
 name = "frame_bad_drops_the_static_mask"
 file = "src/analysis/common/masks.py"
 old = "return ((flat & np.uint32(mask_bits)) != 0) | static_bad"
 new = "return (flat & np.uint32(mask_bits)) != 0"
-tests = ["tests/common/test_masks.py"]
+tests = ["tests/common/test_common_masks.py"]
 
 [[mutant]]
 name = "bits_to_mask_accepts_bit_32"
 file = "src/analysis/common/masks.py"
 old = "if not 0 <= bit < 32:"
 new = "if not 0 <= bit <= 32:"
-tests = ["tests/common/test_masks.py"]
+tests = ["tests/common/test_common_masks.py"]
 
 [[mutant]]
 name = "describe_bits_off_by_one"
 file = "src/analysis/common/masks.py"
 old = "member.value.bit_length() - 1: member.name"
 new = "member.value.bit_length(): member.name"
-tests = ["tests/common/test_masks.py"]
+tests = ["tests/common/test_common_masks.py"]
 
 [[mutant]]
 name = "evenly_spaced_floors"
 file = "src/analysis/common/plan.py"
 old = "np.unique(np.rint(positions).astype(np.int64))"
 new = "np.unique(np.floor(positions).astype(np.int64))"
-tests = ["tests/common/test_plan.py"]
+tests = ["tests/common/test_common_plan.py"]
 
 [[mutant]]
 name = "physical_cores_counts_hyperthreads"

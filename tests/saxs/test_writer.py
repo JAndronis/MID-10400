@@ -1,7 +1,7 @@
 """The AGIPD frame table: labels from the reader, its schema, and what it stores.
 
 The detector-agnostic writer (rows by label, resume, refusal, marking) is
-tested once, in ``tests/common/test_writer.py``.
+tested once, in ``tests/common/test_common_writer.py``.
 """
 
 from __future__ import annotations
