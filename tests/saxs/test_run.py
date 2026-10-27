@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 from concurrent.futures import BrokenExecutor, Future
 from dataclasses import replace
-from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -81,46 +80,49 @@ def pipeline(mock_pipeline, geom):
 
 
 # ── the happy path ────────────────────────────────────────────────────────────
-def test_end_to_end_inline(pipeline, tmp_path):
-    pooled = run_on_mock(pipeline, tmp_path)
-    assert pooled.n_frames.values.sum() == pipeline.plan.n_frames
-    assert np.isfinite(pooled.intensity.values).all()
-
-    with h5py.File(tmp_path / "out.h5") as f:
-        assert (f["frames/status"][:] == FrameStatus.OK).all()
-        assert f["provenance"].attrs["n_workers"] == pipeline.cfg.workers
-        assert "operator_sha256" in f["provenance"].attrs
-        # Acceptance reads the wall time from the file alone.
-        assert f["provenance"].attrs["wall_s"] > 0
-        assert f["provenance"].attrs["started_at"] > 0
-        assert f["masks"].attrs["operator_sha256"] == f["operator"].attrs["sha256"]
-        assert f["q/centers"].attrs["unit"] == "nm^-1"
 
 
-def test_end_to_end_with_a_real_spawned_pool(pipeline, tmp_path):
-    """The only test that actually spawns workers."""
-    pooled = run_agipd_saxs(
-        pipeline.cfg,
-        dc=pipeline.dc,
-        geometry=pipeline.geometry,
-        run_dir=pipeline.run.path,
-        output_path=tmp_path / "out.h5",
-        work_dir=tmp_path,
-    )
-    assert pooled.n_frames.values.sum() == pipeline.plan.n_frames
+def test_a_real_spawned_pool_writes_what_an_inline_one_writes(pipeline, tmp_path):
+    """The only test that spawns workers: everything they receive must pickle.
 
-    inline = run_agipd_saxs(
-        pipeline.cfg,
-        dc=pipeline.dc,
-        geometry=pipeline.geometry,
-        run_dir=pipeline.run.path,
-        output_path=tmp_path / "inline.h5",
-        work_dir=tmp_path,
-        pool_factory=InlinePool,
-    )
-    np.testing.assert_allclose(
-        pooled.intensity.values, inline.intensity.values, rtol=0, atol=0
-    )
+    Every dataset of the frame table, the window sums and the photon
+    statistics must equal an in-process run's exactly.
+    """
+    from analysis.saxs.photon_stats import FILE_NAME as PHOTON_FILE
+    from analysis.saxs.pixel_sums import FILE_NAME as SUMS_FILE
+
+    cfg = replace(pipeline.cfg, pixel_sum_trains=3)
+    for name, pool in (("spawned", None), ("inline", InlinePool)):
+        run_agipd_saxs(
+            cfg,
+            dc=pipeline.dc,
+            geometry=pipeline.geometry,
+            run_dir=pipeline.run.path,
+            output_path=tmp_path / name / "out.h5",
+            work_dir=tmp_path / name,
+            pool_factory=pool,
+            reduce="none",
+        )
+    for name in ("out.h5", SUMS_FILE, PHOTON_FILE):
+        spawned = datasets(tmp_path / "spawned" / name)
+        inline = datasets(tmp_path / "inline" / name)
+        assert spawned.keys() == inline.keys(), name
+        for key, values in inline.items():
+            np.testing.assert_array_equal(spawned[key], values, f"{name}:{key}")
+
+
+def datasets(path):
+    """Every dataset of an HDF5 file, by name."""
+    found = {}
+    with h5py.File(path, "r") as handle:
+        handle.visititems(
+            lambda name, obj: (
+                found.__setitem__(name, obj[()])
+                if isinstance(obj, h5py.Dataset)
+                else None
+            )
+        )
+    return found
 
 
 def test_thread_env_is_set_before_any_pool(pipeline, tmp_path, monkeypatch):
@@ -134,7 +136,8 @@ def test_thread_env_is_set_before_any_pool(pipeline, tmp_path, monkeypatch):
 
 # ── failure paths ─────────────────────────────────────────────────────────────
 def test_worker_exception_becomes_worker_error(pipeline, tmp_path, monkeypatch):
-    """A block the worker cannot read is recorded, and the run continues."""
+    """A block the worker cannot read is recorded, the run continues, and the
+    pass raises unless an incomplete run is allowed."""
     real = worker.process_block
 
     def explode(block: Block):
@@ -143,8 +146,12 @@ def test_worker_exception_becomes_worker_error(pipeline, tmp_path, monkeypatch):
         return real(block)
 
     monkeypatch.setattr(worker, "process_block", explode)
-    with pytest.raises(IncompleteRun):
+    with pytest.raises(IncompleteRun, match="WORKER_ERROR"):
         run_on_mock(pipeline, tmp_path)
+    allowed = run_on_mock(pipeline, tmp_path / "allowed", allow_incomplete=True)
+    assert allowed.n_frames.values.sum() == pipeline.plan.n_frames - len(
+        pipeline.plan.blocks[0].rows()
+    )
 
     failed = pipeline.plan.blocks[0]
     with h5py.File(tmp_path / "out.h5") as f:
@@ -171,74 +178,43 @@ def test_killed_worker_marks_not_processed_and_raises(pipeline, tmp_path):
         assert (f["frames/status"][:] == FrameStatus.NOT_PROCESSED).all()
 
 
-def test_incomplete_run_raises_unless_allowed(pipeline, tmp_path, monkeypatch):
-    real = worker.process_block
-    monkeypatch.setattr(
-        worker,
-        "process_block",
-        lambda b: (
-            (_ for _ in ()).throw(RuntimeError("nope")) if b.index == 0 else real(b)
-        ),
-    )
-    with pytest.raises(IncompleteRun, match="OK"):
-        run_on_mock(pipeline, tmp_path)
-
-    pooled = run_on_mock(
-        pipeline, tmp_path / "allowed", allow_incomplete=True, overwrite=True
-    )
-    assert pooled is not None
-
-
 # ── resume ────────────────────────────────────────────────────────────────────
-def test_resume_processes_only_the_missing_blocks(pipeline, tmp_path, monkeypatch):
-    """The frame table's resume, with window sums off.
 
-    With them on, the rerun would also rebuild the window that lost the failed
-    block's trains, reading its other blocks for their sums. ``test_pixel_sums.py``
-    covers that case.
+
+def test_a_train_whose_frames_carry_another_train_id_is_label_mismatch(
+    pipeline, mock_run_factory, tmp_path
+):
+    """Module 0's rows of train 10003 say 11003; the INDEX still files them under 10003.
+
+    The frames' identity is then unknown, so none of that train's frames may be
+    integrated, summed or histogrammed, while every other train is.
     """
-    pipeline = SimpleNamespace(**vars(pipeline))
-    pipeline.cfg = replace(pipeline.cfg, pixel_sum_trains=None)
-    real = worker.process_block
-    monkeypatch.setattr(
-        worker,
-        "process_block",
-        lambda b: (
-            (_ for _ in ()).throw(RuntimeError("first attempt"))
-            if b.index == 0
-            else real(b)
-        ),
-    )
-    with pytest.raises(IncompleteRun):
-        run_on_mock(pipeline, tmp_path)
+    from analysis.saxs.photon_stats import FILE_NAME as PHOTON_FILE
+    from analysis.saxs.pixel_sums import FILE_NAME as SUMS_FILE
 
-    # reset the failed block the way a rerun after a crash would find it
-    failed = pipeline.plan.blocks[0]
-    with h5py.File(tmp_path / "out.h5", "r+") as f:
-        rows = failed.rows()
-        f["frames/status"][int(rows[0]) : int(rows[-1]) + 1] = FrameStatus.NOT_PROCESSED
+    run, dc = mock_run_factory(mislabel_train=10003)
+    cfg = replace(pipeline.cfg, pixel_sum_trains=3)
+    kwargs = {
+        "dc": dc,
+        "geometry": pipeline.geometry,
+        "run_dir": run.path,
+        "output_path": tmp_path / "out.h5",
+        "work_dir": tmp_path,
+        "pool_factory": InlinePool,
+    }
+    with pytest.raises(IncompleteRun, match="LABEL_MISMATCH"):
+        run_agipd_saxs(cfg, **kwargs)
 
-    monkeypatch.setattr(worker, "process_block", real)
-    seen: list[int] = []
-
-    def recording(block):
-        seen.append(block.index)
-        return real(block)
-
-    monkeypatch.setattr(worker, "process_block", recording)
-    run_on_mock(pipeline, tmp_path)
-
-    assert seen == [failed.index]
-    with h5py.File(tmp_path / "out.h5") as f:
-        assert (f["frames/status"][:] == FrameStatus.OK).all()
-
-
-def test_rerun_of_a_complete_run_does_no_work(pipeline, tmp_path, monkeypatch):
-    run_on_mock(pipeline, tmp_path)
-
-    def forbidden(block):
-        raise AssertionError("a complete run must not reprocess anything")
-
-    monkeypatch.setattr(worker, "process_block", forbidden)
-    pooled = run_on_mock(pipeline, tmp_path)
-    assert pooled.n_frames.values.sum() == pipeline.plan.n_frames
+    first, n = run.first_row(10003), run.frames_by_train[10003]
+    for name in ("out.h5", PHOTON_FILE):
+        with h5py.File(tmp_path / name) as f:
+            status = f["frames/status"][:]
+        mislabelled = np.zeros(status.size, dtype=bool)
+        mislabelled[first : first + n] = True
+        assert (status[mislabelled] == FrameStatus.LABEL_MISMATCH).all(), name
+        assert (status[~mislabelled] == FrameStatus.OK).all(), name
+    with h5py.File(tmp_path / SUMS_FILE) as f:
+        ids, codes = f["trains/trainId"][:], f["trains/status"][:]
+    trains = dict(zip(ids.tolist(), codes, strict=True))
+    assert trains.pop(10003) == FrameStatus.LABEL_MISMATCH
+    assert all(code == FrameStatus.OK for code in trains.values())

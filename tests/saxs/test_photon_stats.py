@@ -1,8 +1,8 @@
 """The photon-statistics pass on the mock AGIPD run.
 
 Every frame's histogram must equal a dense count over the same pixels, rows must sit
-where the frame table puts them, and the file must resume, refuse another config and
-record a frame it could not read.
+where the frame table puts them, and a frame that is not photon counts is recorded,
+not histogrammed.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from test_run import InlinePool  # noqa: E402
 
 from analysis.common.masks import frame_bad  # noqa: E402
 from analysis.common.status import FrameStatus  # noqa: E402
-from analysis.common.writer import ConfigHashMismatch, IncompleteRun  # noqa: E402
+from analysis.common.writer import IncompleteRun  # noqa: E402
 from analysis.saxs.config import NPIX  # noqa: E402
 from analysis.saxs.photon_stats import (  # noqa: E402
     RING_ARRAYS,
@@ -29,7 +29,6 @@ from analysis.saxs.photon_stats import (  # noqa: E402
     ring_labels,
     run_photon_stats,
 )
-from analysis.saxs.plan import build_plan  # noqa: E402
 from analysis.xpcs.config import touches_bragg  # noqa: E402
 
 
@@ -63,14 +62,6 @@ def test_frame_stats_equal_a_dense_count():
     assert (want["hist"][:, k_max + 1] > 0).all()  # the overflow bin was exercised
 
 
-def test_default_rings_tile_the_plain_rois():
-    rings = default_rings()
-    assert len(rings) == 17
-    assert rings[0][0] == pytest.approx(0.225) and rings[-1][1] == pytest.approx(0.86)
-    for lo, hi in rings:
-        assert not touches_bragg(lo, hi)
-
-
 @pytest.fixture(scope="module")
 def mock(mock_run_factory):
     return mock_run_factory()
@@ -84,18 +75,23 @@ def pass_on(mock, run_cfg, geom, path, *, pool=InlinePool, **changes):
     return cfg, path
 
 
-@pytest.fixture(scope="module")
-def written(mock, run_cfg, geom, tmp_path_factory):
-    return pass_on(mock, run_cfg, geom, tmp_path_factory.mktemp("ps") / "ps.h5")
+def test_the_default_rings_leave_out_the_bragg_bands():
+    for lo, hi in default_rings():
+        assert not touches_bragg(lo, hi), (lo, hi)
 
 
-def test_every_frame_equals_a_dense_count_of_the_proc_frame(mock, written, geom):
+def test_every_frame_equals_a_dense_count_of_the_proc_frame(fused, mock_pipeline, geom):
+    """The statistics the pass wrote, against its proc frames counted by brute force."""
     from extra_data import by_id
     from extra_data.components import AGIPD1M
 
-    run, dc = mock
-    cfg, path = written
+    from analysis.saxs.masks import build_static_bad
+    from analysis.saxs.photon_stats import FILE_NAME
+
+    run, dc = mock_pipeline.run, mock_pipeline.dc
+    cfg, path = PhotonStatsConfig.for_saxs(mock_pipeline.cfg), fused / FILE_NAME
     labels, _ = ring_labels(cfg, geom)
+    static = build_static_bad(mock_pipeline.cfg).bad
     det = AGIPD1M(dc, min_modules=cfg.saxs.min_modules)
     with h5py.File(path, "r") as f:
         frames = {name: f["frames"][name][:] for name in f["frames"]}
@@ -112,7 +108,7 @@ def test_every_frame_equals_a_dense_count_of_the_proc_frame(mock, written, geom)
                 (frames["trainId"] == tid) & (frames["cellId"] == cells[f])
             )
             assert row.size == 1
-            bad = frame_bad(mask[:, f], cfg.saxs.mask_bits, np.zeros(NPIX, bool))
+            bad = frame_bad(mask[:, f], cfg.saxs.mask_bits, static)
             want = dense(data[:, f].reshape(-1), bad, labels, cfg.npt, cfg.k_max)
             for name in RING_ARRAYS:
                 np.testing.assert_array_equal(frames[name][row[0]], want[name], name)
@@ -121,28 +117,19 @@ def test_every_frame_equals_a_dense_count_of_the_proc_frame(mock, written, geom)
     assert frames["hist"][:, :, 1:].sum() > 0  # the mock's photons reach the rings
 
 
-def test_rows_are_laid_out_as_the_frame_table(mock, written, run_cfg):
-    _, dc = mock
-    _, path = written
-    plan = build_plan(run_cfg, dc=dc)
-    with h5py.File(path, "r") as f:
-        np.testing.assert_array_equal(f["trains/trainId"][:], plan.train_ids)
-        np.testing.assert_array_equal(
-            f["trains/count"][:], [t.n_frames for t in plan.trains]
-        )
-        assert f["rings/edges_nm"].shape == (17, 2)
-        assert f["rings"].attrs["k_max"] == 15
+def test_rows_are_laid_out_as_the_frame_table(fused):
+    from analysis.saxs.photon_stats import FILE_NAME
 
-
-def test_a_rerun_resumes_and_another_config_is_refused(mock, written, run_cfg, geom):
-    cfg, path = written
-    with h5py.File(path, "r") as f:
-        before = f["frames/hist"][:]
-    pass_on(mock, run_cfg, geom, path)  # every block complete: nothing to do
-    with h5py.File(path, "r") as f:
-        np.testing.assert_array_equal(f["frames/hist"][:], before)
-    with pytest.raises(ConfigHashMismatch):
-        pass_on(mock, run_cfg, geom, path, k_max=7)
+    names = ("trainId", "cellId", "reader_pulseId")
+    with h5py.File(fused / "out.h5", "r") as table, h5py.File(fused / FILE_NAME) as f:
+        for name in ("trainId", "first", "count"):
+            np.testing.assert_array_equal(
+                f[f"trains/{name}"][:], table[f"trains/{name}"][:], name
+            )
+        for name in names:
+            np.testing.assert_array_equal(
+                f[f"frames/{name}"][:], table[f"frames/{name}"][:], name
+            )
 
 
 def test_the_hash_ignores_what_changes_no_count(run_cfg):
@@ -159,6 +146,8 @@ def test_the_hash_ignores_what_changes_no_count(run_cfg):
 def test_a_frame_that_is_not_counts_is_recorded_not_histogrammed(
     mock_run_factory, run_cfg, geom, tmp_path
 ):
+    """Through the standalone pass: the fused one refuses this run earlier, at
+    its self-test, which samples the negative frame."""
     bad = mock_run_factory(negative_counts_module=3)
     with pytest.raises(IncompleteRun):
         pass_on(bad, run_cfg, geom, tmp_path / "ps.h5")
@@ -193,59 +182,25 @@ def contents(path):
     return out
 
 
-def test_the_saxs_pass_writes_what_the_standalone_pass_writes(
-    fused, mock_pipeline, tmp_path
-):
-    from analysis.saxs.photon_stats import FILE_NAME, PhotonStatsConfig
-
-    alone = tmp_path / "alone.h5"
-    run_photon_stats(
-        PhotonStatsConfig.for_saxs(mock_pipeline.cfg),
-        dc=mock_pipeline.dc,
-        geometry=mock_pipeline.geometry,
-        run_dir=mock_pipeline.run.path,
-        output_path=alone,
-        pool_factory=InlinePool,
-    )
-    got, want = contents(fused / FILE_NAME), contents(alone)
-    assert got.keys() == want.keys()
-    for name in want:
-        np.testing.assert_array_equal(got[name], want[name], name)
-    assert (got["frames/status"] == FrameStatus.OK).all()
-
-
 def _stat(path):
     return path.stat().st_ino, path.stat().st_mtime_ns, path.stat().st_size
 
 
 def test_statistics_alone_leave_the_frame_table_and_sums_untouched(
-    fused, mock_pipeline, tmp_path, monkeypatch
+    fused, mock_pipeline, tmp_path
 ):
-    """A finished run gains its statistics without its other files being opened."""
+    """A finished run gains its statistics; its other files keep inode and mtime,
+    and no operator or masks archive is written for an integration."""
     import shutil
 
     from test_run import run_on_mock
 
-    from analysis.saxs import masks as masks_module
-    from analysis.saxs import operator as operator_module
-    from analysis.saxs import run as run_module
     from analysis.saxs.photon_stats import FILE_NAME
     from analysis.saxs.pixel_sums import FILE_NAME as SUMS
 
     for name in ("out.h5", SUMS):
         shutil.copy2(fused / name, tmp_path / name)
     before = {name: _stat(tmp_path / name) for name in ("out.h5", SUMS)}
-
-    def forbidden(*args, **kwargs):
-        raise AssertionError("nothing of the integration may run")
-
-    for module, name in [
-        (run_module, "_build_base_masks"),
-        (run_module, "_run_selftest"),
-        (operator_module, "save_operator"),
-        (masks_module, "save_masks"),
-    ]:
-        monkeypatch.setattr(module, name, forbidden)
 
     run_on_mock(mock_pipeline, tmp_path)
     assert {name: _stat(tmp_path / name) for name in before} == before

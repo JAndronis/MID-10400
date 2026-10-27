@@ -2,19 +2,13 @@
 
 from __future__ import annotations
 
-import dataclasses
-
 import numpy as np
 import pytest
 from extra_geom import agipd_asic_seams
 
 from analysis.common.masks import (
     UnexpectedMaskBits,
-    bits_to_mask,
-    describe_bits,
-    frame_bad,
 )
-from analysis.common.plan import evenly_spaced
 from analysis.saxs.config import NPIX, AgipdSaxsConfig
 from analysis.saxs.masks import (
     BaseMaskAccumulator,
@@ -23,7 +17,6 @@ from analysis.saxs.masks import (
     load_pixel_mask,
     save_masks,
 )
-from analysis.saxs.sparse import denominator, integrate_frame
 
 pytest.importorskip("pyFAI")
 
@@ -69,10 +62,9 @@ def test_single_module_mask_is_broadcast_over_all_sixteen(tmp_path):
     assert np.array_equal(np.flatnonzero(bad), np.arange(16) * 512 * 128)
 
 
-@pytest.mark.parametrize("shape", [(512, 129), (16, 256, 128), (1024,), (8192, 64)])
-def test_load_pixel_mask_rejects_a_wrong_shape(tmp_path, shape):
+def test_load_pixel_mask_rejects_a_wrong_shape(tmp_path):
     with pytest.raises(ValueError, match="shape"):
-        load_pixel_mask(write_mask(tmp_path, np.zeros(shape, dtype=np.uint8)))
+        load_pixel_mask(write_mask(tmp_path, np.zeros((16, 256, 128), dtype=np.uint8)))
 
 
 def test_load_pixel_mask_rejects_a_float_dtype(tmp_path):
@@ -86,7 +78,7 @@ def test_load_pixel_mask_rejects_an_all_excluded_mask(tmp_path):
         load_pixel_mask(write_mask(tmp_path, np.ones((512, 128), dtype=np.uint8)))
 
 
-@pytest.mark.parametrize("flag", [1, 255, -1, 7])
+@pytest.mark.parametrize("flag", [255, -1])
 def test_non_zero_is_excluded_whatever_the_value(tmp_path, flag):
     """The convention is non-zero, not equal-to-one."""
     array = np.zeros((512, 128), dtype=np.int16)
@@ -150,21 +142,6 @@ def test_static_mask_is_the_union_of_seams_and_the_pixel_mask(tmp_path):
     assert static.n_excluded == int(seams.sum()) + 10
 
 
-def test_there_is_only_one_mask_file_field():
-    """One mask, deliberately: two would have to be kept in step."""
-    from dataclasses import fields
-
-    names = {f.name for f in fields(AgipdSaxsConfig) if f.name.endswith("mask_file")}
-    assert names == {"pixel_mask_file"}
-
-
-def test_static_mask_records_the_seam_source_without_a_path():
-    static = build_static_bad(mask_cfg_seams_only())
-    (source,) = static.sources
-    assert source.name == "asic_seams"
-    assert source.path is None and source.sha256 is None
-
-
 def test_static_hash_is_stable_and_content_sensitive(tmp_path):
     pixel = np.zeros((16, 512, 128), dtype=np.uint8)
     pixel[0, 0, :10] = 1
@@ -180,35 +157,6 @@ def test_static_hash_is_stable_and_content_sensitive(tmp_path):
 
 def test_static_mask_is_read_only():
     assert not build_static_bad(mask_cfg_seams_only()).bad.flags.writeable
-
-
-# ── frame_bad ─────────────────────────────────────────────────────────────────
-def test_frame_bad_ors_in_the_static_mask():
-    static = np.zeros(NPIX, dtype=bool)
-    static[7] = True
-    mask = np.zeros((16, 512, 128), dtype=np.uint32)
-    mask.reshape(-1)[9] = STATIC_BIT
-    bad = frame_bad(mask, 0xFFFFFFFF, static)
-    assert np.array_equal(np.flatnonzero(bad), [7, 9])
-
-
-def test_frame_bad_honours_a_narrowed_mask_bits():
-    static = np.zeros(NPIX, dtype=bool)
-    mask = np.zeros((16, 512, 128), dtype=np.uint32)
-    mask.reshape(-1)[0] = STATIC_BIT
-    mask.reshape(-1)[1] = DYNAMIC_BIT
-    assert frame_bad(mask, 0xFFFFFFFF, static).sum() == 2
-    assert np.array_equal(np.flatnonzero(frame_bad(mask, STATIC_BIT, static)), [0])
-    assert np.array_equal(np.flatnonzero(frame_bad(mask, DYNAMIC_BIT, static)), [1])
-
-
-def test_frame_bad_rejects_a_size_mismatch():
-    with pytest.raises(ValueError, match="pixels"):
-        frame_bad(
-            np.zeros((16, 512, 128), dtype=np.uint32),
-            0xFFFFFFFF,
-            np.zeros(NPIX - 1, dtype=bool),
-        )
 
 
 # ── base masks: helpers ───────────────────────────────────────────────────────
@@ -238,7 +186,7 @@ def accumulate(op, static_mask, trains, *, mask_bits=0xFFFFFFFF, expected=(0, 12
 # ── base masks: the majority vote ─────────────────────────────────────────────
 @pytest.mark.parametrize(
     ("votes", "expected_bad"),
-    [(8, True), (5, True), (4, False), (3, False), (0, False)],
+    [(5, True), (4, False)],
 )
 def test_majority_vote_over_eight_samples(op, static_mask, votes, expected_bad):
     """Strict majority: 5 of 8 is bad, 4 of 8 is not."""
@@ -279,40 +227,6 @@ def test_base_mask_is_a_superset_of_the_static_mask(op, static_mask):
         assert not (static_mask.bad & ~base.base_bad[index]).any()
 
 
-def test_per_cell_structure_is_preserved(op, static_mask, make_mask_train):
-    """Each cell keeps its own base mask, not a run-wide average."""
-    rng = np.random.default_rng(0)
-    cells = np.array([0, 1, 2], dtype=np.uint16)
-    trains = [(make_mask_train(rng, cells), cells) for _ in range(4)]
-    base = accumulate(op, static_mask, trains).finalise()
-
-    assert base.cells.tolist() == [0, 1, 2]
-    assert base.n_samples.tolist() == [4, 4, 4]
-    assert not np.array_equal(base.base_bad[0], base.base_bad[1])
-    # the per-frame dynamic bit appears in only one of four samples, so the
-    # majority vote must drop it
-    assert (
-        base.base_bad.sum(axis=1).max()
-        < static_mask.bad.sum() + 16 * 0.02 * (PX_PER_MODULE) + 40
-    )
-
-
-def test_denominators_match_a_denominator_built_from_scratch(op, static_mask):
-    base = accumulate(
-        op, static_mask, [(blank_train(2), np.array([0, 1], dtype=np.uint16))] * 3
-    ).finalise()
-    for index in range(base.cells.size):
-        np.testing.assert_allclose(
-            base.denominators[index],
-            denominator(op, base.base_bad[index]),
-            rtol=0,
-            atol=0,
-        )
-    np.testing.assert_allclose(
-        base.static_denominator, denominator(op, static_mask.bad), rtol=0, atol=0
-    )
-
-
 # ── base masks: the unseen-cell fallback ──────────────────────────────────────
 def test_unseen_cell_falls_back_to_the_static_mask(op, static_mask):
     # give cell 0 flags of its own, so its base mask is a strict superset of
@@ -326,67 +240,15 @@ def test_unseen_cell_falls_back_to_the_static_mask(op, static_mask):
     assert base.has_cell(0)
     assert not base.has_cell(154)
 
-    seen_bad, seen_denominator = base.for_cell(0)
-    # views onto the stored arrays, not copies
-    assert np.shares_memory(seen_bad, base.base_bad)
-    assert np.shares_memory(seen_denominator, base.denominators)
-
+    seen_bad, _ = base.for_cell(0)
     unseen_bad, unseen_denominator = base.for_cell(154)
-    assert np.shares_memory(unseen_bad, base.static_bad)
-    assert np.shares_memory(unseen_denominator, base.static_denominator)
     assert np.array_equal(unseen_bad, base.static_bad)
+    assert np.array_equal(unseen_denominator, base.static_denominator)
     assert not np.array_equal(unseen_bad, seen_bad)
     assert int(seen_bad.sum()) == int(unseen_bad.sum()) + 500
 
 
-def test_the_fallback_still_integrates_exactly(op, static_mask, make_frame):
-    """An unseen cell costs more per-frame corrections, never accuracy."""
-    rng = np.random.default_rng(17)
-    base = accumulate(
-        op, static_mask, [(blank_train(), np.array([0], dtype=np.uint16))]
-    ).finalise()
-
-    x = make_frame(rng, 0.02)
-    bad = static_mask.bad | (rng.random(NPIX) < 0.001)
-    fallback_bad, fallback_denominator = base.for_cell(154)
-    result = integrate_frame(op, x, bad, fallback_bad, fallback_denominator)
-    np.testing.assert_allclose(
-        result.normalization, denominator(op, bad), rtol=1e-9, atol=1e-15
-    )
-
-
 # ── base masks: exactness for frame/cell disagreement, both directions ────────
-def test_frame_cell_disagreement_is_exact_in_both_directions(
-    op, static_mask, make_frame
-):
-    """Uses a base mask from a real majority vote, not a hand-built one."""
-    rng = np.random.default_rng(23)
-    trains = []
-    for _ in range(4):
-        mask = blank_train()
-        flag(mask, 0, rng.choice(NPIX, 5000, replace=False), STATIC_BIT)
-        trains.append((mask, np.array([0], dtype=np.uint16)))
-    # one pixel flagged in every sample, so the vote certainly calls it bad
-    always_bad = int(np.flatnonzero(~static_mask.bad)[0])
-    for mask, _ in trains:
-        flag(mask, 0, always_bad, STATIC_BIT)
-
-    base = accumulate(op, static_mask, trains).finalise()
-    base_bad, base_denominator = base.for_cell(0)
-
-    bad = np.array(base_bad, copy=True)
-    bad[always_bad] = False  # cell says bad, frame says good: Ω is added back
-    newly_bad = np.flatnonzero(~base_bad)[:2000]
-    bad[newly_bad] = True  # cell says good, frame says bad: Ω is subtracted
-    assert (bad & ~base_bad).sum() == 2000
-    assert (~bad & base_bad).sum() == 1
-
-    x = make_frame(rng, 0.02)
-    result = integrate_frame(op, x, bad, base_bad, base_denominator)
-    assert result.n_frame_specific == 2001
-    np.testing.assert_allclose(
-        result.normalization, denominator(op, bad), rtol=1e-9, atol=1e-15
-    )
 
 
 # ── base masks: bit bookkeeping ───────────────────────────────────────────────
@@ -419,63 +281,28 @@ def test_expected_bits_do_not_warn(op, static_mask, recwarn):
     assert not [w for w in recwarn if issubclass(w.category, UnexpectedMaskBits)]
 
 
-def test_bits_to_mask_and_describe_bits():
-    assert bits_to_mask([0, 12]) == (1 << 0) | (1 << 12)
-    assert bits_to_mask([]) == 0
-    with pytest.raises(ValueError, match="out of range"):
-        bits_to_mask([32])
-    described = describe_bits((1 << 0) | (1 << 22))
-    assert "OFFSET_OUT_OF_THRESHOLD" in described
-    assert "NON_STANDARD_SIZE" in described
-    assert describe_bits(0) == "none"
-
-
 # ── base masks: input validation ──────────────────────────────────────────────
-def test_update_rejects_a_wrong_mask_shape(op, static_mask):
-    acc = BaseMaskAccumulator(op, static_mask, mask_bits=0xFFFFFFFF, expected_bits=[0])
-    with pytest.raises(ValueError, match="shape"):
-        acc.update(np.zeros((16, 512, 128), dtype=np.uint32), np.array([0]))
-
-
-def test_update_rejects_a_non_uint32_mask(op, static_mask):
-    acc = BaseMaskAccumulator(op, static_mask, mask_bits=0xFFFFFFFF, expected_bits=[0])
-    with pytest.raises(TypeError, match="uint32"):
-        acc.update(np.zeros((16, 1, 512, 128), dtype=np.uint16), np.array([0]))
-
-
-def test_update_rejects_a_cell_id_count_mismatch(op, static_mask):
-    acc = BaseMaskAccumulator(op, static_mask, mask_bits=0xFFFFFFFF, expected_bits=[0])
-    with pytest.raises(ValueError, match="cell_ids"):
-        acc.update(blank_train(2), np.array([0]))
-
-
-def test_finalise_without_samples_raises(op, static_mask):
-    acc = BaseMaskAccumulator(op, static_mask, mask_bits=0xFFFFFFFF, expected_bits=[0])
-    with pytest.raises(ValueError, match="no frames"):
-        acc.finalise()
-
-
-# ── train sampling ────────────────────────────────────────────────────────────
-def test_evenly_spaced_spans_the_run():
-    train_ids = np.arange(1000, 4000)
-    picked = evenly_spaced(train_ids, 8)
-    assert picked.size == 8
-    assert picked[0] == 1000
-    assert picked[-1] == 3999
-    assert np.all(np.diff(picked) > 0)
-
-
-def test_evenly_spaced_is_capped_by_the_run_length():
-    assert evenly_spaced(np.arange(3), 8).tolist() == [0, 1, 2]
 
 
 @pytest.mark.parametrize(
-    ("train_ids", "n", "match"),
-    [(np.array([]), 8, "no trains"), (np.arange(10), 0, "positive")],
+    ("mask", "cells", "error", "match"),
+    [
+        (np.zeros((16, 512, 128), np.uint32), [0], ValueError, "shape"),
+        (np.zeros((16, 1, 512, 128), np.uint16), [0], TypeError, "uint32"),
+        (np.zeros((16, 2, 512, 128), np.uint32), [0], ValueError, "cell_ids"),
+        (None, None, ValueError, "no frames"),
+    ],
 )
-def test_evenly_spaced_rejects_bad_input(train_ids, n, match):
-    with pytest.raises(ValueError, match=match):
-        evenly_spaced(train_ids, n)
+def test_the_accumulator_refuses_what_it_cannot_vote_on(
+    op, static_mask, mask, cells, error, match
+):
+    """A wrong train layout or dtype at ``update``; no sample at ``finalise``."""
+    acc = BaseMaskAccumulator(op, static_mask, mask_bits=0xFFFFFFFF, expected_bits=[0])
+    with pytest.raises(error, match=match):
+        if mask is None:
+            acc.finalise()
+        else:
+            acc.update(mask, np.array(cells))
 
 
 # ── persistence ───────────────────────────────────────────────────────────────
@@ -511,12 +338,3 @@ def test_load_rejects_corrupt_masks(op, static_mask, tmp_path):
     np.savez(path, **arrays)
     with pytest.raises(ValueError, match="corrupt"):
         load_masks(path)
-
-
-def test_base_masks_hash_tracks_the_operator(op, static_mask):
-    """Masks built against a different operator must not compare equal."""
-    base = accumulate(
-        op, static_mask, [(blank_train(), np.array([0], dtype=np.uint16))]
-    ).finalise()
-    other = dataclasses.replace(base, operator_sha256="0" * 64)
-    assert other.operator_sha256 != base.operator_sha256

@@ -1,0 +1,93 @@
+# Mutants for the AGIPD SAXS pass (src/analysis/saxs). Format as in common.toml.
+
+[[mutant]]
+name = "saxs_base_mask_add_back_dropped"
+file = "src/analysis/saxs/sparse.py"
+old = "sign = np.where(base_bad[diff], 1.0, -1.0)"
+new = "sign = np.where(base_bad[diff], 0.0, -1.0)"
+tests = ["tests/saxs/test_sparse.py", "tests/saxs/test_selftest.py"]
+
+[[mutant]]
+name = "saxs_majority_vote_ties_count"
+file = "src/analysis/saxs/masks.py"
+old = "voted = self._votes[cell] > count // 2"
+new = "voted = self._votes[cell] >= count // 2"
+tests = ["tests/saxs/test_masks.py"]
+
+[[mutant]]
+name = "saxs_photon_s2_is_sum_k_squared"
+file = "src/analysis/saxs/photon_stats.py"
+old = "s2 = np.bincount(lab, weights=val * (val - 1), minlength=n_rings)"
+new = "s2 = np.bincount(lab, weights=val * val, minlength=n_rings)"
+tests = ["tests/saxs/test_photon_stats.py"]
+
+[[mutant]]
+name = "saxs_window_sums_ignore_bit_12"
+file = "src/analysis/saxs/pixel_sums.py"
+old = "        valid = mask[module] == 0\n"
+new = "        valid = (mask[module] & ~np.uint32(1 << 12)) == 0\n"
+tests = ["tests/saxs/test_pixel_sums.py"]
+
+[[mutant]]
+name = "saxs_beam_centre_without_distortion_array"
+file = "src/analysis/saxs/operator.py"
+old = "        detector.set_pixel_corners(geom.to_distortion_array())\n"
+new = "        pass\n"
+# The analytic q oracle alone, so the gate holds without extra-speckle installed.
+tests = ["tests/saxs/test_operator.py::test_each_pixel_sits_at_the_q_of_its_distance_from_the_beam_centre"]
+
+[[mutant]]
+name = "saxs_variance_gathered_with_c"
+file = "src/analysis/saxs/sparse.py"
+old = "variance = gather(op, keep, xs, squared=True)"
+new = "variance = gather(op, keep, xs, squared=False)"
+tests = ["tests/saxs/test_sparse.py", "tests/saxs/test_selftest.py"]
+
+[[mutant]]
+name = "saxs_omega_compared_with_and"
+file = "src/analysis/saxs/complete.py"
+old = "if omega.shape != op.omega.shape or not np.allclose("
+new = "if omega.shape != op.omega.shape and not np.allclose("
+tests = ["tests/saxs/test_integrity.py"]
+
+[[mutant]]
+name = "saxs_photon_stats_file_unlocked"
+file = "src/analysis/saxs/run.py"
+old = "        guarded.append(photon_stats_path)\n"
+new = "        pass\n"
+tests = ["tests/saxs/test_integrity.py::test_a_live_writer_s_lock_refuses_the_run_before_anything_is_written"]
+
+[[mutant]]
+name = "saxs_selftest_gates_on_signal_only"
+file = "src/analysis/saxs/selftest.py"
+old = "passed = empty_bins_agree and max(worst) < tolerance"
+new = "passed = empty_bins_agree and worst[0] < tolerance"
+tests = ["tests/saxs/test_selftest.py"]
+
+[[mutant]]
+name = "saxs_worker_trusts_position"
+file = "src/analysis/saxs/worker.py"
+old = "            or not np.all(row_labels == train_id)\n"
+new = "\n"
+tests = ["tests/saxs/test_run.py"]
+
+[[mutant]]
+name = "saxs_from_file_ignores_photon_failures"
+file = "src/analysis/saxs/run.py"
+old = "        incomplete |= any(name != FrameStatus.OK.name for name in photon)\n"
+new = "\n"
+tests = ["tests/saxs/test_integrity.py", "tests/saxs/test_photon_stats.py", "tests/saxs/test_damnit.py"]
+
+[[mutant]]
+name = "saxs_from_file_ignores_failed_sum_trains"
+file = "src/analysis/saxs/run.py"
+old = "        incomplete |= bool(np.isin(trains, [int(code) for code in FAILED]).any())\n"
+new = "\n"
+tests = ["tests/saxs/test_integrity.py", "tests/saxs/test_pixel_sums.py", "tests/saxs/test_damnit.py"]
+
+[[mutant]]
+name = "saxs_window_sums_need_not_cover_the_frame_table"
+file = "src/analysis/saxs/complete.py"
+old = "            if frame_train_ids is not None and not np.array_equal("
+new = "            if False and not np.array_equal("
+tests = ["tests/saxs/test_integrity.py", "tests/saxs/test_photon_stats.py", "tests/saxs/test_pixel_sums.py"]
