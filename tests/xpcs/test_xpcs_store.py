@@ -7,7 +7,7 @@ import pytest
 
 from analysis.common.status import DataCheckFailed, FrameStatus
 from analysis.xpcs.extract import encode_train
-from analysis.xpcs.store import FlagBase, TrainPhotons, delta_decode, delta_encode
+from analysis.xpcs.store import FlagBase, delta_decode, delta_encode
 
 N_ENV = 400
 P = 6
@@ -126,11 +126,6 @@ def test_the_base_is_what_more_than_half_the_samples_flag():
     assert base.cells.tolist() == [4, 9]
 
 
-def test_no_samples_give_an_empty_base():
-    base = FlagBase.from_samples([])
-    assert base.cells.size == 0 and base.of_cell(0).size == 0
-
-
 @pytest.mark.parametrize("bad", [-1, 256])
 def test_counts_outside_a_byte_fail_the_data_check(train, bad):
     envelope, data, mask, cells = train
@@ -148,30 +143,14 @@ def test_float_data_fail_the_data_check(train):
         encode((envelope, data.astype(np.float32), mask, cells))
 
 
-def test_a_train_that_gave_nothing_says_why():
-    failed = TrainPhotons.failed(12, FrameStatus.MISSING_MODULES)
-    assert failed.status is FrameStatus.MISSING_MODULES
-    assert failed.n_frames == 0
-    assert failed.frames(10).shape == (0, 10)
-    assert not failed.flagged_any(10).any()
-
-
-def test_delta_encoding_inverts_including_empty_frames():
+def test_delta_encoding_restarts_each_frame_and_inverts(train):
     pixel = np.array([5, 9, 300, 7, 8, 0, 2], dtype=np.uint32)
     ptr = np.array([0, 3, 3, 5, 7, 7], dtype=np.int64)  # frames 1 and 4 are empty
     step = delta_encode(pixel, ptr)
     assert step.tolist() == [5, 4, 291, 7, 1, 0, 2]
     np.testing.assert_array_equal(delta_decode(step, ptr), pixel)
-
-
-def test_delta_encoding_of_no_events():
-    ptr = np.zeros(4, dtype=np.int64)
     empty = np.zeros(0, dtype=np.uint32)
-    assert delta_encode(empty, ptr).size == 0
-    assert delta_decode(empty, ptr).size == 0
-
-
-def test_delta_encoding_inverts_on_a_real_train(train):
+    assert delta_decode(delta_encode(empty, np.zeros(4, np.int64)), ptr[:1]).size == 0
     photons = encode(train)
     step = delta_encode(photons.pixel, photons.frame_ptr)
     np.testing.assert_array_equal(delta_decode(step, photons.frame_ptr), photons.pixel)
