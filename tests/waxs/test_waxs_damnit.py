@@ -234,3 +234,63 @@ def test_the_reader_returns_the_grid_and_skips_a_missing_file(grid, cfg, tmp_pat
         damnit.jungfrau_waxs_from_file(
             cfg.proposal, cfg.run, other, output_root=str(root)
         )
+
+
+@pytest.mark.parametrize("allow", [True, False])
+def test_a_refused_frame_is_tolerated_everywhere_or_nowhere(
+    cfg, mock_run_factory, tmp_path, monkeypatch, allow
+):
+    """The pass, the per-detector reader and the preprocessing colour agree.
+
+    One finished file holds one ``DATA_CHECK_FAILED`` frame. Whatever
+    ``allow_data_check_failures`` says, all three readers of it must say the
+    same, or DAMNIT shows a green cell over a column that raises.
+    """
+    pytest.importorskip("damnit")
+    import shutil
+
+    from waxs_harness import run
+
+    from analysis.common.writer import IncompleteRun
+    from analysis.diagnostics.damnit import COLORS
+
+    mock, dc = mock_run_factory(train_ids=(10000, 10001), dead_frame_train=10001)
+    path = tmp_path / "dead.h5"
+    run(cfg, mock, dc, output_path=path, reduce="none")
+
+    policy = dataclasses.replace(cfg, allow_data_check_failures=allow)
+    root = tmp_path / "root"
+    target = damnit.damnit_config(
+        cfg.proposal, cfg.run, cfg.detector, output_root=str(root)
+    ).output_file
+    target.parent.mkdir(parents=True)
+    shutil.copy2(path, target)
+    readers = {
+        "pass": lambda: run(policy, mock, dc, output_path=path),
+        "reader": lambda: damnit.jungfrau_waxs_from_file(
+            cfg.proposal,
+            cfg.run,
+            cfg.detector,
+            output_root=str(root),
+            allow_data_check_failures=allow,
+        ),
+    }
+    for name, read in readers.items():
+        if allow:
+            assert read() is not None, name
+        else:
+            with pytest.raises(IncompleteRun, match="DATA_CHECK_FAILED"):
+                read()
+
+    # The preprocessing cell colours the file already there.
+    monkeypatch.setattr(
+        "analysis.waxs.run.run_jungfrau_waxs", lambda cfg, **kwargs: None
+    )
+    cell = damnit.preprocess(
+        cfg.proposal,
+        cfg.run,
+        (cfg.detector,),
+        output_root=str(root),
+        allow_data_check_failures=allow,
+    )
+    assert _colour(cell) == COLORS["good" if allow else "error"]

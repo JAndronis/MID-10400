@@ -16,7 +16,7 @@ import pytest
 pytest.importorskip("extra_data")
 
 import xarray as xr  # noqa: E402
-from test_waxs_run import FailingPool, run  # noqa: E402  (tests/waxs on sys.path)
+from waxs_harness import FailingPool, run  # noqa: E402
 
 from analysis.common import lock as lock_module  # noqa: E402
 from analysis.common.lock import OutputBusy, lock_path  # noqa: E402

@@ -17,6 +17,7 @@ from analysis.common.config import (
     restore_by_name,
     state_by_name,
 )
+from analysis.common.status import FrameStatus
 
 __all__ = [
     "DETECTORS",
@@ -373,6 +374,19 @@ class JungfrauWaxsConfig(PassConfigMembers):
             "poni_file": self.poni_file,
             "static_mask_file": self.static_mask_file,
         }
+
+    @property
+    def tolerated_statuses(self) -> frozenset[str]:
+        """Frame status names a finished run may hold and still count as done.
+
+        ``DATA_CHECK_FAILED`` marks a frame with no pixel left to integrate, a
+        property of the data, so ``allow_data_check_failures`` decides. Every
+        other status but ``OK`` blocks. The pass and every DAMNIT reader of
+        its file apply this one rule.
+        """
+        if self.allow_data_check_failures:
+            return frozenset({FrameStatus.OK.name, FrameStatus.DATA_CHECK_FAILED.name})
+        return frozenset({FrameStatus.OK.name})
 
     @property
     def operational_fields(self) -> frozenset[str]:

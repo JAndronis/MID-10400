@@ -33,7 +33,6 @@ from analysis.common.cpu import (
 from analysis.common.lock import OutputLock, lock_path, output_lock
 from analysis.common.plan import evenly_spaced
 from analysis.common.run import base_provenance, fan_out
-from analysis.common.status import FrameStatus
 from analysis.common.writer import IncompleteRun, pooled_per_train, status_counts
 from analysis.waxs import worker as worker_module
 from analysis.waxs.cells import (
@@ -368,14 +367,8 @@ def _integrate(
 
 
 def _blocking(cfg: JungfrauWaxsConfig, summary: dict[str, int]) -> dict[str, int]:
-    """The non-``OK`` statuses that stop the run finishing.
-
-    ``DATA_CHECK_FAILED`` is a property of the data, so
-    ``cfg.allow_data_check_failures`` decides. Everything else blocks.
-    """
-    tolerated = {FrameStatus.OK.name}
-    if cfg.allow_data_check_failures:
-        tolerated.add(FrameStatus.DATA_CHECK_FAILED.name)
+    """The statuses in ``summary`` that stop the run finishing."""
+    tolerated = cfg.tolerated_statuses
     return {name: n for name, n in summary.items() if name not in tolerated}
 
 

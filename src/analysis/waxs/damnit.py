@@ -108,10 +108,10 @@ def preprocess(
     from analysis.waxs.run import run_jungfrau_waxs
 
     outcome: dict[str, Any] = {}
-    tolerated: dict[str, set[str]] = {}
+    tolerated: dict[str, frozenset[str]] = {}
     for detector in detectors:
         cfg = damnit_config(proposal, run_no, detector, **overrides)
-        tolerated[detector] = _tolerated(cfg)
+        tolerated[detector] = cfg.tolerated_statuses
         try:
             run_jungfrau_waxs(cfg, reduce="none")
         except Exception as error:  # noqa: BLE001 - shown in the table, logged
@@ -169,17 +169,9 @@ def jungfrau_waxs_from_file(
         raise Skip(f"no {detector} file at {path}: see jungfrau_preprocessing")
     with h5py.File(path, "r") as handle:
         summary = status_counts(handle["frames/status"][:], nonzero_only=True)
-    if set(summary) - _tolerated(cfg):
+    if set(summary) - cfg.tolerated_statuses:
         raise IncompleteRun(f"not every frame reached OK: {summary}")
     return per_cell(path)
-
-
-def _tolerated(cfg: JungfrauWaxsConfig) -> set[str]:
-    """Status names a finished run may hold, as the pass's own gate allows."""
-    tolerated = {"OK"}
-    if cfg.allow_data_check_failures:
-        tolerated.add("DATA_CHECK_FAILED")
-    return tolerated
 
 
 def per_cell_from_file(path: str | Path) -> Any:

@@ -1,9 +1,8 @@
 """End-to-end orchestration for one detector.
 
-The pool is injected rather than real wherever the test is about a failure
-path: killing processes to exercise ``BrokenExecutor`` would put test hooks in
-``worker``. One test does run a genuine spawned pool, because that is the only
-way to find out whether the initializer's arguments actually pickle.
+One test runs a genuine spawned pool, because that is the only way to find out
+whether the initializer's arguments actually pickle. The rest inject a pool
+(:mod:`waxs_harness`).
 """
 
 from __future__ import annotations
@@ -18,71 +17,15 @@ import pytest
 
 pytest.importorskip("extra_data")
 
+from waxs_harness import BrokenPool, FailingPool, InlinePool, run  # noqa: E402
+from waxs_mockrun import CELL_ORDER, N_MODULE_PX, lit_rate  # noqa: E402
+
 from analysis.common.status import FrameStatus  # noqa: E402
 from analysis.common.writer import IncompleteRun  # noqa: E402
 from analysis.waxs.cells import UnexpectedLitCells  # noqa: E402
 from analysis.waxs.config import EXPECTED_LIT_CELLS  # noqa: E402
 from analysis.waxs.run import run_jungfrau_waxs  # noqa: E402
 from analysis.waxs.selftest import SelfTestFailed  # noqa: E402
-
-
-class InlinePool:
-    """Runs every block in this process, with the real initializer."""
-
-    def __init__(self, n_workers, initializer=None, initargs=()):
-        if initializer is not None:
-            initializer(*initargs)
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        from analysis.waxs import worker
-
-        worker._STATE = None
-
-    def submit(self, fn, *args):
-        from concurrent.futures import Future
-
-        future = Future()
-        try:
-            future.set_result(fn(*args))
-        except BaseException as error:  # noqa: BLE001 - handed to the caller
-            future.set_exception(error)
-        return future
-
-
-class FailingPool(InlinePool):
-    """Every block raises, so the ledger takes ``WORKER_ERROR``."""
-
-    def submit(self, fn, *args):
-        from concurrent.futures import Future
-
-        future = Future()
-        future.set_exception(RuntimeError("block exploded"))
-        return future
-
-
-class BrokenPool(InlinePool):
-    """The executor dies, as a killed worker makes it."""
-
-    def submit(self, fn, *args):
-        from concurrent.futures import BrokenExecutor, Future
-
-        future = Future()
-        future.set_exception(BrokenExecutor("pool died"))
-        return future
-
-
-def run(cfg, mock, dc, **kwargs):
-    return run_jungfrau_waxs(
-        cfg,
-        dc=dc,
-        run_dir=mock.path,
-        output_path=kwargs.pop("output_path", None),
-        pool_factory=kwargs.pop("pool_factory", InlinePool),
-        **kwargs,
-    )
 
 
 def test_a_whole_run_integrates_and_returns_the_grid(cfg, mock_run_factory, tmp_path):
@@ -94,6 +37,63 @@ def test_a_whole_run_integrates_and_returns_the_grid(cfg, mock_run_factory, tmp_
     assert (grid["n_frames"] == 1).all()
     with h5py.File(tmp_path / "run.h5") as handle:
         assert (handle["frames/status"][:] == FrameStatus.OK).all()
+
+
+def test_each_row_holds_the_frame_its_memory_cell_labels(
+    cfg, mock_run_factory, tmp_path
+):
+    """The cell id comes from ``data.memoryCell``, never from array position.
+
+    The mock stores cell 15 at position 0, as the real detectors do, and gives
+    every lit cell its own photon rate. A frame read from the position equal to
+    its cell id lands on the wrong cell and carries that cell's neighbour's rate.
+    """
+    assert CELL_ORDER[0] == 15
+    mock, dc = mock_run_factory()
+    run(cfg, mock, dc, output_path=tmp_path / "id.h5", reduce="none")
+    with h5py.File(tmp_path / "id.h5") as handle:
+        frames = handle["frames"]
+        cells = frames["cellId"][:]
+        photons = frames["n_photons"][:].astype(np.float64)
+        kept = N_MODULE_PX - frames["n_bad_pixels"][:].astype(np.float64)
+    rate = photons / kept
+    for cell in mock.lit_cells:
+        mine = cells == cell
+        assert mine.sum() == len(mock.detector_trains), cell
+        assert rate[mine] == pytest.approx(lit_rate(cell), rel=0.01), cell
+
+
+def test_a_fully_masked_frame_is_refused_counted_and_tolerated(
+    cfg, mock_run_factory, tmp_path
+):
+    """A frame with no pixel left is ``DATA_CHECK_FAILED``, never a row of zeros.
+
+    It is a property of the data, so by default the run finishes and records it.
+    ``allow_data_check_failures=False`` makes the same frame stop the run.
+    """
+    mock, dc = mock_run_factory(train_ids=(10000, 10001), dead_frame_train=10001)
+    path = tmp_path / "dead.h5"
+    grid = run(cfg, mock, dc, output_path=path)
+
+    dead_cell = mock.lit_cells[0]
+    with h5py.File(path) as handle:
+        frames = handle["frames"]
+        status = frames["status"][:]
+        refused = status == FrameStatus.DATA_CHECK_FAILED
+        assert refused.sum() == 1
+        assert (status[~refused] == FrameStatus.OK).all()
+        assert frames["trainId"][:][refused][0] == 10001
+        assert frames["cellId"][:][refused][0] == dead_cell
+        assert frames["normalization"][:][refused].sum() == 0
+        assert frames["n_bad_pixels"][:][refused][0] == N_MODULE_PX
+        recorded = json.loads(handle["provenance"].attrs["data_check"])
+    assert recorded["n_frames_refused"] == 1
+    assert grid.sel(trainId=10001, cellId=dead_cell)["n_frames"] == 0
+    assert json.loads(grid.attrs["unplaced"]) == {"DATA_CHECK_FAILED": 1}
+
+    strict = dataclasses.replace(cfg, allow_data_check_failures=False)
+    with pytest.raises(IncompleteRun, match="DATA_CHECK_FAILED"):
+        run(strict, mock, dc, output_path=tmp_path / "strict.h5")
 
 
 def test_provenance_records_what_was_decided(cfg, mock_run_factory, tmp_path):
@@ -204,6 +204,9 @@ def test_a_label_mismatch_still_takes_the_run_down(cfg, mock_run_factory, tmp_pa
     mock, dc = mock_run_factory(shuffled_cells_train=10001)
     with pytest.raises(IncompleteRun, match="LABEL_MISMATCH"):
         run(cfg, mock, dc, output_path=tmp_path / "label.h5")
+    # A frame that could not be placed is not one the value check refused.
+    with h5py.File(tmp_path / "label.h5") as handle:
+        assert json.loads(handle["provenance"].attrs["data_check"]) == {}
 
 
 def test_which_statuses_block_the_run(cfg):
