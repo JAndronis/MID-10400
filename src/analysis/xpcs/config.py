@@ -24,6 +24,7 @@ from analysis.common.cpu import physical_cores
 from analysis.saxs.config import N_MODULES, AgipdSaxsConfig
 
 __all__ = [
+    "BRAGG_WINDOWS_NM",
     "DEFAULT_XPCS_ROOT",
     "MERGE_SCHEMA",
     "ES_RINGS_NM",
@@ -33,6 +34,7 @@ __all__ = [
     "Kernel",
     "MaskPolicy",
     "XpcsConfig",
+    "touches_bragg",
 ]
 
 _PROPOSAL_ROOT = "/gpfs/exfel/exp/MID/202601/p010400"
@@ -51,16 +53,24 @@ def _contiguous_nm(edges_A: tuple[float, ...]) -> tuple[tuple[float, float], ...
 #: equivalence gate against extra-speckle compares on these.
 ES_RINGS_NM = _contiguous_nm((0.0225, 0.035, 0.045, 0.056, 0.065, 0.069, 0.075, 0.086))
 
-#: The XPCS rings [nm⁻¹], 0.045 wide, with the fcc 111 (0.585 to 0.640) and 200
-#: (0.685 to 0.725) bands left out, because Bragg speckle there gives a contrast
-#: near 1. The bands enclose the measured Bragg excess with a margin. The outer
-#: bounds equal those of ``ES_RINGS_NM``, so both ring sets give the same
+#: The fcc 111 and 200 windows [nm⁻¹]. Bragg speckle inside them gives a
+#: contrast near 1, so no XPCS ring and no plain triage ROI may touch one. They
+#: enclose the measured Bragg excess of the crystallised runs with a margin.
+BRAGG_WINDOWS_NM: tuple[tuple[float, float], ...] = ((0.57, 0.65), (0.68, 0.74))
+
+
+def touches_bragg(lo: float, hi: float) -> bool:
+    """Whether the interval ``(lo, hi)`` [nm⁻¹] overlaps a Bragg window."""
+    return any(lo < w_hi and hi > w_lo for w_lo, w_hi in BRAGG_WINDOWS_NM)
+
+
+#: The XPCS rings [nm⁻¹], 0.045 wide, clear of ``BRAGG_WINDOWS_NM``. The gap
+#: between the two windows is narrower than a ring, so none sits there. The
+#: outer bounds equal those of ``ES_RINGS_NM``, so both ring sets give the same
 #: envelope and the same photon store.
-RINGS_NM: tuple[tuple[float, float], ...] = (
-    _contiguous_nm((0.0225, 0.027, 0.0315, 0.036, 0.0405, 0.045, 0.0495, 0.054, 0.0585))
-    + _contiguous_nm((0.064, 0.0685))
-    + _contiguous_nm((0.0725, 0.077, 0.0815, 0.086))
-)
+RINGS_NM: tuple[tuple[float, float], ...] = _contiguous_nm(
+    (0.0225, 0.027, 0.0315, 0.036, 0.0405, 0.045, 0.0495, 0.054)
+) + _contiguous_nm((0.077, 0.0815, 0.086))
 
 #: Bump when what either file holds changes.
 STORE_SCHEMA = 1

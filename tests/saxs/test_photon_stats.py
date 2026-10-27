@@ -30,6 +30,7 @@ from analysis.saxs.photon_stats import (  # noqa: E402
     run_photon_stats,
 )
 from analysis.saxs.plan import build_plan  # noqa: E402
+from analysis.xpcs.config import touches_bragg  # noqa: E402
 
 
 def dense(counts, bad, labels, n_rings, k_max):
@@ -67,7 +68,7 @@ def test_default_rings_tile_the_plain_rois():
     assert len(rings) == 17
     assert rings[0][0] == pytest.approx(0.225) and rings[-1][1] == pytest.approx(0.86)
     for lo, hi in rings:
-        assert not (lo < 0.65 and hi > 0.57) and not (lo < 0.74 and hi > 0.68)
+        assert not touches_bragg(lo, hi)
 
 
 @pytest.fixture(scope="module")

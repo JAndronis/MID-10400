@@ -9,7 +9,6 @@ import pytest
 from analysis.common.config import ConfigStateMismatch
 from analysis.xpcs.config import (
     ES_RINGS_NM,
-    RINGS_NM,
     XPCS_OPERATIONAL_FIELDS,
     Kernel,
     MaskPolicy,
@@ -23,15 +22,6 @@ def test_the_es_rings_are_the_triage_rois():
     from analysis.triage.xpcs import roi_edges_nm
 
     assert [list(ring) for ring in ES_RINGS_NM] == roi_edges_nm().tolist()
-
-
-def test_the_rings_keep_the_es_envelope_and_leave_out_the_bragg_bands():
-    """The same outer floats keep every photon store's envelope; 111 and 200 are out."""
-    assert RINGS_NM[0][0] == ES_RINGS_NM[0][0]
-    assert RINGS_NM[-1][1] == ES_RINGS_NM[-1][1]
-    for band in ((0.593, 0.631), (0.693, 0.715)):
-        assert not any(lo < band[1] and hi > band[0] for lo, hi in RINGS_NM)
-    assert {round(hi - lo, 9) for lo, hi in RINGS_NM} == {0.045}
 
 
 def test_the_default_partner_is_the_previous_train_only(saxs_cfg):

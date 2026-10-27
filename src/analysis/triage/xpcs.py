@@ -37,6 +37,7 @@ import numpy as np
 from scipy.optimize import curve_fit
 
 from analysis.damnit_names import AGIPD_SAXS, stored
+from analysis.xpcs.config import touches_bragg
 
 if TYPE_CHECKING:
     from analysis.xpcs.result import XpcsHits
@@ -44,7 +45,6 @@ if TYPE_CHECKING:
 __all__ = [
     "BETA_MIN_DECAY_LAGS",
     "BETA_MIN_PRECISION",
-    "BRAGG_WINDOWS_NM",
     "MIN_SLICE_TRAINS",
     "N_BLOCKS",
     "OFF_SUBTRACTION",
@@ -87,8 +87,6 @@ __all__ = [
 #: XPCS ROI edges [Å⁻¹] of the extra-speckle pipeline. DAMNIT stored only the
 #: centres.
 ROI_EDGES_A = (0.0225, 0.035, 0.045, 0.056, 0.065, 0.069, 0.075, 0.086)
-#: The narrow-excess (Bragg) windows [nm⁻¹]; a ROI touching one is "bragg".
-BRAGG_WINDOWS_NM = ((0.57, 0.65), (0.68, 0.74))
 #: 30 s at 10 Hz. A shorter final part joins the slice before it.
 SLICE_TRAINS, MIN_SLICE_TRAINS = 300, 150
 #: Per-slice SNR a run must reach once to count as extractable.
@@ -138,9 +136,6 @@ REFERENCE_BETA: dict[float, tuple[float, float, float]] = {
     0.04275: (0.037710, 0.036988, 0.037940),
     0.04725: (0.033020, 0.032943, 0.034061),
     0.05175: (0.028717, 0.028545, 0.029118),
-    0.05625: (0.023983, 0.023675, 0.024710),
-    0.06625: (0.019220, 0.018817, 0.019772),
-    0.07475: (0.017947, 0.017438, 0.018615),
     0.07925: (0.018553, 0.016734, 0.018980),
     0.08375: (0.017423, 0.016043, 0.018863),
 }
@@ -160,12 +155,9 @@ def roi_edges_nm(edges_a=ROI_EDGES_A) -> np.ndarray:
     return np.c_[e[:-1], e[1:]]
 
 
-def roi_kinds(edges_nm: np.ndarray, windows=BRAGG_WINDOWS_NM) -> list[str]:
+def roi_kinds(edges_nm: np.ndarray) -> list[str]:
     """``"bragg"`` for a ROI that overlaps a Bragg window, else ``"plain"``."""
-    return [
-        "bragg" if any(lo < w_hi and hi > w_lo for w_lo, w_hi in windows) else "plain"
-        for lo, hi in edges_nm
-    ]
+    return ["bragg" if touches_bragg(lo, hi) else "plain" for lo, hi in edges_nm]
 
 
 def roi_bin_masks(q_nm: np.ndarray, edges_nm: np.ndarray) -> np.ndarray:
