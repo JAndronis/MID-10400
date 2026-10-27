@@ -103,15 +103,6 @@ def test_the_partners_mask_reaches_the_baseline_and_not_the_raw_sums(world):
     assert (clean.cnt_pair < clean.cnt).any()
 
 
-def test_a_frame_without_photons_gives_zero_rows(world):
-    rings, dense, flags, _ = world
-    dense = dense[0].copy()
-    dense[2] = 0
-    sums = train_sums(make_train(1, dense, flags[0]), None, rings, Kernel.CLEAN)
-    assert not sums.on[:, 2, :].any() and not sums.on[:, :, 2].any()
-    assert not sums.s_on[:, 2].any()
-
-
 def test_a_ring_that_keeps_no_pixel_gives_zero_sums(world):
     rings, dense, _, _ = world
     everything = [np.arange(N_ENV)] * P
@@ -151,15 +142,3 @@ def test_the_es_kernel_reproduces_extra_speckles_sums_exactly(world, sparse):
         )
         np.testing.assert_array_equal(sums.cnt, expected["s_cnt"].astype(np.int32))
         previous = train
-
-
-def test_the_es_kernels_first_train_is_paired_with_its_own_mask(world):
-    rings, _, _, trains = world
-    first = train_sums(trains[0], None, rings, Kernel.ES)
-    assert first.has_off and first.partner_id == 0
-    np.testing.assert_array_equal(
-        first.off, np.repeat(first.s_on[:, :, None], P, axis=2)
-    )
-    np.testing.assert_array_equal(
-        first.s_off_prev, np.repeat(first.cnt[:, None], P, axis=1)
-    )

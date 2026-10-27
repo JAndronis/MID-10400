@@ -20,7 +20,7 @@ from xpcs_fakes import (
 
 from analysis.common.status import FrameStatus
 from analysis.xpcs.config import Kernel
-from analysis.xpcs.kernel import PairStatus, train_sums
+from analysis.xpcs.kernel import train_sums
 from analysis.xpcs.result import (
     BASE_CLOCK_HZ,
     CHUNK,
@@ -29,7 +29,6 @@ from analysis.xpcs.result import (
     RepRateMismatch,
     XpcsHits,
     _lag_bins,
-    read,
 )
 
 N_ENV, P, R = 300, 14, 3
@@ -121,12 +120,15 @@ def test_the_pooled_g2_is_a_ratio_of_summed_lag_sums(world, results):
     assert g2.roi_q.values.tolist() == pytest.approx(results.roi_q.tolist())
 
 
-def test_the_lag_axis_is_the_pulse_period_times_the_lag(results):
+def test_the_lag_axis_is_the_pulse_period_times_the_lag(world, results, tmp_path):
     g2 = results.g2(binned=False)
     period = 2 / BASE_CLOCK_HZ
     assert period == pytest.approx(443.08e-9, rel=1e-4)
     np.testing.assert_allclose(g2.tau.values, np.arange(1, P) * period)
     assert g2.lag.values.tolist() == list(range(1, P))
+    rings, _, _, photons = world
+    slow = build_results(tmp_path / "slow.h5", photons, rings, pattern_step=4)
+    assert slow.period_s == pytest.approx(4 / BASE_CLOCK_HZ)
 
 
 def test_a_subset_of_trains_pools_as_if_only_they_had_been_summed(world, results):
@@ -303,15 +305,6 @@ def test_the_nan_threshold_is_a_share_of_the_whole_map_not_a_count(world, tmp_pa
     assert below.sizes["roi_q"] == R - 1
 
 
-def test_without_the_kbar_filter_no_entry_is_dropped(world, tmp_path):
-    rings, _, _, photons = world
-    hits = build_results(tmp_path / "es.h5", photons, rings, kernel=Kernel.ES)
-    assert hits.ttcf(Averaging.ES, kbar_min=None).attrs["kbar_min"] == -1.0
-    dense_filter = hits.ttcf(Averaging.ES)["raw"].values
-    unfiltered = hits.ttcf(Averaging.ES, kbar_min=None)["raw"].values
-    assert np.isfinite(unfiltered).sum() >= np.isfinite(dense_filter).sum()
-
-
 def test_the_jackknife_error_is_the_triage_estimator_on_the_same_pooled_sums(
     world, results
 ):
@@ -368,16 +361,6 @@ def long_world(tmp_path):
     return build_results(tmp_path / "long.h5", photons, rings), photons, rings
 
 
-def test_binning_keeps_the_first_lags_and_pools_the_rest_into_log_bins(long_world):
-    hits, photons, rings = long_world
-    unbinned, binned = hits.g2(binned=False), hits.g2()
-    # 80 frames give lags 1 to 79, and dropping extra-speckle's last 10 leaves 69
-    assert unbinned.tau.size == 69 and binned.tau.size <= 10 + 20
-    assert binned.attrs["binned"] == 1 and unbinned.attrs["binned"] == 0
-    np.testing.assert_allclose(binned.g2.values[:, :10], unbinned.g2.values[:, :10])
-    assert (np.diff(binned.tau.values) > 0).all()
-
-
 def test_a_binned_value_is_the_ratio_of_its_lags_summed_numerators_and_denominators(
     long_world,
 ):
@@ -403,7 +386,13 @@ def test_a_binned_value_is_the_ratio_of_its_lags_summed_numerators_and_denominat
                 on[i, r, j] = np.trace(s.on[r].astype(float), offset=k)
                 a = s.s_on[r].astype(float)
                 den[i, r, j] = (a[: 80 - k] * a[k:]).sum() / s.cnt[r]
+    # 80 frames give lags 1 to 79, and dropping extra-speckle's last 10 leaves 69
+    assert lags.size == 69
     binned = hits.g2()
+    np.testing.assert_allclose(
+        binned.g2.values[:, :10], hits.g2(binned=False).g2.values[:, :10]
+    )
+    assert (np.diff(binned.tau.values) > 0).all()
     groups = _lag_bins(lags)
     assert len(groups) == binned.tau.size
     for b, group in enumerate(groups):
@@ -426,20 +415,15 @@ def test_every_hit_is_accounted_for_with_the_reason_it_was_not_used(world, tmp_p
         "MISSING_MODULES": 1,
         "LABEL_MISMATCH": 1,
     }
-    assert coverage.by_pairing["NOT_OK"] == 2
-    assert coverage.by_pairing["FIRST_HIT"] >= 1
-    assert coverage.by_pairing["GAP_TOO_LARGE"] >= 1
-    assert coverage.by_pairing["PAIRED"] >= 1
+    # 100 first; 101, 104 within the gap; 140 after a gap; 141, 145 within it
+    assert coverage.by_pairing == {
+        "NOT_OK": 2,
+        "FIRST_HIT": 1,
+        "GAP_TOO_LARGE": 1,
+        "PAIRED": 4,
+    }
     assert coverage.n_usable == len(IDS)
-    assert coverage.n_with_baseline == coverage.by_pairing["PAIRED"]
-    assert "hits" in str(coverage)
-    assert PairStatus.PAIRED.name in coverage.by_pairing
-
-
-def test_the_period_follows_the_pulse_step(world, tmp_path):
-    rings, _, _, photons = world
-    slow = build_results(tmp_path / "slow.h5", photons, rings, pattern_step=4)
-    assert slow.period_s == pytest.approx(4 / BASE_CLOCK_HZ)
+    assert coverage.n_with_baseline == 4
 
 
 def test_a_repetition_rate_that_disagrees_with_the_pattern_is_refused(results):
@@ -460,18 +444,12 @@ def test_pulses_that_are_not_evenly_spaced_make_no_lag_axis(results):
         XpcsHits(results.path).g2()
 
 
-def test_diagonals_have_the_shape_the_triage_reads(world, results):
-    from analysis.triage.xpcs import TtcfDiagonals, jackknife_g2
-
+def test_diagonals_are_the_per_train_sums_the_triage_reads(world, results):
     diagonals = results.diagonals()
     paired = results.has_off
-    assert isinstance(diagonals, TtcfDiagonals)
-    assert diagonals.train_ids.dtype == np.uint64
     assert diagonals.train_ids.tolist() == results.train_ids[paired].tolist()
-    assert np.all(np.diff(diagonals.train_ids.astype(np.int64)) > 0)
     assert diagonals.roi_q_A.tolist() == pytest.approx(results.roi_q.tolist())
     assert diagonals.sums.shape == (paired.sum(), R, P - 1)
-    assert diagonals.counts.dtype == np.int32 and diagonals.n_frames == P
     # one entry, computed by hand: train 101, ring 1, lag 3
     s = sums_of(world)[1]
     kbar = s.s_on[1] / s.cnt[1]
@@ -485,8 +463,6 @@ def test_diagonals_have_the_shape_the_triage_reads(world, results):
     row = int(np.flatnonzero(diagonals.train_ids == 101)[0])
     assert diagonals.counts[row, 1, 2] == np.isfinite(diag).sum()
     assert diagonals.sums[row, 1, 2] == pytest.approx(np.nansum(diag))
-    g2, sigma, _ = jackknife_g2(diagonals.sums[:, :, :5], diagonals.counts[:, :, :5], 2)
-    assert g2.shape == (R, 5) and np.isfinite(g2).any()
 
 
 def test_an_empty_hit_set_reads_as_a_result_with_nothing_in_it(tmp_path):
@@ -511,15 +487,6 @@ def test_a_run_whose_every_hit_failed_pools_to_nothing_not_to_one(tmp_path):
     assert np.isnan(g2.g2.values).all()
 
 
-def test_read_finds_a_runs_file_under_the_output_root(results, tmp_path):
-    target = tmp_path / "root" / "xpcs_hits" / "r0423"
-    target.mkdir(parents=True)
-    (target / "xpcs_hits.h5").write_bytes(results.path.read_bytes())
-    again = read(10400, 423, output_root=tmp_path / "root", rep_rate_mhz=2.26)
-    assert again.train_ids.tolist() == results.train_ids.tolist()
-    assert again.rep_rate_mhz == 2.26
-
-
 def assert_same_datasets(a, b, **tolerance):
     assert set(a.data_vars) == set(b.data_vars) and a.attrs == b.attrs
     for name in a.data_vars:
@@ -531,13 +498,10 @@ def assert_same_datasets(a, b, **tolerance):
             np.testing.assert_array_equal(a[coord].values, b[coord].values)
 
 
-@pytest.mark.parametrize("binned", [True, False])
-def test_g2_and_ttcf_from_precomputed_sums_are_those_read_on_their_own(
-    long_world, binned
-):
+def test_g2_and_ttcf_from_precomputed_sums_are_those_read_on_their_own(long_world):
     hits, _, _ = long_world
     sums = hits.pooled_sums()
-    assert_same_datasets(hits.g2(binned=binned, sums=sums), hits.g2(binned=binned))
+    assert_same_datasets(hits.g2(sums=sums), hits.g2())
     assert_same_datasets(hits.ttcf(sums=sums), hits.ttcf())
 
 

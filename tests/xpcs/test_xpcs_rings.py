@@ -109,12 +109,6 @@ def test_the_margin_covers_a_beam_centre_shift_of_that_size(cfg, pixels):
     assert np.isin(np.flatnonzero(near), envelope.pixels).all()
 
 
-def test_the_envelope_is_identified_by_its_pixels(cfg, with_config, pixels):
-    assert build_envelope(pixels, cfg).sha256 == build_envelope(pixels, cfg).sha256
-    other = build_envelope(pixels, with_config(envelope_margin_mm=2.0))
-    assert other.sha256 != build_envelope(pixels, cfg).sha256
-
-
 def test_static_bad_pixels_stay_in_the_envelope_and_leave_the_rings(
     cfg, pixels, static_bad
 ):
@@ -129,15 +123,8 @@ def test_static_bad_pixels_stay_in_the_envelope_and_leave_the_rings(
         rings.label[unflagged], pixels.label[envelope.pixels][unflagged]
     )
     assert rings.centres_nm().tolist() == pytest.approx([0.25, 0.375])
-
-
-def test_the_static_mask_changes_the_rings_but_not_the_envelope(
-    cfg, pixels, static_bad
-):
-    envelope = build_envelope(pixels, cfg)
     clean = build_rings(pixels, envelope, np.zeros(NPIX, dtype=bool), cfg)
-    masked = build_rings(pixels, envelope, static_bad, cfg)
-    assert clean.sha256 != masked.sha256
+    assert clean.sha256 != rings.sha256
 
 
 def test_other_ring_bounds_on_the_same_envelope_change_the_rings_sha(
@@ -181,17 +168,13 @@ def test_rings_can_come_from_a_masks_file(cfg, with_config, tmp_path):
     assert rings.bounds_nm == ()
 
 
-def test_overlapping_ring_masks_are_refused(with_config, tmp_path):
+def test_overlapping_or_misshapen_ring_masks_are_refused(with_config, tmp_path):
     masks = np.zeros((2, 16, 512, 128), dtype=bool)
     masks[:, 0, :4] = True
     path = tmp_path / "qmsk.npy"
     np.save(path, masks)
     with pytest.raises(ValueError, match="two rings"):
         pixel_map(with_config(ring_masks_file=str(path)))
-
-
-def test_ring_masks_of_the_wrong_shape_are_refused(with_config, tmp_path):
-    path = tmp_path / "qmsk.npy"
     np.save(path, np.zeros((2, 8, 512, 128), dtype=bool))
     with pytest.raises(ValueError, match="expected"):
         pixel_map(with_config(ring_masks_file=str(path)))

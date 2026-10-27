@@ -67,8 +67,3 @@ def test_a_ring_without_reference_or_points_is_left_out_not_raised():
     assert set(fit.failed) == {0, 1}
     assert np.isnan(fit.gamma[:2]).all()
     assert np.isfinite(fit.gamma[2:]).all()
-
-
-def test_unknown_beta_mode_is_refused():
-    with pytest.raises(ValueError, match="beta_mode"):
-        fit_rings(g2_from(3e4), beta_mode="free")

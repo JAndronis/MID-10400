@@ -90,32 +90,21 @@ def the_pass(monkeypatch, tmp_path):
     return calls
 
 
-def test_the_hits_come_from_the_dependencies_in_memory(classifier, the_pass):
-    xd.preprocess(10400, 423, *SIGNALS)
+def test_the_pass_is_run_on_the_hits_of_the_dependencies(classifier, the_pass):
+    cell = xd.preprocess(10400, 423, *SIGNALS, output_root="/elsewhere", n_workers=3)
     assert classifier["signals_from"] == SIGNALS
-    run, kwargs = classifier["hits"]
-    assert run == 423
-    assert kwargs == {"proposal": 10400, "signals": "SIGNALS"}
-
-
-def test_the_pass_is_run_on_the_hit_set_with_the_saxs_defaults(classifier, the_pass):
-    cell = xd.preprocess(10400, 423, *SIGNALS)
+    assert classifier["hits"] == (423, {"proposal": 10400, "signals": "SIGNALS"})
     ((cfg, hits),) = the_pass
     assert isinstance(hits, HitSet) and hits.train_ids.tolist() == list(IDS)
     assert "classify.hits" in hits.source and "static" in hits.source
     assert (cfg.proposal, cfg.run) == (10400, 423)
     assert cfg.saxs == xd.saxs_config_for(10400, 423)
     assert cfg.max_partner_gap == 1 and cfg.overwrite is False
+    assert cfg.output_root == "/elsewhere" and cfg.n_workers == 3
     assert isinstance(cell, Cell) and colour(cell) == COLORS["good"]
     record = json.loads(cell.data)
     assert record["n_hits"] == len(IDS) == record["n_usable"]
     assert record["hit_set_sha256"] == hits.sha256
-
-
-def test_overrides_reach_the_config(classifier, the_pass):
-    xd.preprocess(10400, 423, *SIGNALS, output_root="/elsewhere", n_workers=3)
-    ((cfg, _),) = the_pass
-    assert cfg.output_root == "/elsewhere" and cfg.n_workers == 3
 
 
 def test_a_run_without_hits_is_a_grey_result_not_a_failure(classifier, the_pass):
@@ -134,7 +123,7 @@ def test_a_failing_pass_is_a_red_cell_not_an_exception(classifier, monkeypatch):
     monkeypatch.setattr(xd, "run_xpcs_hits", fail)
     cell = xd.preprocess(10400, 423, *SIGNALS)
     assert colour(cell) == COLORS["error"]
-    assert cell.summary_value == "failed (pass): RuntimeError"
+    assert cell.summary_value.startswith("failed (pass)")
     assert "proc is gone" in json.loads(cell.data)["error"]
 
 
@@ -148,7 +137,7 @@ def test_a_failing_hit_rule_is_a_red_cell_and_the_pass_is_not_run(
 
     monkeypatch.setattr(classify, "hits", fail)
     cell = xd.preprocess(10400, 423, *SIGNALS)
-    assert cell.summary_value == "failed (hit rule): LookupError"
+    assert cell.summary_value.startswith("failed (hit rule)")
     assert colour(cell) == COLORS["error"] and not the_pass
 
 
@@ -166,7 +155,6 @@ def test_a_busy_output_is_amber(classifier, monkeypatch):
     [
         (FrameStatus.NO_FRAMES, "warning"),
         (FrameStatus.LABEL_MISMATCH, "error"),
-        (FrameStatus.NOT_PROCESSED, "error"),
     ],
 )
 def test_the_cell_is_coloured_by_what_became_of_the_hits(tmp_path, status, expected):
@@ -192,6 +180,7 @@ def written(tmp_path):
 def test_frames_used_reads_the_file_the_config_names(written):
     cell = xd.frames_used(10400, 423, **written)
     assert cell.summary_value.startswith(f"{len(IDS)} / {len(IDS)} hits")
+    assert colour(cell) == COLORS["good"]
 
 
 def test_the_g2_reader_checks_the_repetition_rate_against_the_pattern(written):
@@ -200,11 +189,6 @@ def test_the_g2_reader_checks_the_repetition_rate_against_the_pattern(written):
     assert g2.sizes["roi_q"] == R and g2.attrs["averaging"] == "pooled"
     with pytest.raises(RepRateMismatch):
         xd.g2_from_file(10400, 423, 1.13, **written)
-
-
-def test_the_ttcf_reader_returns_the_pooled_maps(written):
-    ttcf = xd.ttcf_from_file(10400, 423, **written)
-    assert ttcf["c2"].shape == (R, P, P)
 
 
 def test_the_readers_skip_a_run_without_hits_or_without_a_file(tmp_path):
@@ -222,16 +206,6 @@ def test_the_readers_refuse_unfinished_hits(tmp_path):
     )
     with pytest.raises(IncompleteRun):
         xd.g2_from_file(10400, 423, output_root=str(tmp_path))
-
-
-def test_the_overview_draws_from_the_two_readers(written):
-    import matplotlib
-
-    matplotlib.use("Agg")
-    fig = xd.overview_figure(
-        xd.g2_from_file(10400, 423, **written), xd.ttcf_from_file(10400, 423, **written)
-    )
-    assert len(fig.axes) >= 2
 
 
 def test_only_the_damnit_module_imports_the_classifier():

@@ -79,14 +79,11 @@ def test_every_hit_gets_a_status_and_only_paired_ones_a_partner():
     assert np.isin(result.partner[paired], ids[ok]).all()
 
 
-def test_extra_speckles_chain_restarts_at_each_sequence_file_and_ignores_the_gap():
+def test_extra_speckles_chain_restarts_at_each_file_and_skips_unusable_trains():
     partner, status = pair(
         [10, 5000, 6000, 6001], sequence=[0, 0, 1, 1], kernel=Kernel.ES, gap=1
     )
     assert partner == [0, 10, 0, 6000]
     assert status == [S.FIRST_HIT, S.PAIRED, S.FIRST_HIT, S.PAIRED]
-
-
-def test_extra_speckles_chain_skips_unusable_trains_within_a_file():
     partner, _ = pair([1, 2, 3], ok=[True, False, True], kernel=Kernel.ES)
-    assert partner == [0, 0, 1]
+    assert partner == [0, 0, 1], "an unusable train within a file is skipped"

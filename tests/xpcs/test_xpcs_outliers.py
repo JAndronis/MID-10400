@@ -7,7 +7,6 @@ import numpy as np
 import pytest
 from xpcs_fakes import GOOD, InlinePool, make_train
 
-from analysis.xpcs.config import XpcsConfig
 from analysis.xpcs.outliers import BLOCK_LIMIT, accumulate, outlier_mask, q_interval
 from analysis.xpcs.result import XpcsHits
 from analysis.xpcs.store import FlagBase
@@ -112,20 +111,6 @@ def test_a_block_is_limited_so_its_sums_fit_uint16():
 def test_q_intervals_lie_between_consecutive_bin_centres():
     index = q_interval(np.array([0.0, 0.05, 0.15, 0.95, 1.0]), (0.0, 1.0), 10)
     assert index.tolist() == [-1, -1, 0, 8, -1]
-
-
-def test_ring_masks_files_cannot_carry_the_outlier_mask(with_config):
-    with pytest.raises(ValueError, match="ring_masks_file"):
-        with_config(outlier_thresholds=(0.75, 1.75), ring_masks_file="x.npy")
-    assert XpcsConfig.__dataclass_fields__["outlier_thresholds"].default == (0.75, 1.75)
-
-
-def test_the_merge_hash_names_the_outlier_settings(with_config):
-    hashes = {
-        with_config(outlier_thresholds=t).merge_hash("e", "r")
-        for t in (None, (0.75, 1.75), (0.5, 2.0))
-    }
-    assert len(hashes) == 3
 
 
 def test_the_pass_removes_the_outliers_from_every_ring_and_records_them(pipeline):

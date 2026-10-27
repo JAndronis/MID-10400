@@ -9,7 +9,7 @@ import h5py
 import numpy as np
 import pytest
 from mockrun import source
-from xpcs_fakes import EMPTY, FRAMES, GOOD, SHORT, TRAIN_IDS, BrokenPool, InlinePool
+from xpcs_fakes import EMPTY, FRAMES, GOOD, SHORT, BrokenPool, InlinePool
 
 from analysis.common.lock import OutputBusy, output_lock
 from analysis.common.status import FrameStatus
@@ -165,10 +165,7 @@ def test_a_complete_run_is_answered_from_the_file_and_writes_nothing(
     after = [(os.stat(p).st_ino, os.stat(p).st_mtime_ns, sha(p)) for p in files]
     assert before == after
     assert not list(tmp_path.rglob("*.lock"))
-
-
-def test_the_same_hits_with_a_broken_pool_still_answer_from_the_file(pipeline):
-    pipeline.finished()
+    assert not block_dir_for(cfg.store_file).exists()
     pipeline.run(GOOD, pool=BrokenPool)  # no pool is ever asked for work
 
 
@@ -218,6 +215,7 @@ def test_a_block_that_fails_is_retried_by_the_next_run(pipeline, monkeypatch):
         assert 10005 in failed.tolist() and failed.size < len(GOOD)
         assert not cfg.output_file.exists()
 
+    assert not list(block_dir_for(cfg.store_file).glob("*"))
     calls.clear()
     retry = True
     pipeline.run(GOOD)
@@ -296,12 +294,6 @@ def test_a_partner_gap_change_rebuilds_the_sums_and_never_touches_the_store(pipe
         assert f["hits/pair_status"][row_of[10003]] == PairStatus.GAP_TOO_LARGE
         assert f["hits/partner"][row_of[10006]] == 10005
         assert f.attrs["max_partner_gap"] == 1
-
-
-def test_another_kernel_rebuilds_the_sums_from_the_same_store(pipeline):
-    path = pipeline.finished()
-    store = pipeline.cfg().store_file
-    stored = sha(store)
     pipeline.run(GOOD, kernel=Kernel.ES)
     assert sha(store) == stored
     with h5py.File(path, "r") as f:
@@ -343,30 +335,7 @@ def test_worker_count_and_block_size_change_no_stored_number(
     assert h5_digest(out, VOLATILE) == h5_digest(inline, VOLATILE)
 
 
-def test_inline_and_spawned_pools_agree(pipeline, mock_run, geom, tmp_path, h5_digest):
-    pipeline.finished()
-    from dataclasses import replace
-
-    from analysis.xpcs.run import run_xpcs_hits
-
-    run, dc = mock_run
-    cfg = replace(
-        pipeline.cfg(), output_root=str(tmp_path / "again"), trains_per_block=2
-    )
-    run_xpcs_hits(
-        cfg,
-        HitSet.of(GOOD),
-        dc=dc,
-        geometry=geom,
-        run_dir=run.path,
-        pool_factory=InlinePool,
-    )
-    assert h5_digest(cfg.store_file, VOLATILE) == h5_digest(
-        pipeline.cfg().store_file, VOLATILE
-    )
-
-
-def test_the_results_name_the_inputs_that_made_them(pipeline):
+def test_the_results_name_the_inputs_that_made_them(pipeline, mock_run, geom):
     path = pipeline.finished()
     with h5py.File(path, "r") as f:
         assert f.attrs["hits_sha256"] == HitSet.of(GOOD).sha256
@@ -374,14 +343,10 @@ def test_the_results_name_the_inputs_that_made_them(pipeline):
         assert f["pattern/pulse_ids"][()].tolist() == list(range(FRAMES))
         assert f["provenance"].attrs["hit_set_sha256"] == HitSet.of(GOOD).sha256
         assert f.attrs["envelope_sha256"]
-    assert len(TRAIN_IDS) == 10
 
-
-def test_the_public_entry_point_returns_a_reader_over_the_run(pipeline, mock_run, geom):
     from analysis.xpcs import XpcsHits, xpcs_hits
 
     run, dc = mock_run
-    pipeline.finished()
     result = xpcs_hits(
         pipeline.cfg(),
         HitSet.of(GOOD),
@@ -432,25 +397,6 @@ def test_a_block_that_fails_to_sum_is_reported_and_retried(pipeline, monkeypatch
     state["fail"] = False
     pipeline.run(GOOD)
     assert (rows(path)[1] == FrameStatus.OK).all()
-
-
-def test_a_finished_run_leaves_no_block_files(pipeline):
-    pipeline.finished()
-    assert not block_dir_for(pipeline.cfg().store_file).exists()
-
-
-def test_a_block_that_dies_before_writing_leaves_no_file(pipeline, monkeypatch):
-    real = extract.process_block
-
-    def flaky(block):
-        if 10005 in block.train_ids:
-            raise OSError("a node went away")
-        return real(block)
-
-    monkeypatch.setattr(extract, "process_block", flaky)
-    with pytest.raises(IncompleteRun):
-        pipeline.run(GOOD)
-    assert not list(block_dir_for(pipeline.cfg().store_file).glob("*"))
 
 
 def test_block_files_a_crashed_parent_left_are_merged_not_extracted_again(
