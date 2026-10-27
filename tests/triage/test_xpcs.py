@@ -20,6 +20,7 @@ from analysis.triage.xpcs import (
     Beta,
     DecayFit,
     QGridMismatch,
+    RunMeasurement,
     beta_eligible,
     crl_state,
     diagonal_sums,
@@ -320,3 +321,76 @@ def test_the_results_file_gives_the_same_verdict_machinery(hit_results):
     assert out["n_usable"] == m.n_usable
     assert set(out["snr_run"]) <= set(m.roi_q_A)
     assert np.isfinite(out["best_snr"])
+
+
+@pytest.fixture(scope="module")
+def poisson_hits(tmp_path_factory):
+    """Speckle-free Poisson photons: four rings of about 300 pixels, 100 trains."""
+    return write_hit_results(
+        tmp_path_factory.mktemp("poisson") / "xpcs_hits.h5",
+        n_trains=100,
+        n_env=1200,
+        densities=(0.2, 0.1, 0.05, 0.03),
+        poisson=True,
+        seed=0,
+    )
+
+
+def test_measure_run_noise_is_the_analytical_noise_on_poisson_photons(poisson_hits):
+    """ρ ≈ 1 pins √2 · 1/(k̄ √(N_pix (F − 1) φ n)) against what the jackknife sees."""
+    m = measure_run(423, poisson_hits, n_blocks=20)
+    assert m.n_usable > 90
+    # 20 blocks give each ring's σ to about 16 %, the mean over four to about 8 %
+    assert np.all((m.rho > 0.7) & (m.rho < 1.4))
+    assert m.rho.mean() == pytest.approx(1.0, abs=0.12)
+
+
+def test_snr_is_the_analytical_formula_on_hand_picked_numbers():
+    # β k̄ √(N_pix (F − 1) φ n) = 0.02 · 0.05 · √(2000 · 100 · 0.5 · 40) = 2, over √2
+    assert snr(0.02, 0.05, 2000, 101, 0.5, 40) == pytest.approx(np.sqrt(2.0))
+
+
+def test_the_verdict_takes_the_best_plain_roi_and_the_time_it_needs():
+    nan = float("nan")
+    two = np.array([2000.0, 2000.0])
+    m = RunMeasurement(
+        run=1, roi_q_A=np.array([0.02875, 0.0605]),
+        edges_nm=np.array([[0.225, 0.35], [0.56, 0.65]]), kinds=["plain", "bragg"],
+        n_frames=101, rep_rate_hz=1.0, npix=two, n_usable=40,
+        kbar=np.array([0.05, 0.05]), phi=np.array([0.5, 0.5]), tau=np.ones(1),
+        g2=np.zeros((2, 1)), sigma_g2=np.zeros((2, 1)), fits=[], rho=two,
+        damnit_max_z=two,
+        slices=[{"slice": 0, "n_usable": 40, "kbar": np.array([0.05, 0.05]),
+                 "phi": np.array([0.5, 0.5])}],
+    )  # fmt: skip
+    beta = {0: Beta(0.02, 1, nan, nan, ()), 1: Beta(0.5, 1, nan, nan, ())}
+    s = summarise(m, beta)
+    # the plain ROI's SNR is √2 (above); the Bragg ROI's 25√2 does not count
+    assert s["snr_run"] == {0.02875: pytest.approx(np.sqrt(2.0))}
+    assert s["best_snr"] == pytest.approx(np.sqrt(2.0)) and s["best_roi_q_A"] == 0.02875
+    assert s["extractable"] is False
+    # SNR grows as √t: 3 needs (3/√2)² = 4.5 slices of 30 s
+    assert s["t_needed_s"] == pytest.approx(135.0)
+
+
+def test_n_pix_is_a_typical_trains_and_heavily_masked_trains_do_not_move_it(
+    tmp_path,
+):
+    """Every sixth train loses 90 % of its pixels; N_pix stays the unmasked count."""
+    h = write_hit_results(
+        tmp_path / "xpcs_hits.h5", masked={i: 0.9 for i in range(0, 60, 6)}
+    )
+    with h5py.File(h.path, "r") as f:
+        ring_size = np.bincount(f["rings/label"][:], minlength=h.n_rings)
+    m = measure_run(423, h, n_blocks=5)
+    # a pixel survives a train unless one of its 14 frames flags it (2 % each)
+    np.testing.assert_allclose(m.npix, ring_size * 0.98**14, rtol=0.08)
+
+
+def test_fixed_beta_matches_a_table_by_roi_centre():
+    table = {0.04: (0.03, 0.02, 0.04), 0.072: (0.01, 0.005, 0.015)}
+    beta = fixed_beta(np.array([0.072, 0.0505, 0.07200000000000001, 0.04]), table)
+    assert [b.value for b in (beta[0], beta[2], beta[3])] == [0.01, 0.01, 0.03]
+    assert (beta[3].p16, beta[3].p84) == (0.02, 0.04)
+    assert beta[0].runs == REFERENCE_BETA_RUNS
+    assert np.isnan(beta[1].value) and beta[1].n_eligible == 0

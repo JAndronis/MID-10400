@@ -177,7 +177,7 @@ def write_xpcs_run(
     }
 
 
-#: The seven XPCS rings, edges in nm⁻¹ (what the pass stores for `ROI_EDGES_A`).
+#: Lit-pixel probability per frame of the seven extra-speckle XPCS rings.
 ring_densities = (0.2, 0.1, 0.01, 0.005, 0.0005, 0.0002, 0.0001)
 
 
@@ -186,16 +186,23 @@ def write_hit_results(
     *,
     n_trains: int = 60,
     n_frames: int = 14,
+    n_env: int = 400,
     densities=ring_densities,
+    poisson: bool = False,
+    masked: dict[int, float] | None = None,
     failed: dict[int, int] | None = None,
     seed: int = 3,
 ):
     """A hit-train results file (`analysis.xpcs.result`) of synthetic photon trains.
 
-    One ring per XPCS ROI; ring r lights each pixel of each frame with probability
-    ``densities[r]`` (photons of 1 to 3, mean 2, so k̄ ≈ 2 · density). The trains are
-    consecutive from `FIRST_TRAIN`. ``failed`` maps train id -> `FrameStatus` code of
-    hits that gave no photons. Returns the open `XpcsHits`.
+    Ring r is the r-th XPCS ROI. By default it lights each pixel of each frame with
+    probability ``densities[r]`` (photons of 1 to 3, mean 2, so k̄ ≈ 2 · density).
+    With ``poisson`` each count is Poisson of mean ``densities[r]`` instead: a
+    speckle-free field (β = 0), whose g2 noise is the analytical one. Each frame
+    flags 2 % of the pixels; ``masked`` maps a train's offset from `FIRST_TRAIN` to
+    a further fraction of the pixels flagged in that train alone. The trains are
+    consecutive from `FIRST_TRAIN`. ``failed`` maps train id -> `FrameStatus` code
+    of hits that gave no photons. Returns the open `XpcsHits`.
     """
     import sys
 
@@ -207,11 +214,12 @@ def write_hit_results(
     from analysis.xpcs.rings import Rings
 
     rng = np.random.default_rng(seed)
-    n_env, n_rings = 400, len(densities)
+    n_rings = len(densities)
     label = rng.integers(0, n_rings, n_env).astype(np.int8)
     label.flags.writeable = False
-    rings = Rings(tuple(map(tuple, roi_edges_nm())), label, n_rings, "rings")
+    rings = Rings(tuple(map(tuple, roi_edges_nm()[:n_rings])), label, n_rings, "rings")
     per_pixel = np.asarray(densities)[label]
+    masked = masked or {}
     failed = {t: FrameStatus(c) for t, c in (failed or {}).items()}
     ids = [
         int(FIRST_TRAIN) + i
@@ -220,8 +228,15 @@ def write_hit_results(
     ]
     photons = []
     for t in ids:
-        lit = rng.random((n_frames, n_env)) < per_pixel
-        dense = (lit * rng.integers(1, 4, (n_frames, n_env))).astype(np.int32)
-        photons.append(make_train(t, dense, make_flags(rng, n_frames, n_env)))
+        if poisson:
+            dense = rng.poisson(per_pixel, (n_frames, n_env)).astype(np.int32)
+        else:
+            lit = rng.random((n_frames, n_env)) < per_pixel
+            dense = (lit * rng.integers(1, 4, (n_frames, n_env))).astype(np.int32)
+        flags = make_flags(rng, n_frames, n_env)
+        if (fraction := masked.get(t - int(FIRST_TRAIN))) is not None:
+            extra = np.flatnonzero(rng.random(n_env) < fraction)
+            flags[0] = np.union1d(flags[0], extra)
+        photons.append(make_train(t, dense, flags))
     path.parent.mkdir(parents=True, exist_ok=True)
     return build_results(path, photons, rings, failed=failed)

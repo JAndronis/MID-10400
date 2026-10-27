@@ -171,8 +171,10 @@ def test_static_hits_find_long_and_short_absences():
     n = 3000
     x = np.linspace(-3.0, -2.6, n) + 0.02 * rng.standard_normal(n)
     out = np.zeros(n, dtype=bool)
-    # 60 and 150 trains: longer than half the 51-train running window, which misses them
-    for start, length in ((500, 20), (1500, 60), (2200, 150)):
+    # 200 trains: more than half the 301-train window, which a running median misses;
+    # 260: more than 0.75 · 301, found only once the absence's edges, flagged on a
+    # first pass, leave the reference
+    for start, length in ((300, 20), (700, 60), (1300, 200), (2200, 260)):
         out[start : start + length] = True
     x[out] -= 1.3
     x[10] = np.nan
@@ -180,6 +182,16 @@ def test_static_hits_find_long_and_short_absences():
     assert not on[out].any()
     assert on[~out & np.isfinite(x)].mean() > 0.999
     assert not on[10]
+
+
+def test_waxs_z_is_the_shift_over_the_standard_error_of_a_median():
+    off = np.tile([-0.1, 0.1], 200)  # median 0, MAD 0.1
+    cls = np.array(["off"] * 400 + ["on"] * 100)
+    v = waxs_check(np.r_[off, np.full(100, 0.3)], cls)
+    assert v["waxs_shift_dex"] == pytest.approx(0.3)
+    # the median of n normal values scatters by √(π/2) · σ / √n
+    se = np.sqrt(np.pi / 2) * 1.4826 * 0.1 / np.sqrt(100)
+    assert v["waxs_z"] == pytest.approx(0.3 / se, rel=1e-4)
 
 
 def test_waxs_check_measures_the_shift_of_the_hits():

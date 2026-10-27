@@ -22,7 +22,7 @@ from analysis.triage.series import (
     segment,
     window_medians,
 )
-from analysis.triage.stats import mad_dof, z_for_tests
+from analysis.triage.stats import mad_dof, welch_dof, z_for_tests
 
 N = 1000  # trains per run: ~50 windows, as in a real static run
 
@@ -198,3 +198,26 @@ def test_load_droplet_drops_non_finite_fits_and_orders_by_train(tmp_path):
     assert d.coverage == pytest.approx(0.99)
     np.testing.assert_allclose(d.center_px[0], [1.0, 2.0])
     assert load_droplet(tmp_path / "missing.h5", 5) is None
+
+
+def test_a_boundary_between_short_runs_is_cut_at_students_t():
+    """Two four-window runs: each noise comes from three differences, so a step
+    the normal cut would call an increase is still within the t cut."""
+    windows = np.array([0.0, 0.01, 0.03, 0.03])  # differences 0.01, 0.02, 0: MAD 0.01
+    lv_a = np.repeat(0.3 + windows, WINDOW)
+    lv_b = np.repeat(0.3 + 0.03 + 0.035 + windows, WINDOW)  # a step of 0.035 dex
+    drops = {
+        r: Droplet(r, np.arange(lv.size, dtype=np.uint64), 10**lv,
+                   np.zeros((lv.size, 2)), lv.size)
+        for r, lv in ((1, lv_a), (2, lv_b))
+    }  # fmt: skip
+    inv = pd.DataFrame(
+        {"run": [1, 2], "cls": ["static_droplet"] * 2, "sample": ["ferritin50"] * 2}
+    )
+    b = segment(inv, drops).boundaries.iloc[0]
+    sigma = 1.4826 * 0.01
+    assert b.sigma == pytest.approx(np.hypot(sigma, sigma))
+    assert b.d == pytest.approx(0.035)
+    nu = welch_dof(sigma**2, mad_dof(3), sigma**2, mad_dof(3))
+    assert z_for_tests(1) < b.z < b.z_cut == pytest.approx(z_for_tests(1, dof=nu))
+    assert b.kind == "continuing"

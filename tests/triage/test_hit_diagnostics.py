@@ -117,3 +117,33 @@ def test_static_figure_is_timeline_and_counts(store):
     fig = hit_geometry_figure(10400, 423, *memory(store, 423), damnit_root=store,
                               cache_dir=None)  # fmt: skip
     assert len(fig.axes) == 2
+
+
+def test_the_scan_map_puts_each_train_at_its_position_in_its_class_colour():
+    import matplotlib.pyplot as plt
+    import xarray as xr
+    from matplotlib.colors import to_rgba
+
+    from analysis.triage.geometry import CLASS_COLORS
+    from analysis.triage.geometry import hit_geometry_figure as figure
+
+    classes = np.array(["off", "on", "edge", "on", "off", "on"])
+    tids = np.arange(100, 106, dtype=np.uint64)
+    found = {
+        "run": 121, "kind": "mesh", "block": "b",
+        "classes": xr.DataArray(classes, dims="trainId", coords={"trainId": tids}),
+        "overlap": xr.DataArray(np.linspace(0, 1, 6), dims="trainId",
+                                coords={"trainId": tids}),
+    }  # fmt: skip
+    x, z = np.arange(6.0), 10.0 + np.arange(6.0) ** 2
+    fig = figure(found, (x, z))
+    scan_map = fig.axes[0]
+    drawn = {}
+    for points in scan_map.collections:
+        colour = tuple(points.get_facecolor()[0])
+        for xy in points.get_offsets():
+            drawn[tuple(xy)] = colour
+    plt.close(fig)
+    assert drawn == {
+        (x[i], z[i]): to_rgba(CLASS_COLORS[c]) for i, c in enumerate(classes)
+    }

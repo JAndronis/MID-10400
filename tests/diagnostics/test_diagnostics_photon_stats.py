@@ -27,17 +27,17 @@ from analysis.saxs.photon_stats import PhotonStatsWriter, default_rings, frame_s
 BETA, KBAR, N_PIX, K_MAX = 0.04, 0.08, 8000, 15
 
 
-def nb_frames(rng, n_frames, n_rings=2, beta=BETA, kbar=KBAR, hot=0):
+def nb_frames(rng, n_frames, n_rings=2, beta=BETA, kbar=KBAR, hot=0, n_pix=N_PIX):
     """Per-frame ring records of gamma-Poisson pixels with a known contrast.
 
     Pixel p of a ring has mean kbar·w_p; its intensity is Gamma(1/β) around that,
     so its counts are negative binomial with contrast β. ``hot`` pixels per frame
     get 10 photons whatever the intensity.
     """
-    w = np.tile(np.linspace(0.7, 1.3, N_PIX), n_rings)
-    labels = np.repeat(np.arange(n_rings), N_PIX).astype(np.int16)
+    w = np.tile(np.linspace(0.7, 1.3, n_pix), n_rings)
+    labels = np.repeat(np.arange(n_rings), n_pix).astype(np.int16)
     in_ring = np.ones(labels.size, bool)
-    ring_n = np.full(n_rings, N_PIX)
+    ring_n = np.full(n_rings, n_pix)
     bad = np.zeros(labels.size, bool)
     out = {k: [] for k in ("n_valid", "hist", "s1", "s2", "max_k")}
     m = 1.0 / beta
@@ -178,3 +178,51 @@ def test_the_summary_reports_rois_rings_and_the_reference(frames):
         s.ring_hist.sum("k").values, ds.n_valid.sum("frame").values
     )
     assert s.attrs["n_frames"] == ds.sizes["frame"] and s.attrs["weighted"] == 1
+
+
+def test_the_contrast_sigma_is_the_scatter_of_independent_repeats():
+    """Twelve runs of 200 single-ring frames, their moments taken straight from the
+    counts; the jackknife σ of each must match the scatter of β between them."""
+    n_rep, n_frames, n_pix = 12, 200, 2000
+    rng = np.random.default_rng(0)
+    w = np.linspace(0.7, 1.3, n_pix)
+    m = 1.0 / BETA
+    counts = rng.poisson(rng.gamma(m, KBAR * w / m, (n_rep, n_frames, n_pix)))
+    s1 = counts.sum(axis=2, dtype=np.float64)
+    s2 = (counts * (counts - 1)).sum(axis=2, dtype=np.float64)
+    labels = np.zeros(n_pix, np.int16)
+    weights = ring_weights(labels, KBAR * w, np.zeros((1, n_pix), bool), np.array([0]))
+    betas, sigmas = [], []
+    for i in range(n_rep):
+        ds = xr.Dataset(
+            {"s1": (("frame", "ring"), s1[i, :, None]),
+             "s2": (("frame", "ring"), s2[i, :, None]),
+             "n_valid": (("frame", "ring"), np.full((n_frames, 1), n_pix))},
+            coords={"trainId": ("frame", np.arange(n_frames) // 10),
+                    "cellId": ("frame", np.zeros(n_frames, np.uint16)),
+                    "ring": [0]},
+        )  # fmt: skip
+        c = contrast(ds, weights, n_blocks=10)
+        betas.append(float(c.beta[0]))
+        sigmas.append(float(c.sigma[0]))
+    # twelve repeats know their scatter to about 20 %, ten blocks theirs to 25 %
+    assert np.std(betas, ddof=1) == pytest.approx(np.median(sigmas), rel=0.4)
+
+
+def test_the_shape_ratio_sigmas_are_the_scatter_of_independent_repeats():
+    """Each "ring" is one repeat of 10 000 negative-binomial pixels at k̄ = 0.5,
+    where P2 and P3 weigh enough for a wrong σ formula to show."""
+    rng = np.random.default_rng(0)
+    n_rep, kbar = 300, 0.5
+    counts = rng.negative_binomial(1 / BETA, 1 / (1 + kbar * BETA), (n_rep, 10_000))
+    hist = np.stack([np.bincount(c, minlength=K_MAX + 2)[: K_MAX + 2] for c in counts])
+    ds = xr.Dataset(
+        {"hist": (("frame", "ring", "k"), hist[None]),
+         "max_k": (("frame", "ring"), counts.max(axis=1)[None])},
+        coords={"ring": np.arange(n_rep)},
+    )  # fmt: skip
+    out = nb_checks(ds, np.full(n_rep, BETA))
+    # 300 repeats know their scatter to 4 %
+    assert float(out.r2.std() / out.r2_sigma.median()) == pytest.approx(1, abs=0.1)
+    assert float(out.r3.std() / out.r3_sigma.median()) == pytest.approx(1, abs=0.1)
+    assert float(out.r3.mean()) == pytest.approx((1 + 2 * BETA) / (1 + BETA), abs=0.025)

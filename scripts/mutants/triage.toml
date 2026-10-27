@@ -1,0 +1,144 @@
+# Mutants for the triage and the diagnostics (analysis.triage, analysis.diagnostics).
+# Format as in common.toml: `old` occurs exactly once in `file`; expect = "killed"
+# unless the entry says "survived".
+
+[[mutant]]
+name = "off_subtraction_sqrt3"
+file = "src/analysis/triage/xpcs.py"
+old = "OFF_SUBTRACTION = float(np.sqrt(2.0))"
+new = "OFF_SUBTRACTION = float(np.sqrt(3.0))"
+tests = ["tests/triage/test_xpcs.py", "tests/diagnostics/test_diagnostics_xpcs.py"]
+
+[[mutant]]
+name = "npix_mean_not_median"
+file = "src/analysis/triage/xpcs.py"
+old = "npix = np.median(pixels, axis=0) if pixels.size"
+new = "npix = np.mean(pixels, axis=0) if pixels.size"
+tests = ["tests/triage/test_xpcs.py"]
+
+[[mutant]]
+name = "g2_jackknife_factor_one_over_b"
+file = "src/analysis/triage/xpcs.py"
+old = "(b - 1) / b * np.nansum"
+new = "1 / b * np.nansum"
+tests = ["tests/triage/test_xpcs.py"]
+
+[[mutant]]
+name = "g2_jackknife_factor_one"
+file = "src/analysis/triage/xpcs.py"
+old = "(b - 1) / b * np.nansum"
+new = "1 * np.nansum"
+tests = ["tests/triage/test_xpcs.py", "tests/diagnostics/test_diagnostics_xpcs.py"]
+expect = "survived"  # sigma moves by 1 % at 50 blocks, inside any test's tolerance
+
+[[mutant]]
+name = "contrast_jackknife_factor_one_over_b"
+file = "src/analysis/diagnostics/photon_stats.py"
+old = "np.sqrt((b - 1) / b * ((loo - loo.mean(axis=0)) ** 2).sum(axis=0))"
+new = "np.sqrt(1 / b * ((loo - loo.mean(axis=0)) ** 2).sum(axis=0))"
+tests = ["tests/diagnostics/test_diagnostics_photon_stats.py"]
+
+[[mutant]]
+name = "static_running_median"
+file = "src/analysis/triage/classify.py"
+old = "STATIC_WINDOW, STATIC_QUANTILE = 301, 0.75"
+new = "STATIC_WINDOW, STATIC_QUANTILE = 301, 0.5"
+tests = ["tests/triage/test_classify.py"]
+
+[[mutant]]
+name = "mesh_on_fraction_gate_dropped"
+file = "src/analysis/triage/classify.py"
+old = 'cls[cand & (f >= ON_FRACTION)] = "on"'
+new = 'cls[cand] = "on"'
+tests = ["tests/triage"]
+
+[[mutant]]
+name = "scan_map_scatter_dropped"
+file = "src/analysis/triage/geometry.py"
+old = 'ax.scatter(x[m], z[m], s=8, c=CLASS_COLORS[k], label=f"{k} {int(m.sum())}")'
+new = "pass"
+tests = ["tests/triage/test_hit_diagnostics.py"]
+
+[[mutant]]
+name = "waxs_median_se_factor"
+file = "src/analysis/triage/classify.py"
+old = "se = 1.2533 * robust_sd(off)"
+new = "se = 1.0 * robust_sd(off)"
+tests = ["tests/triage/test_classify.py"]
+
+[[mutant]]
+name = "series_cut_normal_not_t"
+file = "src/analysis/triage/series.py"
+old = "z_for_tests(len(pairs), dof=p[5]) for p in pairs"
+new = "z_for_tests(len(pairs)) for p in pairs"
+tests = ["tests/triage/test_series.py"]
+
+[[mutant]]
+name = "nb_r3_sigma_p2_weight"
+file = "src/analysis/diagnostics/photon_stats.py"
+old = "r3_sigma = r3 * np.sqrt(1 / p1 + 1 / p3 + 4 / p2)"
+new = "r3_sigma = r3 * np.sqrt(1 / p1 + 1 / p3 + 1 / p2)"
+tests = ["tests/diagnostics/test_diagnostics_photon_stats.py"]
+
+[[mutant]]
+name = "nb_r2_sigma_p1_weight"
+file = "src/analysis/diagnostics/photon_stats.py"
+old = "r2_sigma = r2 * np.sqrt(4 / p1 + 1 / p2)"
+new = "r2_sigma = r2 * np.sqrt(1 / p1 + 1 / p2)"
+tests = ["tests/diagnostics/test_diagnostics_photon_stats.py"]
+
+[[mutant]]
+name = "svd_floor_max_not_sum"
+file = "src/analysis/diagnostics/curves.py"
+old = "np.sqrt(rel.shape[0]) + np.sqrt(rel.shape[1])"
+new = "max(np.sqrt(rel.shape[0]), np.sqrt(rel.shape[1]))"
+tests = ["tests/diagnostics/test_diagnostics_curves.py"]
+
+[[mutant]]
+name = "series_never_underpowered"
+file = "src/analysis/triage/series.py"
+old = 'underpowered=kind == "continuing"'
+new = 'underpowered=False and kind == "continuing"'
+tests = ["tests/triage/test_series.py"]
+
+[[mutant]]
+name = "static_single_pass"
+file = "src/analysis/triage/classify.py"
+old = "max_passes: int = 5,"
+new = "max_passes: int = 1,"
+tests = ["tests/triage/test_classify.py"]
+
+[[mutant]]
+name = "override_first_run_excluded"
+file = "src/analysis/triage/samples.py"
+old = "return self.first <= run <= self.last"
+new = "return self.first < run <= self.last"
+tests = ["tests/triage/test_samples.py"]
+
+[[mutant]]
+name = "fixed_beta_exact_centre_match"
+file = "src/analysis/triage/xpcs.py"
+old = "hit = [v for key, v in table.items() if abs(key - q) < ROI_MATCH_A]"
+new = "hit = [v for key, v in table.items() if key == q]"
+tests = ["tests/triage/test_xpcs.py"]
+
+[[mutant]]
+name = "slice_tail_not_absorbed"
+file = "src/analysis/triage/xpcs.py"
+old = "if tail and tail < min_trains and n_full >= 1:"
+new = "if False:"
+tests = ["tests/triage/test_xpcs.py"]
+
+[[mutant]]
+name = "verdict_counts_bragg_rois"
+file = "src/analysis/triage/xpcs.py"
+old = 'plain = [r for r, k in enumerate(m.kinds) if k == "plain"]'
+new = "plain = list(range(len(m.kinds)))"
+tests = ["tests/triage/test_xpcs.py"]
+
+[[mutant]]
+name = "time_needed_linear_in_snr"
+file = "src/analysis/triage/xpcs.py"
+old = "SLICE_TRAINS / 10.0 * (snr_min / best_snr) ** 2"
+new = "SLICE_TRAINS / 10.0 * (snr_min / best_snr)"
+tests = ["tests/triage/test_xpcs.py"]
