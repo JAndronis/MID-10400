@@ -142,3 +142,52 @@ file = "src/analysis/triage/xpcs.py"
 old = "SLICE_TRAINS / 10.0 * (snr_min / best_snr) ** 2"
 new = "SLICE_TRAINS / 10.0 * (snr_min / best_snr)"
 tests = ["tests/triage/test_xpcs.py"]
+
+[[mutant]]
+name = "measure_beta_ignores_eligibility"
+file = "src/analysis/triage/xpcs.py"
+old = "if m.n_usable and beta_eligible(m.fits[r], m.tau[0], m.tau[-1]):"
+new = "if m.n_usable:"
+tests = ["tests/triage/test_xpcs.py"]
+
+[[mutant]]
+name = "reference_beta_takes_every_run"
+file = "src/analysis/triage/xpcs.py"
+old = "chosen = [m for m in measurements if m.run in runs and m.n_usable]"
+new = "chosen = [m for m in measurements if m.n_usable]"
+tests = ["tests/triage/test_xpcs.py"]
+
+[[mutant]]
+name = "unknown_snr_is_not_extractable"
+file = "src/analysis/triage/xpcs.py"
+old = '"extractable": bool(n_ext >= 1) if finite else None,'
+new = '"extractable": bool(n_ext >= 1),'
+tests = ["tests/triage/test_xpcs.py", "tests/diagnostics/test_diagnostics_xpcs.py"]
+
+[[mutant]]
+name = "beta_source_always_reference"
+file = "src/analysis/diagnostics/xpcs.py"
+old = 'summary["beta_source"] = "REFERENCE_BETA" if beta is None else "given"'
+new = 'summary["beta_source"] = "REFERENCE_BETA"'
+tests = ["tests/diagnostics/test_diagnostics_xpcs.py"]
+
+[[mutant]]
+name = "given_beta_ignored"
+file = "src/analysis/diagnostics/xpcs.py"
+old = "b = fixed_beta(m.roi_q_A) if beta is None else beta_by_roi(m.roi_q_A, beta)"
+new = "b = fixed_beta(m.roi_q_A)"
+tests = ["tests/diagnostics/test_diagnostics_xpcs.py"]
+
+[[mutant]]
+name = "kbar_rois_plain_count_includes_bragg"
+file = "src/analysis/diagnostics/xpcs.py"
+old = 'n_plain_above=int((table.above & (table.kind == "plain")).sum()),'
+new = "n_plain_above=int(table.above.sum()),"
+tests = ["tests/diagnostics/test_diagnostics_xpcs.py"]
+
+[[mutant]]
+name = "kbar_rois_ignores_given_trains"
+file = "src/analysis/diagnostics/xpcs.py"
+old = "da = opened.kbar(None if trains is None else np.asarray(trains, dtype=np.uint64))"
+new = "da = opened.kbar(None)"
+tests = ["tests/diagnostics/test_diagnostics_xpcs.py"]

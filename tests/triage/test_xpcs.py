@@ -357,27 +357,67 @@ def test_snr_is_the_analytical_formula_on_hand_picked_numbers():
     assert snr(0.02, 0.05, 2000, 101, 0.5, 40) == pytest.approx(np.sqrt(2.0))
 
 
+def hand_run(run=1, fits=(), beta_roi_kinds=("plain", "bragg")) -> RunMeasurement:
+    """Two ROIs whose plain SNR is √2 for β = 0.02, with the given fits."""
+    two = np.array([2000.0, 2000.0])
+    half, kbar = np.array([0.5, 0.5]), np.array([0.05, 0.05])
+    return RunMeasurement(
+        run=run, roi_q_A=np.array([0.02875, 0.0605]),
+        edges_nm=np.array([[0.225, 0.35], [0.56, 0.65]]), kinds=list(beta_roi_kinds),
+        n_frames=101, rep_rate_hz=1.0, npix=two, n_usable=40, kbar=kbar, phi=half,
+        tau=np.arange(1.0, 101.0), g2=np.zeros((2, 100)), sigma_g2=np.zeros((2, 100)),
+        fits=list(fits), rho=two, damnit_max_z=two,
+        slices=[{"slice": 0, "n_usable": 40, "kbar": kbar, "phi": half}],
+    )  # fmt: skip
+
+
 def test_the_verdict_takes_the_best_plain_roi_and_the_time_it_needs():
     nan = float("nan")
-    two = np.array([2000.0, 2000.0])
-    m = RunMeasurement(
-        run=1, roi_q_A=np.array([0.02875, 0.0605]),
-        edges_nm=np.array([[0.225, 0.35], [0.56, 0.65]]), kinds=["plain", "bragg"],
-        n_frames=101, rep_rate_hz=1.0, npix=two, n_usable=40,
-        kbar=np.array([0.05, 0.05]), phi=np.array([0.5, 0.5]), tau=np.ones(1),
-        g2=np.zeros((2, 1)), sigma_g2=np.zeros((2, 1)), fits=[], rho=two,
-        damnit_max_z=two,
-        slices=[{"slice": 0, "n_usable": 40, "kbar": np.array([0.05, 0.05]),
-                 "phi": np.array([0.5, 0.5])}],
-    )  # fmt: skip
     beta = {0: Beta(0.02, 1, nan, nan, ()), 1: Beta(0.5, 1, nan, nan, ())}
-    s = summarise(m, beta)
+    s = summarise(hand_run(), beta)
     # the plain ROI's SNR is √2 (above); the Bragg ROI's 25√2 does not count
     assert s["snr_run"] == {0.02875: pytest.approx(np.sqrt(2.0))}
     assert s["best_snr"] == pytest.approx(np.sqrt(2.0)) and s["best_roi_q_A"] == 0.02875
     assert s["extractable"] is False
     # SNR grows as √t: 3 needs (3/√2)² = 4.5 slices of 30 s
     assert s["t_needed_s"] == pytest.approx(135.0)
+
+
+def test_an_unknown_beta_is_not_a_verdict():
+    nan = float("nan")
+    s = summarise(hand_run(), {r: Beta(nan, 0, nan, nan, ()) for r in (0, 1)})
+    assert s["extractable"] is None
+    assert s["n_extractable_slices"] == 0
+    assert np.isnan(s["best_snr"])
+
+
+def fit(amplitude, sigma=0.001, decay_lags=10.0, converged=True):
+    """A decay fit with 1/(2Γ) of ``decay_lags`` first lags (τ₁ = 1 s)."""
+    return DecayFit(amplitude, sigma, 1 / (2 * decay_lags), 0.0, 0.0, converged)
+
+
+def test_beta_is_the_median_amplitude_over_the_eligible_runs():
+    runs = [
+        hand_run(1, [fit(0.03), fit(0.01)]),
+        hand_run(2, [fit(0.05), fit(0.02)]),
+        hand_run(3, [fit(0.04), fit(0.5, sigma=0.1)]),  # ROI 1 imprecise: A/σ = 5
+        hand_run(4, [fit(0.9, decay_lags=2.0), fit(0.9, decay_lags=500.0)]),
+    ]
+    beta = measure_beta(runs)
+    assert (beta[0].value, beta[0].n_eligible, beta[0].runs) == (0.04, 3, (1, 2, 3))
+    assert (beta[1].value, beta[1].runs) == (pytest.approx(0.015), (1, 2))
+
+
+def test_reference_beta_is_the_median_over_its_runs_only():
+    runs = [
+        hand_run(450, [fit(0.03), fit(0.01)]),
+        hand_run(493, [fit(0.05), fit(0.02, converged=False)]),
+        hand_run(494, [fit(0.04), fit(0.03)]),
+        hand_run(999, [fit(0.9), fit(0.9)]),  # not a reference run
+    ]
+    beta = reference_beta(runs, runs=(450, 493, 494))
+    assert (beta[0].value, beta[0].runs) == (0.04, (450, 493, 494))
+    assert (beta[1].value, beta[1].runs) == (pytest.approx(0.02), (450, 494))
 
 
 def test_n_pix_is_a_typical_trains_and_heavily_masked_trains_do_not_move_it(
