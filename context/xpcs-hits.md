@@ -749,3 +749,29 @@ raised. Reading the flags makes the store figures slower (r1 `xpcs.outliers` 11 
 **Reprocess.** The merge hash moved (ring sha and schema), so every `xpcs_hits.h5` is rebuilt from
 its store: `reprocess_safe.py start RUNS -d xpcs` **without `--fresh`**. `reprocess_all.sh
 xpcs-hits` passes `--fresh`, which moves the photon stores aside and would re-extract from proc.
+
+## 14. The rings leave out the Bragg windows (2026-10-27)
+
+**Why.** §13's rings left out only the measured bands (0.585–0.640 and 0.685–0.725 nm⁻¹), so
+three of them touched the wider windows `BRAGG_WINDOWS_NM` (0.57–0.65 and 0.68–0.74 nm⁻¹) and
+`roi_kinds` tagged them "bragg". The user set those windows as authoritative (2026-10-27).
+
+**The windows.** `BRAGG_WINDOWS_NM` and `touches_bragg` live in `analysis.xpcs.config` alone.
+`triage.roi_kinds` and `saxs.photon_stats.default_rings` import them from there; nothing else
+restates a band edge.
+
+**The rings.** `RINGS_NM` is computed: 0.045 nm⁻¹ rings stepped up from extra-speckle's lower
+bound and down from its upper bound, each stopping before the windows. That gives nine rings,
+0.225 → 0.540 and 0.770 → 0.860, all "plain". They are §13's nine that touched no window, with the
+same edges to within a float ULP, and the outer bounds are still extra-speckle's floats, so the
+envelope and every photon store stay valid. Dropped: 0.540–0.585, 0.640–0.685 and 0.725–0.770
+nm⁻¹ (centres 0.05625, 0.06625, 0.07475 Å⁻¹), and with them their three `REFERENCE_BETA`
+entries; the other nine β values stand.
+
+**Stored files.** The results schema stays 3, because the layout is unchanged. The ring sha moves
+with the bounds, so the merge hash moves and every twelve-ring `xpcs_hits.h5` reads "merged under
+another configuration". The readers take the ring count from the file, so a twelve-ring file
+still opens; `fixed_beta` gives NaN for its three dropped centres, which are "bragg" there anyway.
+
+**Reprocess.** Re-merge every run from its store: `reprocess_safe.py start RUNS -d xpcs`
+**without `--fresh`** (§13), then refresh `xpcs.score` and the `*_frames_used` cells.

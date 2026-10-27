@@ -6,7 +6,44 @@ import numpy as np
 import pytest
 
 from analysis.saxs.config import NPIX
+from analysis.triage.xpcs import roi_kinds
+from analysis.xpcs.config import BRAGG_WINDOWS_NM, ES_RINGS_NM, RINGS_NM
 from analysis.xpcs.rings import build_envelope, build_rings, pixel_map, static_bad_for
+
+#: The fcc 111 and 200 windows [nm⁻¹], as the user set them.
+USER_BRAGG_WINDOWS_NM = ((0.57, 0.65), (0.68, 0.74))
+
+
+def test_the_bragg_windows_are_the_users():
+    assert BRAGG_WINDOWS_NM == USER_BRAGG_WINDOWS_NM
+
+
+def test_no_ring_touches_a_bragg_window():
+    """Bragg speckle gives a contrast near 1, so no ring may reach into a window."""
+    for lo, hi in RINGS_NM:
+        for w_lo, w_hi in USER_BRAGG_WINDOWS_NM:
+            assert hi <= w_lo or lo >= w_hi, f"ring {lo}-{hi} in {w_lo}-{w_hi}"
+
+
+def test_every_ring_is_plain_to_the_triage():
+    assert roi_kinds(np.asarray(RINGS_NM)) == ["plain"] * len(RINGS_NM)
+
+
+def test_the_rings_keep_extra_speckles_envelope():
+    """The same outer floats keep the envelope, and so every photon store, valid."""
+    assert RINGS_NM[0][0] == ES_RINGS_NM[0][0]
+    assert RINGS_NM[-1][1] == ES_RINGS_NM[-1][1]
+    assert {round(hi - lo, 9) for lo, hi in RINGS_NM} == {0.045}
+
+
+def test_reference_beta_holds_one_value_per_ring_and_none_besides():
+    from analysis.triage.xpcs import ES_REFERENCE_BETA, REFERENCE_BETA, ROI_MATCH_A
+
+    centres_A = [(lo + hi) / 20 for lo, hi in RINGS_NM]
+    own = [q for q in REFERENCE_BETA if q not in ES_REFERENCE_BETA]
+    assert len(own) == len(centres_A)
+    for q in centres_A:
+        assert sum(abs(key - q) < ROI_MATCH_A for key in own) == 1, q
 
 
 @pytest.fixture(scope="module")
@@ -101,6 +138,18 @@ def test_the_static_mask_changes_the_rings_but_not_the_envelope(
     clean = build_rings(pixels, envelope, np.zeros(NPIX, dtype=bool), cfg)
     masked = build_rings(pixels, envelope, static_bad, cfg)
     assert clean.sha256 != masked.sha256
+
+
+def test_other_ring_bounds_on_the_same_envelope_change_the_rings_sha(
+    cfg, with_config, geom, pixels, static_bad
+):
+    """A results file merged on another ring set must not read as complete."""
+    envelope = build_envelope(pixels, cfg)
+    gapped = with_config(rings_nm=((0.2, 0.25), (0.3, 0.45)))
+    gapped_pixels = pixel_map(gapped, geom)
+    assert build_envelope(gapped_pixels, gapped).sha256 == envelope.sha256
+    other = build_rings(gapped_pixels, envelope, static_bad, gapped)
+    assert other.sha256 != build_rings(pixels, envelope, static_bad, cfg).sha256
 
 
 def test_a_ring_without_a_good_pixel_is_an_error_not_a_silent_drop(

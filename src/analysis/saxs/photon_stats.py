@@ -83,7 +83,8 @@ PHOTON_STATS_VERSION = 1
 
 def default_rings(width: float = RING_WIDTH_NM) -> tuple[tuple[float, float], ...]:
     """Rings of about ``width`` tiling each plain XPCS ROI, clear of Bragg windows."""
-    from analysis.triage.xpcs import BRAGG_WINDOWS_NM, roi_edges_nm, roi_kinds
+    from analysis.triage.xpcs import roi_edges_nm, roi_kinds
+    from analysis.xpcs.config import touches_bragg
 
     edges = roi_edges_nm()
     rings = []
@@ -96,9 +97,8 @@ def default_rings(width: float = RING_WIDTH_NM) -> tuple[tuple[float, float], ..
             (float(a), float(b)) for a, b in zip(bounds[:-1], bounds[1:], strict=True)
         ]
     for lo, hi in rings:
-        for w_lo, w_hi in BRAGG_WINDOWS_NM:
-            if lo < w_hi and hi > w_lo:
-                raise ValueError(f"ring {lo}-{hi} overlaps Bragg window {w_lo}-{w_hi}")
+        if touches_bragg(lo, hi):
+            raise ValueError(f"ring {lo}-{hi} overlaps a Bragg window")
     return tuple(rings)
 
 
