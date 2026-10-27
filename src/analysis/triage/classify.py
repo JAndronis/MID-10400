@@ -81,9 +81,6 @@ SIGNALS_VERSION = 1
 #: Gaussian-tail cut in robust σ, about 0.002 false outliers per 3000 trains. It sets
 #: the off band of a run, a run's off level against its block's, a static train's drop.
 OFF_SIGMA = 5.0
-#: A running median over this many trains misses any absence longer than 25 trains,
-#: which is why `static_hits` uses a running quantile instead. Unused.
-RUNNING_TRAINS = 51
 #: Static runs: the reference is this quantile over this many trains, a 30 s slice.
 #: An absence of up to 225 trains (22 s) is found.
 STATIC_WINDOW, STATIC_QUANTILE = 301, 0.75

@@ -11,13 +11,12 @@ from __future__ import annotations
 import h5py
 import numpy as np
 import pytest
-from triage_fakes import FIRST_TRAIN, REP_RATE_HZ, write_hit_results, write_xpcs_run
+from triage_fakes import FIRST_TRAIN, write_hit_results
 
 from analysis.triage.xpcs import (
     REFERENCE_BETA_RUNS,
     Beta,
     DecayFit,
-    QGridMismatch,
     RunMeasurement,
     beta_eligible,
     crl_state,
@@ -27,27 +26,13 @@ from analysis.triage.xpcs import (
     jackknife_g2,
     measure_beta,
     measure_run,
-    measure_run_legacy,
-    read_npix_per_bin,
-    read_saxs_kbar,
     reference_beta,
-    roi_bin_masks,
     roi_edges_nm,
     roi_kinds,
     slice_index,
     snr,
     summarise,
 )
-
-
-@pytest.fixture(scope="module")
-def synthetic(tmp_path_factory):
-    d = tmp_path_factory.mktemp("xpcs")
-    truth = write_xpcs_run(
-        d / "damnit.h5", d / "scratch.h5", np.random.default_rng(5), nan_frames={6: 10}
-    )
-    m = measure_run_legacy(423, d / "damnit.h5", d / "scratch.h5", REP_RATE_HZ)
-    return truth, m
 
 
 def test_rois_split_into_plain_and_bragg():
@@ -80,36 +65,13 @@ def test_jackknife_finds_iid_noise():
 
 
 def test_fit_recovers_contrast_and_rate():
-    tau = np.arange(1, 60) / REP_RATE_HZ
+    tau = np.arange(1, 60) * 444e-9  # one 2.25 MHz pulse period per lag
     rate = 1.0 / (2 * 8 * tau[0])
     g2 = 0.03 * np.exp(-2 * rate * tau) + 0.001
     fit = fit_decay(tau, g2, np.full_like(g2, 1e-4))
     assert fit.converged
     assert fit.amplitude == pytest.approx(0.03, rel=1e-3)
     assert fit.rate == pytest.approx(rate, rel=1e-3)
-
-
-def test_the_legacy_measure_run_recovers_the_truth(synthetic):
-    truth, m = synthetic
-    assert m.n_usable == 200 and m.n_frames == 40
-    np.testing.assert_allclose(m.kbar, truth["kbar"], rtol=1e-6)
-    np.testing.assert_allclose(m.npix, truth["npix_roi"], rtol=1e-6)
-    assert m.phi[0] == pytest.approx(1.0)
-    assert m.phi[6] == pytest.approx(29 / 39)  # pairs with both frames >= 10
-    for r in (0, 1, 2):  # within three of the fit's own jackknife errors
-        fit = m.fits[r]
-        assert abs(fit.amplitude - truth["beta"]) < 3 * fit.sigma_amplitude
-        assert abs(fit.rate - truth["rate"]) < 3 * fit.sigma_rate
-
-
-def test_the_noise_check_is_one_when_the_formula_holds(synthetic):
-    _, m = synthetic
-    np.testing.assert_allclose(m.rho, 1.0, atol=0.2)  # jackknife ~10 %, twice that
-
-
-def test_the_legacy_g2_agrees_with_damnits(synthetic):
-    _, m = synthetic
-    assert np.nanmax(m.damnit_max_z) < 5
 
 
 def test_beta_eligibility():
@@ -136,38 +98,6 @@ def test_slices_follow_train_ids_and_absorb_a_short_tail():
     assert slice_index(tids, 1000, 1759).max() == 2
     gap = np.r_[np.arange(1000, 1100), np.arange(1350, 1460)]  # trains dropped
     assert slice_index(gap, 1000, 1459).tolist() == [0] * 100 + [1] * 110
-
-
-def test_kbar_weights_bins_by_pixels_and_skips_missing_frames(tmp_path):
-    q = np.linspace(0.0813, 1.0570, 400)
-    edges = roi_edges_nm()
-    npix = np.where(q < 0.3, 1.0, 3.0)
-    intensity = np.broadcast_to(np.where(q < 0.3, 0.01, 0.02), (2, 4, 400)).copy()
-    intensity[:, 3] = 99.0  # a slot with no frame must not count
-    n_frames = np.ones((2, 4), np.uint8)
-    n_frames[:, 3] = 0
-    with h5py.File(tmp_path / "f.h5", "w") as f:
-        g = f.create_group("agipd_saxs")
-        g["q"], g["trainId"] = q, FIRST_TRAIN + np.arange(2, dtype=np.uint64)
-        g["intensity"], g["n_frames"] = intensity.astype(np.float32), n_frames
-    k = read_saxs_kbar(tmp_path / "f.h5", edges, npix)
-    m0 = roi_bin_masks(q, edges)[0]
-    w = npix[m0]
-    expected = (np.where(q < 0.3, 0.01, 0.02)[m0] * w).sum() / w.sum()
-    assert k.kbar[0, 0] == pytest.approx(expected, rel=1e-6)
-    assert k.n_frames.tolist() == [3, 3]
-
-
-def test_npix_refuses_another_q_grid(tmp_path):
-    with h5py.File(tmp_path / "s.h5", "w") as f:
-        f["q/centers"] = np.linspace(0.1, 1.0, 10)
-        f["frames/status"] = np.zeros(3, np.uint8)
-        f["frames/normalization"] = np.ones((3, 10))
-    with pytest.raises(QGridMismatch):
-        read_npix_per_bin(tmp_path / "s.h5", np.linspace(0.1, 1.0, 11))
-    np.testing.assert_allclose(
-        read_npix_per_bin(tmp_path / "s.h5", np.linspace(0.1, 1.0, 10)), 1.0
-    )
 
 
 class _FakeRaw:
@@ -289,7 +219,7 @@ def hand_run(run=1, fits=(), beta_roi_kinds=("plain", "bragg")) -> RunMeasuremen
         edges_nm=np.array([[0.225, 0.35], [0.56, 0.65]]), kinds=list(beta_roi_kinds),
         n_frames=101, rep_rate_hz=1.0, npix=two, n_usable=40, kbar=kbar, phi=half,
         tau=np.arange(1.0, 101.0), g2=np.zeros((2, 100)), sigma_g2=np.zeros((2, 100)),
-        fits=list(fits), rho=two, damnit_max_z=two,
+        fits=list(fits), rho=two,
         slices=[{"slice": 0, "n_usable": 40, "kbar": kbar, "phi": half}],
     )  # fmt: skip
 

@@ -15,8 +15,7 @@ the runs whose decay is slow and well measured.
 Every input is read from the run's hit-train results file
 (`analysis.xpcs.result.XpcsHits`). The TTCF is reduced to per-train sums and counts
 of its finite diagonal entries, from which g2 over any set of trains follows
-exactly. The readers of DAMNIT's ``xpcs_ttcf`` and ``agipd_saxs`` and
-`measure_run_legacy` read extra-speckle's old columns, for comparison only.
+exactly.
 
 β is one table for every run, `REFERENCE_BETA`, from the runs whose g2 decays
 almost completely inside the lag window. `measure_beta`, the median over whichever
@@ -29,14 +28,11 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import TYPE_CHECKING
 
-import h5py
 import numpy as np
 from scipy.optimize import curve_fit
 
-from analysis.damnit_names import AGIPD_SAXS, stored
 from analysis.xpcs.config import touches_bragg
 
 if TYPE_CHECKING:
@@ -53,14 +49,11 @@ __all__ = [
     "REFERENCE_BETA_RUNS",
     "ROI_EDGES_A",
     "KBAR_MIN",
-    "SKIP_LAST_LAGS",
     "SLICE_TRAINS",
     "SNR_MIN",
     "Beta",
     "DecayFit",
-    "QGridMismatch",
     "RunMeasurement",
-    "SaxsKbar",
     "TtcfDiagonals",
     "beta_eligible",
     "crl_state",
@@ -70,12 +63,7 @@ __all__ = [
     "jackknife_g2",
     "measure_beta",
     "measure_run",
-    "measure_run_legacy",
-    "read_npix_per_bin",
-    "read_saxs_kbar",
-    "read_ttcf_diagonals",
     "reference_beta",
-    "roi_bin_masks",
     "roi_edges_from",
     "roi_edges_nm",
     "roi_kinds",
@@ -93,8 +81,6 @@ SLICE_TRAINS, MIN_SLICE_TRAINS = 300, 150
 SNR_MIN = 3.0
 #: Jackknife blocks; the variance estimate is then good to sqrt(1/(2·49)) ≈ 10 %.
 N_BLOCKS = 50
-#: Lags extra-speckle drops from the end of g2 (its ``skip_last``).
-SKIP_LAST_LAGS = 10
 #: β eligibility: A/σ_A, and 1/(2Γ) in units of the first lag.
 BETA_MIN_PRECISION, BETA_MIN_DECAY_LAGS = 10.0, 5.0
 #: Noise factor of the pipeline's TTCF_raw − TTCF_off: two estimates, one variance each.
@@ -102,8 +88,6 @@ OFF_SUBTRACTION = float(np.sqrt(2.0))
 #: Mean photons per pixel per frame below which a frame drops out of a pair: the
 #: results file's `ES_KBAR_MIN`, extra-speckle's default ``kbar_threshold``.
 KBAR_MIN = 3e-3
-#: OK frames whose normalization is median-combined into N_pix per bin.
-NPIX_FRAMES = 10
 #: Runs whose g2 decays almost completely inside the 60 µs lag window, a late PEG 6K
 #: droplet. Their τ → 0 intercepts fix one β for every run, rather than a contrast
 #: fitted to each run.
@@ -142,12 +126,6 @@ REFERENCE_BETA: dict[float, tuple[float, float, float]] = {
 #: Two ROI centres within this [Å⁻¹] are the same ROI (DAMNIT stores float centres).
 ROI_MATCH_A = 1e-6
 
-_TTCF = "xpcs_ttcf/__xarray_dataarray_variable__"
-
-
-class QGridMismatch(ValueError):
-    """The scratch file and DAMNIT's grid were integrated onto different q bins."""
-
 
 def roi_edges_nm(edges_a=ROI_EDGES_A) -> np.ndarray:
     """(R, 2) ROI edges in nm⁻¹ from extra-speckle's bin edges in Å⁻¹."""
@@ -158,12 +136,6 @@ def roi_edges_nm(edges_a=ROI_EDGES_A) -> np.ndarray:
 def roi_kinds(edges_nm: np.ndarray) -> list[str]:
     """``"bragg"`` for a ROI that overlaps a Bragg window, else ``"plain"``."""
     return ["bragg" if touches_bragg(lo, hi) else "plain" for lo, hi in edges_nm]
-
-
-def roi_bin_masks(q_nm: np.ndarray, edges_nm: np.ndarray) -> np.ndarray:
-    """(R, Q): the SAXS bins whose centres lie in each ROI, ``lo <= q < hi``."""
-    q = np.asarray(q_nm)[None, :]
-    return (q >= edges_nm[:, :1]) & (q < edges_nm[:, 1:])
 
 
 @dataclass(frozen=True)
@@ -191,95 +163,6 @@ def diagonal_sums(ttcf: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         sums[..., k - 1] = np.where(finite, diag, 0.0).sum(axis=-1, dtype=np.float64)
         counts[..., k - 1] = finite.sum(axis=-1)
     return sums, counts
-
-
-def read_ttcf_diagonals(path: Path) -> TtcfDiagonals | None:
-    """`diagonal_sums` of a DAMNIT file's ``xpcs_ttcf``, read in its own train chunks.
-
-    None when the variable is absent or holds no matrix (XPCS returned nothing).
-    """
-    with h5py.File(path, "r") as f:
-        if _TTCF not in f or f[_TTCF].ndim != 4:
-            return None
-        data = f[_TTCF]
-        tids = f["xpcs_ttcf/trainId"][:].astype(np.uint64)
-        roi = f["xpcs_ttcf/roi_q"][:].astype(np.float64)
-        step = data.chunks[0] if data.chunks else 64
-        parts = [
-            diagonal_sums(data[s : s + step]) for s in range(0, data.shape[0], step)
-        ]
-    order = np.argsort(tids, kind="stable")
-    sums = np.concatenate([p[0] for p in parts])[order]
-    counts = np.concatenate([p[1] for p in parts])[order]
-    return TtcfDiagonals(tids[order], roi, sums, counts)
-
-
-def read_npix_per_bin(path: Path, q_expected: np.ndarray, n_frames=NPIX_FRAMES):
-    """Pixels per q bin: the pass's normalization (Σ c·Ω, Ω ≈ 1) over OK frames.
-
-    The median over up to ``n_frames`` OK frames spread through the run, so one
-    frame's dynamic mask does not set it. Raises `QGridMismatch` when the file's q
-    bins are not DAMNIT's.
-    """
-    with h5py.File(path, "r") as f:
-        q = f["q/centers"][:]
-        if q.shape != np.shape(q_expected) or not np.allclose(q, q_expected, rtol=1e-9):
-            raise QGridMismatch(
-                f"{path}: {q.size} bins, DAMNIT has {np.size(q_expected)}"
-            )
-        ok = np.flatnonzero(f["frames/status"][:] == 0)
-        if ok.size == 0:
-            raise ValueError(f"{path}: no OK frame")
-        pick = np.unique(
-            ok[np.linspace(0, ok.size - 1, min(n_frames, ok.size)).astype(int)]
-        )
-        norm = f["frames/normalization"][pick]
-    return np.median(norm, axis=0).astype(np.float64)
-
-
-@dataclass(frozen=True)
-class SaxsKbar:
-    """Per train: each ROI's mean photons per pixel per frame, and frames present."""
-
-    train_ids: np.ndarray  # (T,) uint64, sorted
-    kbar: np.ndarray  # (T, R)
-    n_frames: np.ndarray  # (T,)
-    n_slots: int  # pulse slots per train in the grid
-
-
-def read_saxs_kbar(
-    path: Path, edges_nm: np.ndarray, npix_per_bin: np.ndarray, chunk: int = 100
-) -> SaxsKbar:
-    """k̄ per train and ROI from DAMNIT's ``agipd_saxs`` grid.
-
-    The grid holds I = Σc·x / Σc·Ω per bin, photons per pixel since Ω ≈ 1; a ROI's
-    k̄ weights its bins by their pixels, so it is the mean over the ROI's pixels.
-    Frames are averaged over the slots with ``n_frames == 1`` only.
-    """
-    with h5py.File(path, "r") as f:
-        g = f[stored(f, AGIPD_SAXS)]
-        q = g["q"][:]
-        tids = g["trainId"][:].astype(np.uint64)
-        weights = roi_bin_masks(q, edges_nm) * npix_per_bin[None, :]
-        weights /= weights.sum(axis=1, keepdims=True)
-        kbar, present = [], []
-        for s in range(0, tids.size, chunk):
-            frames = g["n_frames"][s : s + chunk] > 0  # (n, P)
-            intensity = g["intensity"][s : s + chunk]  # (n, P, Q)
-            roi = np.tensordot(intensity, weights.T, axes=(2, 0))  # (n, P, R)
-            n = frames.sum(axis=1)
-            total = (roi * frames[..., None]).sum(axis=1)
-            with np.errstate(invalid="ignore", divide="ignore"):
-                kbar.append(total / n[:, None])
-            present.append(n)
-        n_slots = int(g["n_frames"].shape[1])
-    order = np.argsort(tids, kind="stable")
-    return SaxsKbar(
-        tids[order],
-        np.concatenate(kbar)[order],
-        np.concatenate(present)[order],
-        n_slots,
-    )
 
 
 def jackknife_g2(
@@ -402,15 +285,7 @@ class RunMeasurement:
     sigma_g2: np.ndarray  # (R, K)
     fits: list[DecayFit]
     rho: np.ndarray  # (R,) measured / analytical noise at k = 1…3
-    damnit_max_z: np.ndarray  # (R,) |ours − DAMNIT g2| / σ, k = 1…10
     slices: list[dict] = field(default_factory=list)  # slice, n_usable, kbar, phi
-
-
-def _damnit_g2(path: Path):
-    with h5py.File(path, "r") as f:
-        if "xpcs_mean_dataset/g2" not in f or f["xpcs_mean_dataset/g2"].ndim != 2:
-            return None, None
-        return f["xpcs_mean_dataset/roi_q"][:], f["xpcs_mean_dataset/g2"][:]
 
 
 def _reduce(
@@ -430,8 +305,7 @@ def _reduce(
 ) -> RunMeasurement:
     """The usable trains' diagonal sums, k̄ and N_pix reduced to a `RunMeasurement`.
 
-    Shared by `measure_run` (the hit-train store) and `measure_run_legacy`
-    (DAMNIT's files). ``span`` is the first and last train id the slices are
+    ``span`` is the first and last train id the slices are
     anchored to; None for the usable trains' own.
     """
     tau = np.arange(1, k_max + 1) / rep_rate_hz
@@ -476,7 +350,7 @@ def _reduce(
         run=run, roi_q_A=roi_q_A, edges_nm=edges, kinds=roi_kinds(edges),
         n_frames=f_frames, rep_rate_hz=rep_rate_hz, npix=npix, n_usable=int(n),
         kbar=kbar, phi=phi, tau=tau, g2=g2, sigma_g2=sigma, fits=fits, rho=rho,
-        damnit_max_z=np.full(n_roi, np.nan), slices=slices,
+        slices=slices,
     )  # fmt: skip
 
 
@@ -528,61 +402,6 @@ def roi_edges_from(bounds_nm: np.ndarray, n_rings: int) -> np.ndarray:
     if len(b) != n_rings:
         return np.full((n_rings, 2), np.nan)  # rings from a masks file: no q edges
     return b
-
-
-def measure_run_legacy(
-    run: int,
-    damnit_path: Path,
-    scratch_path: Path,
-    rep_rate_hz: float,
-    *,
-    select: np.ndarray | None = None,
-    n_blocks: int = N_BLOCKS,
-) -> RunMeasurement | None:
-    """LEGACY: read one run from DAMNIT's ``xpcs_ttcf`` and ``agipd_saxs``.
-
-    These are extra-speckle's columns, which production no longer writes. Kept to
-    compare `measure_run` against. None without a TTCF.
-
-    Usable trains have every frame present in the SAXS grid and a TTCF; ``select``
-    (train ids) narrows them further.
-    """
-    ttcf = read_ttcf_diagonals(damnit_path)
-    if ttcf is None:
-        return None
-    with h5py.File(damnit_path, "r") as f:
-        q = f["agipd_saxs/q"][:]
-    edges = roi_edges_nm()
-    if len(edges) != ttcf.roi_q_A.size:
-        raise ValueError(f"r{run}: {ttcf.roi_q_A.size} TTCF ROIs, {len(edges)} edges")
-    npix_bin = read_npix_per_bin(scratch_path, q)
-    npix = roi_bin_masks(q, edges).astype(np.float64) @ npix_bin
-    saxs = read_saxs_kbar(damnit_path, edges, npix_bin)
-
-    f_frames = ttcf.n_frames
-    complete = saxs.train_ids[saxs.n_frames == f_frames]
-    usable = np.intersect1d(ttcf.train_ids, complete)
-    if select is not None:
-        usable = np.intersect1d(usable, np.asarray(select, dtype=np.uint64))
-    it = np.searchsorted(ttcf.train_ids, usable)
-    ks = np.searchsorted(saxs.train_ids, usable)
-    m = _reduce(
-        run, ttcf.roi_q_A, edges, ttcf.sums[it], ttcf.counts[it], saxs.kbar[ks],
-        usable, npix, f_frames, f_frames - 1 - SKIP_LAST_LAGS, rep_rate_hz,
-        (int(saxs.train_ids[0]), int(saxs.train_ids[-1])), n_blocks,
-    )  # fmt: skip
-
-    d_roi, d_g2 = _damnit_g2(damnit_path)
-    if d_roi is not None:
-        for j, rq in enumerate(d_roi):
-            r = int(np.argmin(np.abs(ttcf.roi_q_A - rq)))
-            if abs(ttcf.roi_q_A[r] - rq) < 1e-6:
-                with np.errstate(invalid="ignore", divide="ignore"):
-                    z = (m.g2[r, :10] - d_g2[j, :10]) / m.sigma_g2[r, :10]
-                m.damnit_max_z[r] = (
-                    np.nanmax(np.abs(z)) if np.isfinite(z).any() else np.nan
-                )
-    return m
 
 
 def beta_eligible(fit: DecayFit, tau_1: float, tau_max: float) -> bool:

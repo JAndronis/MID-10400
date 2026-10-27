@@ -304,7 +304,7 @@ See §10 for what P4 settled and left open.
 - **P6 (2026-10-19)**: `triage.xpcs.measure_run(run, XpcsHits)`, `diagnostics.xpcs.xpcs_score` / `xpcs_snr` /
   `kbar_rois` and `scripts/run_triage.py --phase xpcs` read the results file only (lag from the pulse ids,
   N_pix from `XpcsHits.pixels`, k-bar from `kbar`, diagonals from `diagonals(kbar_min=3e-3)`); slices are
-  anchored to the first usable hit. `measure_run_legacy` and the DAMNIT readers stay for gate e3. Against the
+  anchored to the first usable hit. `measure_run_legacy` and the DAMNIT readers stayed for gate e3 and were deleted on 2026-10-27 (`git show 7edd1ed:src/analysis/triage/xpcs.py`). Against the
   old path on r0493, r0240, r0250 the run SNR is 2 to 10 % lower and the verdict unchanged: N_pix is the
   store's (3.5 to 9 % fewer pixels than the full ring) and a hit without a previous-train baseline has no
   `raw - off`, where extra-speckle paired it. `inventory` is still to move.
