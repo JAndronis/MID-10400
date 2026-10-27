@@ -331,3 +331,24 @@ file = "src/analysis/diagnostics/photon_stats.py"
 old = '        if kind == "plain":'
 new = "        if True:"
 tests = ["tests/diagnostics/test_diagnostics_photon_stats.py"]
+
+[[mutant]]
+name = "xpcs_cell_needs_every_roi"
+file = "src/analysis/diagnostics/damnit.py"
+old = "plain_ok = plain is not None and plain == n_plain"
+new = "plain_ok = plain is not None and score['n_rois_kbar_ok'] == n_rois"
+tests = ["tests/diagnostics/test_diagnostics_damnit.py"]
+
+[[mutant]]
+name = "xpcs_cell_text_counts_all_rois_as_plain"
+file = "src/analysis/diagnostics/damnit.py"
+old = 'parts.append(f"k̄ ok {ok}/{n_rois} ({plain}/{n_plain} plain)")'
+new = 'parts.append(f"k̄ ok {ok}/{n_rois} ({ok}/{n_plain} plain)")'
+tests = ["tests/diagnostics/test_diagnostics_damnit.py"]
+
+[[mutant]]
+name = "frames_cell_label_mismatch_amber"
+file = "src/analysis/diagnostics/damnit.py"
+old = "FrameStatus.LABEL_MISMATCH"
+new = "FrameStatus.WORKER_ERROR"
+tests = ["tests/diagnostics/test_diagnostics_damnit.py"]
