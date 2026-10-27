@@ -84,13 +84,10 @@ def test_boundary_kinds(history):
     }
 
 
-def test_a_label_change_without_a_volume_step_is_suspect(history):
+def test_a_label_change_without_a_volume_step_is_suspect_until_checked(history):
     b = history.boundaries.set_index("after")
     assert bool(b.loc[109, "label_suspect"])  # same droplet, new label
     assert not b.loc[[105, 107, 110], "label_suspect"].any()
-
-
-def test_a_checked_label_change_carries_its_verdict():
     rng = np.random.default_rng(3)
     inv = pd.DataFrame(
         {"run": [1, 2], "cls": ["reference", "static_droplet"],
@@ -102,6 +99,12 @@ def test_a_checked_label_change_carries_its_verdict():
     verdict = "labels correct: a new droplet of similar volume"
     b = segment(inv, drops, checked={(1, 2): verdict}).boundaries.iloc[0]
     assert b.label_suspect and b.label_checked == verdict and b.kind == "sample_change"
+    # a new label with a fresh-sized step up is a new droplet: nothing to check
+    inv.loc[2] = {"run": 3, "cls": "static_droplet", "sample": "ferritin50_peg6k"}
+    drops[3] = droplet(3, 0.8, 0.7, 0.004, rng)
+    after = segment(inv, drops, checked={}).boundaries.set_index("after")
+    assert after.loc[3, "kind"] == "sample_change"
+    assert not after.loc[3, "label_suspect"]
 
 
 def test_a_boundary_too_noisy_to_see_an_injection_is_underpowered(history):

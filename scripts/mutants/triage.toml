@@ -289,3 +289,17 @@ file = "src/analysis/triage/stats.py"
 old = "x = np.sort(x[np.isfinite(x) & (x >= lo) & (x <= hi)])"
 new = "x = np.sort(x[np.isfinite(x)])"
 tests = ["tests/triage/test_stats.py"]
+
+[[mutant]]
+name = "every_label_change_suspect"
+file = "src/analysis/triage/series.py"
+old = "label_suspect=changed and z <= z_cut,"
+new = "label_suspect=changed,"
+tests = ["tests/triage/test_series.py"]
+
+[[mutant]]
+name = "checked_label_verdict_dropped"
+file = "src/analysis/triage/series.py"
+old = "label_checked=checked.get((a, b)),"
+new = "label_checked=None,"
+tests = ["tests/triage/test_series.py"]
