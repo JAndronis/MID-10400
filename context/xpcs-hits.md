@@ -383,7 +383,7 @@ serial, identical stored bytes.
 - `RingPhotonStore.merge_block` copies a group without attributes, checks the copy against its
   source (dataset names, shapes, dtypes, stored bytes), and only then sets `sequence` and `status`,
   so a group that carries a status is complete and a crash leaves it unfinished. A final group is
-  skipped and an unfinished one replaced, as `put` does, so replaying a block writes nothing.
+  skipped and an unfinished one replaced, as `put` did before it was deleted (2026-10-27), so replaying a block writes nothing.
   The block file is deleted only after that.
 - `recover_blocks` runs at the start of an extraction: `.tmp` files are removed, finished leftover
   block files (a worker finished, the parent died first) are merged, and one that cannot be read or

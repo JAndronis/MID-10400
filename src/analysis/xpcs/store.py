@@ -221,7 +221,7 @@ def _put(group: h5py.Group, name: str, array: np.ndarray) -> None:
 
 
 def _write_train(trains: h5py.Group, photons: TrainPhotons) -> None:
-    """One train's group, ``status`` last; the layout of ``put`` and of a block file."""
+    """One train's group, ``status`` last: the layout of a block file and the store."""
     group = trains.create_group(_group_name(photons.train_id))
     if photons.status is FrameStatus.OK:
         _put(group, "pulse_ids", photons.pulse_ids)
@@ -395,19 +395,6 @@ class RingPhotonStore:
         return np.array([int(name[1:]) for name in self._f["trains"]], dtype=np.uint64)
 
     # ── writing ──────────────────────────────────────────────────────────────
-    def put(self, photons: TrainPhotons) -> bool:
-        """Store a train unless it is already final.
-
-        :returns: whether anything was written. A second ``put`` of a finished
-            train is a no-op, so a block replayed after a crash costs nothing.
-        """
-        self._require_writable()
-        if not self._clear_unfinished(_group_name(photons.train_id)):
-            return False
-        _write_train(self._f["trains"], photons)
-        self._f.flush()
-        return True
-
     def _clear_unfinished(self, name: str) -> bool:
         """Drop ``name`` if it is unfinished; False when it is final and must stay."""
         trains = self._f["trains"]
@@ -426,8 +413,8 @@ class RingPhotonStore:
         Each group is copied without attributes, checked against its source, and
         only then given its ``status``, so a group that carries one is complete
         and a crash leaves it unfinished. A train already final is skipped and
-        an unfinished one replaced, as :meth:`put` does, so a replayed block
-        writes nothing. The file is deleted only once every train reads back.
+        an unfinished one replaced, so a replayed block writes nothing. The file
+        is deleted only once every train reads back.
 
         :returns: how many trains were written.
         :raises StoreMismatch: the block file was extracted under another hash.
