@@ -303,3 +303,17 @@ file = "src/analysis/triage/series.py"
 old = "label_checked=checked.get((a, b)),"
 new = "label_checked=None,"
 tests = ["tests/triage/test_series.py"]
+
+[[mutant]]
+name = "per_train_drops_the_units"
+file = "src/analysis/diagnostics/frames.py"
+old = "result.attrs.update(units=unit, units_recorded=recorded, detector=kind)"
+new = "result.attrs.update(units_recorded=recorded, detector=kind)"
+tests = ["tests/diagnostics/test_diagnostics_frames.py"]
+
+[[mutant]]
+name = "svd_accepts_an_empty_matrix"
+file = "src/analysis/diagnostics/curves.py"
+old = "if complete.sum() < 2 or populated.sum() < 2:"
+new = "if False:"
+tests = ["tests/diagnostics/test_diagnostics_curves.py"]
