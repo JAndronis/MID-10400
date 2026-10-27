@@ -22,7 +22,7 @@ from analysis.diagnostics.photon_stats import (
     ring_weights,
     roi_groups,
 )
-from analysis.saxs.photon_stats import PhotonStatsWriter, default_rings, frame_stats
+from analysis.saxs.photon_stats import PhotonStatsWriter, frame_stats
 
 BETA, KBAR, N_PIX, K_MAX = 0.04, 0.08, 8000, 15
 
@@ -89,14 +89,6 @@ def test_the_unweighted_contrast_reads_high_by_the_ring_spread(frames):
     np.testing.assert_allclose(excess, cv2 * (1 + BETA), rtol=0.15)
 
 
-def test_rings_pool_into_rois(frames):
-    ds, weights, _ = frames
-    both = contrast(ds, weights, groups={"roi": [0, 1]})
-    each = contrast(ds, weights)
-    assert float(both.beta[0]) == pytest.approx(float(each.beta.mean()), abs=0.01)
-    assert float(both.sigma[0]) < float(each.sigma.max())
-
-
 def test_the_shape_check_passes_speckle_and_flags_hot_pixels(frames):
     ds, weights, _ = frames
     clean = nb_checks(ds, contrast(ds, weights).beta.values)
@@ -112,13 +104,17 @@ def test_the_shape_check_passes_speckle_and_flags_hot_pixels(frames):
 
 
 def test_roi_groups_map_rings_to_the_plain_xpcs_rois():
-    rings = np.array(default_rings())
+    lo = np.arange(0.225, 0.86, 0.025)
+    rings = np.c_[lo, lo + 0.025]  # rings everywhere, Bragg windows included
     ds = xr.Dataset(coords={"ring": np.arange(len(rings)),
                             "ring_lo": ("ring", rings[:, 0]),
                             "ring_hi": ("ring", rings[:, 1])})  # fmt: skip
     groups = roi_groups(ds)
+    # the ROIs over 0.56-0.75 nm^-1 touch a Bragg window and get no group
     assert list(groups) == [0.02875, 0.04, 0.0505, 0.0805]
-    assert [len(v) for v in groups.values()] == [5, 4, 4, 4]
+    centres = rings.mean(axis=1)
+    grouped = centres[[r for v in groups.values() for r in v]]
+    assert not ((grouped > 0.56) & (grouped < 0.75)).any()
 
 
 @dataclass(frozen=True)
@@ -165,15 +161,14 @@ def test_the_reader_keeps_ok_frames_and_selects_trains(tmp_path):
     assert some.sizes["k"] == K_MAX + 2
 
 
-def test_the_summary_reports_rois_rings_and_the_reference(frames):
+def test_the_summary_pools_rings_into_rois_and_keeps_them_per_ring(frames):
     from analysis.diagnostics.photon_stats import summary_of
-    from analysis.triage.xpcs import REFERENCE_BETA
 
     ds, weights, _ = frames
     s = summary_of(ds, weights)
     assert list(s.roi.values) == [0.04]  # both rings lie in 0.35-0.45 nm^-1
     assert abs(float(s.beta[0]) - BETA) < 4 * float(s.sigma[0])
-    assert float(s.reference_beta[0]) == REFERENCE_BETA[0.04][0]
+    assert float(s.sigma[0]) < float(s.ring_sigma.min())  # two rings beat one
     np.testing.assert_array_equal(
         s.ring_hist.sum("k").values, ds.n_valid.sum("frame").values
     )

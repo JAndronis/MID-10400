@@ -317,3 +317,17 @@ file = "src/analysis/diagnostics/curves.py"
 old = "if complete.sum() < 2 or populated.sum() < 2:"
 new = "if False:"
 tests = ["tests/diagnostics/test_diagnostics_curves.py"]
+
+[[mutant]]
+name = "roi_pools_one_ring"
+file = "src/analysis/diagnostics/photon_stats.py"
+old = "num = np.stack([s2[:, groups[g]].sum(axis=1) for g in labels], axis=1)"
+new = "num = np.stack([s2[:, groups[g][:1]].sum(axis=1) for g in labels], axis=1)"
+tests = ["tests/diagnostics/test_diagnostics_photon_stats.py"]
+
+[[mutant]]
+name = "roi_groups_include_bragg"
+file = "src/analysis/diagnostics/photon_stats.py"
+old = '        if kind == "plain":'
+new = "        if True:"
+tests = ["tests/diagnostics/test_diagnostics_photon_stats.py"]
