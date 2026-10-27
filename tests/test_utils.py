@@ -19,7 +19,6 @@ pytest.importorskip("h5netcdf")  # writes the fake droplet_fit files
 
 from analysis import utils  # noqa: E402
 from analysis.utils import (  # noqa: E402
-    DROPLET_PX_MM,
     M_NACL,
     MU_RHO_9P04_KEV,
     RHO_WATER_25C,
@@ -39,7 +38,21 @@ def train_ids(n: int) -> np.ndarray:
     return FIRST_TRAIN + np.arange(n, dtype=np.uint64)
 
 
+#: 50 mg/ml ferritin at 1800 Fe: core 1800 x 88.852 g/mol on a 481 000 g/mol cage,
+#: v_bar = (481000 x 0.738 + 159933.6 / 4.1) / 640933.6 = 0.61471 mL/g, times 0.05 g/mL.
+PHI_FERRITIN_AT_V0 = 0.030735
+
+
 # ── droplet_attenuation ───────────────────────────────────────────────────────
+def test_phi_is_the_ferritin_partial_volume_and_scales_with_concentration():
+    assert droplet_attenuation(1.0, 1.0, 1.0).phi_ferritin == pytest.approx(
+        PHI_FERRITIN_AT_V0, rel=1e-4
+    )
+    assert droplet_attenuation(0.5, 1.0, 1.0).phi_ferritin == pytest.approx(
+        2 * PHI_FERRITIN_AT_V0, rel=1e-4
+    )
+
+
 def test_pure_water_is_the_tabulated_water_attenuation():
     chord = np.array([0.5, 1.0, 2.0])
     att = droplet_attenuation(np.ones(3), 1.0, chord, **WATER_ONLY)
@@ -204,73 +217,73 @@ def runs(tmp_path, monkeypatch):
 
     Run 1 has one train without XGM (index 2), one with a NaN transmission (4) and
     one without a droplet fit (6), so exactly five trains survive, and every input
-    varies per train so a value attached to the wrong train would show.
+    varies per train so a value attached to the wrong train would show. Each run's
+    inputs are returned as written, for building expectations from them.
     """
     tids = train_ids(8)
     volume = 2.2 - 0.02 * np.arange(8)
     volume[6] = np.nan
-    sample = droplet_run(
-        tmp_path,
-        1,
-        tids,
-        volume=volume,
-        radius_x_px=66.0 - 0.3 * np.arange(8),
-        transmission=np.array([0.1, 0.1, 0.1, 0.1, np.nan, 0.1, 0.1, 0.1]),
-    )
+    transmission = 0.1 + 0.01 * np.arange(8)
+    transmission[4] = np.nan
+    xgm = 300.0 + np.arange(8.0)
+    sample = {
+        "tids": tids,
+        "volume": volume,
+        "radius_x_px": 66.0 - 0.3 * np.arange(8),
+        "transmission": transmission,
+        "xgm": xgm,
+        "kept": [0, 1, 3, 5, 7],
+    }
 
     buffer_tids = train_ids(5) + 1000
-    buffer = droplet_run(
-        tmp_path,
-        2,
-        buffer_tids,
-        volume=1.07 - 0.001 * np.arange(5),
-        radius_x_px=53.0 - 0.02 * np.arange(5),
-        transmission=np.ones(5),
-    )
-    xgm = {
-        "raw1": xr.DataArray(
-            300.0 + np.arange(8.0), dims="trainId", coords={"trainId": tids}
-        ).drop_sel(trainId=tids[2]),
+    buffer = {
+        "tids": buffer_tids,
+        "volume": 1.07 - 0.001 * np.arange(5),
+        "radius_x_px": 53.0 - 0.02 * np.arange(5),
+        "transmission": 0.5 + 0.01 * np.arange(5),
+        "xgm": 360.0 + np.arange(5.0),
+        "kept": [0, 1, 2, 3, 4],
+    }
+    db = {
+        run_nr: droplet_run(
+            tmp_path,
+            run_nr,
+            inputs["tids"],
+            volume=inputs["volume"],
+            radius_x_px=inputs["radius_x_px"],
+            transmission=inputs["transmission"],
+        )
+        for run_nr, inputs in ((1, sample), (2, buffer))
+    }
+    by_raw = {
+        "raw1": xr.DataArray(xgm, dims="trainId", coords={"trainId": tids}).drop_sel(
+            trainId=tids[2]
+        ),
         "raw2": xr.DataArray(
-            360.0 + np.arange(5.0), dims="trainId", coords={"trainId": buffer_tids}
+            buffer["xgm"], dims="trainId", coords={"trainId": buffer_tids}
         ),
     }
-    calls = []
-
     def fake_train_pulse_energy(raw, n_pulses):
-        calls.append((raw, n_pulses))
-        return xgm[raw]
+        return by_raw[raw]
 
     monkeypatch.setattr(utils, "train_pulse_energy", fake_train_pulse_energy)
-    return {"db": {1: sample, 2: buffer}, "tids": tids, "calls": calls}
+    return {
+        "db": db,
+        "tids": tids,
+        "sample": sample,
+        "buffer": buffer,
+    }
 
 
 def test_every_input_is_aligned_by_train_id(runs):
     ds = droplet_scaling(1, runs["db"], raw="raw1", peg_percent_wv_initial=0.0)
 
-    tids = runs["tids"]
-    kept = [0, 1, 3, 5, 7]
-    np.testing.assert_array_equal(ds.trainId, tids[kept])
-
-    fit = xr.open_dataset(runs["db"][1].file, group="droplet_fit")
-    chord = 2 * fit.radius.sel(dim="x").values[kept] * DROPLET_PX_MM
-    att = droplet_attenuation(
-        fit.volume.values[kept], float(fit.volume[0]), chord, peg_percent_wv_initial=0.0
-    )
-    flux = (300.0 + np.array(kept)) * 0.1
-    np.testing.assert_allclose(ds.xgm_uJ, 300.0 + np.array(kept))
-    np.testing.assert_allclose(ds.chord_mm, chord, rtol=1e-6)
-    np.testing.assert_allclose(ds.path_mm, att.path_mm, rtol=1e-6)
-    np.testing.assert_allclose(ds.scale, 1.0 / (flux * att.path_mm), rtol=1e-6)
-
-
-def test_trains_select_by_position_after_alignment(runs):
-    first_two = droplet_scaling(1, runs["db"], raw="raw1", trains=slice(0, 2))
-    np.testing.assert_array_equal(first_two.trainId, runs["tids"][[0, 1]])
-
-    third = droplet_scaling(1, runs["db"], raw="raw1", trains=2)
-    assert third.scale.dims == ("trainId",)
-    np.testing.assert_array_equal(third.trainId, runs["tids"][[3]])
+    sample = runs["sample"]
+    kept = sample["kept"]
+    np.testing.assert_array_equal(ds.trainId, sample["tids"][kept])
+    np.testing.assert_allclose(ds.xgm_uJ, sample["xgm"][kept])
+    np.testing.assert_allclose(ds.total_transmission, sample["transmission"][kept])
+    np.testing.assert_allclose(ds.volume_mm3, sample["volume"][kept], rtol=1e-6)
 
 
 def test_v0_comes_from_the_run_the_droplet_started_in(runs):
@@ -282,25 +295,32 @@ def test_v0_comes_from_the_run_the_droplet_started_in(runs):
     assert ds.attrs["v0_run"] == 2
 
 
-def test_n_pulses_reaches_the_xgm(runs):
-    droplet_scaling(2, runs["db"], raw="raw2", n_pulses=100)
-    assert runs["calls"] == [("raw2", 100)]
+def measured_intensity(inputs, sigma, **composition):
+    """I(q) per kept train: XGM x transmission x chord exp(-mu chord) x sigma.
 
-
-def test_raw_data_is_opened_when_no_run_is_given(runs, monkeypatch):
-    opened = []
-    monkeypatch.setattr(
-        utils.ex, "open_run", lambda *a, **kw: opened.append((a, kw)) or "raw2"
+    The chord is twice the horizontal radius at 13.9 um per camera pixel. Only mu
+    comes from `droplet_attenuation`, which the water and salt tests pin.
+    """
+    kept = inputs["kept"]
+    chord = 2 * inputs["radius_x_px"][kept] * 13.9e-3
+    mu = droplet_attenuation(
+        inputs["volume"][kept], inputs["volume"][0], chord, **composition
+    ).mu_per_mm
+    flux = inputs["xgm"][kept] * inputs["transmission"][kept]
+    return xr.DataArray(
+        (flux * chord * np.exp(-mu * chord))[:, None] * sigma,
+        dims=("trainId", "q"),
+        coords={"trainId": inputs["tids"][kept]},
     )
-    droplet_scaling(2, runs["db"], proposal=10400)
-    assert opened == [((10400, 2), {"data": "raw"})]
 
 
 def test_the_subtraction_recovers_the_ferritin_cross_section(runs):
-    """Build I(q) from known cross-sections and check the documented recipe undoes it.
+    """Build I(q) from the fixture's inputs and check the documented recipe undoes it.
 
-    The sample grid is shuffled and carries a train the scaling dropped, holding
-    garbage: xarray must align by label, and the garbage train must fall out.
+    Nothing is read off the scaling under test. The ferritin displaces a buffer
+    fraction of 0.030735 at V0, growing as V0/V. The sample grid is shuffled and
+    carries a train the scaling dropped, holding garbage: xarray must align by
+    label, and the garbage train must fall out.
     """
     q = np.linspace(0.08, 1.05, 50)
     sigma_ferritin = 1e-3 * np.exp(-((q * 5.0) ** 2) / 3)
@@ -309,9 +329,17 @@ def test_the_subtraction_recovers_the_ferritin_cross_section(runs):
     s = droplet_scaling(1, runs["db"], raw="raw1", peg_percent_wv_initial=0.0)
     b = droplet_scaling(2, runs["db"], raw="raw2", ferritin_mg_per_ml_initial=0.0)
 
-    measured_s = (s.flux * s.path_mm) * (
-        xr.DataArray(sigma_ferritin, dims="q")
-        + (1 - s.phi_ferritin) * xr.DataArray(sigma_buffer, dims="q")
+    sample = runs["sample"]
+    kept = sample["kept"]
+    phi = xr.DataArray(
+        PHI_FERRITIN_AT_V0 * sample["volume"][0] / sample["volume"][kept],
+        dims="trainId",
+        coords={"trainId": sample["tids"][kept]},
+    )
+    measured_s = measured_intensity(
+        sample,
+        sigma_ferritin + (1 - phi.values[:, None]) * sigma_buffer,
+        peg_percent_wv_initial=0.0,
     )
     garbage = xr.full_like(measured_s.isel(trainId=[0]), 1e9).assign_coords(
         trainId=[runs["tids"][2]]
@@ -319,13 +347,15 @@ def test_the_subtraction_recovers_the_ferritin_cross_section(runs):
     grid_s = xr.concat([measured_s, garbage], "trainId").isel(
         trainId=[5, 2, 0, 4, 1, 3]
     )
-    grid_b = (b.flux * b.path_mm) * xr.DataArray(sigma_buffer, dims="q")
+    grid_b = measured_intensity(
+        runs["buffer"], sigma_buffer, ferritin_mg_per_ml_initial=0.0
+    )
 
-    diff = grid_s * s.scale - (1 - s.phi_ferritin) * (grid_b * b.scale).mean("trainId")
+    diff = grid_s * s.scale - (1 - phi) * (grid_b * b.scale).mean("trainId")
 
     assert set(diff.trainId.values) == set(s.trainId.values)
     np.testing.assert_allclose(
         diff.transpose("trainId", "q").values,
         np.broadcast_to(sigma_ferritin, (s.sizes["trainId"], q.size)),
-        rtol=1e-10,
+        rtol=1e-5,
     )

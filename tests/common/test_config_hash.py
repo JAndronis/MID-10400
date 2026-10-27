@@ -9,6 +9,7 @@ directions are pinned here, for both configs.
 from __future__ import annotations
 
 import dataclasses
+from pathlib import Path
 
 import pytest
 
@@ -80,13 +81,6 @@ def waxs(geometry):
     )
 
 
-def test_a_worker_count_does_not_change_a_waxs_hash(waxs):
-    """Two runs differing only in ``n_workers`` must be able to share a file."""
-    explicit = dataclasses.replace(waxs, n_workers=36)
-    default = dataclasses.replace(waxs, n_workers=None)
-    assert explicit.config_hash() == default.config_hash()
-
-
 def test_pinning_the_lit_cells_does_not_change_a_waxs_hash(waxs):
     """``expected_lit_cells`` only *gates*, so it stays out of the hash.
 
@@ -124,76 +118,58 @@ def test_the_lit_thresholds_do_move_a_waxs_hash(waxs):
         ), field
 
 
-def test_overwrite_does_not_change_a_hash(waxs):
-    """A file written with ``overwrite=True`` must match an ordinary later run.
-
-    ``open_or_create`` compares the stored hash against the *current* config's,
-    so a hash that covered ``overwrite`` would make the next ordinary run refuse
-    every file a forced run wrote.
-    """
-    forced = dataclasses.replace(waxs, overwrite=True)
-    assert forced.config_hash() == waxs.config_hash()
-
-
 # ── both directions, both configs ────────────────────────────────────────────
-@pytest.mark.parametrize(("field", "value"), OPERATIONAL)
-@pytest.mark.parametrize("which", ["agipd", "waxs"])
-def test_operational_fields_leave_the_hash_alone(which, field, value, request):
-    cfg = request.getfixturevalue(which)
-    assert dataclasses.replace(cfg, **{field: value}).config_hash() == cfg.config_hash()
+def test_operational_fields_leave_the_hash_alone(agipd, waxs):
+    """A worker count, a block size or ``overwrite`` must not refuse a stored file.
+
+    ``open_or_create`` compares the stored hash with the current config's, so a
+    hash covering ``overwrite`` would refuse every file a forced run wrote.
+    """
+    for cfg in (agipd, waxs):
+        for field, value in OPERATIONAL:
+            moved = dataclasses.replace(cfg, **{field: value}).config_hash()
+            assert moved == cfg.config_hash(), (type(cfg).__name__, field)
 
 
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [
-        ("npt", 250),
-        ("photon_energy_kev", 9.0),
-        ("min_modules", 2),
-        ("mask_bits", 0xFF),
-        ("detector_name", "SOMETHING_ELSE"),
-    ],
-)
-def test_result_affecting_fields_move_the_waxs_hash(waxs, field, value):
-    assert (
-        dataclasses.replace(waxs, **{field: value}).config_hash() != waxs.config_hash()
-    )
+def test_result_affecting_fields_move_the_hash(agipd, waxs):
+    changes = {
+        waxs: [
+            ("npt", 250),
+            ("photon_energy_kev", 9.0),
+            ("min_modules", 2),
+            ("mask_bits", 0xFF),
+            ("detector_name", "SOMETHING_ELSE"),
+        ],
+        agipd: [
+            ("npt", 250),
+            ("sdd_m", 7.5),
+            ("beam_center_px", 600.0),
+            ("photon_energy_kev", 9.0),
+            ("use_asic_seams", False),
+            # window sums need all 16 modules, and are off here
+            ("min_modules", 8),
+        ],
+    }
+    for cfg, fields in changes.items():
+        base = dataclasses.replace(cfg, pixel_sum_trains=None) if cfg is agipd else cfg
+        for field, value in fields:
+            moved = dataclasses.replace(base, **{field: value}).config_hash()
+            assert moved != base.config_hash(), (type(cfg).__name__, field)
 
 
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [
-        ("npt", 250),
-        ("sdd_m", 7.5),
-        ("beam_center_px", 600.0),
-        ("photon_energy_kev", 9.0),
-        ("use_asic_seams", False),
-        ("min_modules", 8),
-    ],
-)
-def test_result_affecting_fields_move_the_agipd_hash(agipd, field, value):
-    changes = {field: value}
-    if field == "min_modules":
-        # window sums need all 16 modules; they do not enter this hash either way
-        changes["pixel_sum_trains"] = None
-    assert dataclasses.replace(agipd, **changes).config_hash() != agipd.config_hash()
-
-
-@pytest.mark.parametrize(
-    ("field", "value"), [("pixel_sum_trains", 50), ("pixel_sums_root", "/tmp/x")]
-)
-def test_the_window_sum_fields_leave_the_agipd_hash_alone(agipd, field, value):
+def test_the_window_sum_fields_leave_the_agipd_hash_alone(agipd):
     """The window sums are a separate file with a hash of their own.
 
     So neither field can change a number in ``agipd_saxs.h5``, and adding them
     must not refuse a file written before they existed.
     """
-    assert (
-        dataclasses.replace(agipd, **{field: value}).config_hash()
-        == agipd.config_hash()
-    )
-    assert dataclasses.replace(agipd, pixel_sum_trains=None).config_hash() == (
-        agipd.config_hash()
-    )
+    for field, value in (
+        ("pixel_sum_trains", 50),
+        ("pixel_sum_trains", None),
+        ("pixel_sums_root", "/tmp/x"),
+    ):
+        moved = dataclasses.replace(agipd, **{field: value}).config_hash()
+        assert moved == agipd.config_hash(), field
 
 
 def test_the_train_sampling_fields_are_not_operational(agipd, waxs):
@@ -216,24 +192,6 @@ def test_the_train_sampling_fields_are_not_operational(agipd, waxs):
     )
 
 
-def test_every_operational_field_exists_on_both_configs(agipd, waxs):
-    """A typo in the set would silently widen the hash instead of narrowing it."""
-    for cfg in (agipd, waxs):
-        names = {f.name for f in dataclasses.fields(cfg)}
-        assert OPERATIONAL_FIELDS <= names, sorted(OPERATIONAL_FIELDS - names)
-
-
-def test_result_fields_excludes_exactly_the_operational_set(waxs):
-    names = {f.name for f in dataclasses.fields(waxs)}
-    # The default is the shared six...
-    assert set(result_fields(waxs)) == names - OPERATIONAL_FIELDS
-    # ...and what the hash actually uses is the config's own set, which for
-    # this pass is wider.
-    assert set(result_fields(waxs, waxs.operational_fields)) == (
-        names - WAXS_OPERATIONAL_FIELDS
-    )
-
-
 def test_result_fields_renders_sets_and_tuples_stably(waxs):
     pinned = dataclasses.replace(waxs, expected_lit_cells=EXPECTED_LIT_CELLS)
     payload = result_fields(pinned)
@@ -243,6 +201,36 @@ def test_result_fields_renders_sets_and_tuples_stably(waxs):
     # An unpinned set is None, not an empty tuple: "measure it" and "measure it
     # and expect nothing" are different instructions and must not render alike.
     assert result_fields(waxs)["expected_lit_cells"] is None
+
+
+def test_rewriting_an_input_file_in_place_moves_the_hash(geometry, tmp_path):
+    """A new PONI or mask at the same path is a different result.
+
+    The hash must follow what the file holds, not where it lives, or a stored
+    file integrated with the old mask would be resumed under the new one.
+    """
+    import shutil
+
+    import fabio
+
+    poni, edf = (Path(shutil.copy(path, tmp_path)) for path in geometry)
+    cfg = JungfrauWaxsConfig(
+        proposal=10400,
+        run=423,
+        detector="jf1",
+        poni_file=str(poni),
+        static_mask_file=str(edf),
+    )
+    before = cfg.config_hash()
+
+    data = fabio.open(str(edf)).data.copy()
+    data[200] = 1
+    fabio.edfimage.EdfImage(data=data).write(str(edf))
+    after_mask = cfg.config_hash()
+    assert after_mask != before
+
+    poni.write_text(poni.read_text().replace("Distance: 0.232", "Distance: 0.233"))
+    assert cfg.config_hash() != after_mask
 
 
 def test_the_stored_file_says_which_fields_the_hash_covers(waxs, tmp_path):

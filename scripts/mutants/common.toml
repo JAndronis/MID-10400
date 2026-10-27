@@ -1,8 +1,10 @@
 # Mutants for the common layer. Each entry replaces `old` (which must occur exactly
 # once in `file`) by `new` in a copy of src/ and runs `tests` against the copy.
 # expect = "killed" (default): the tests must fail. expect = "survived": a known gap,
-# which stays listed so the fix that closes it flips the entry to killed.
+# which stays listed so the fix that closes it flips the entry to killed, or a
+# harmless change that a test must not fire on.
 
+# ── config hash and pickling ─────────────────────────────────────────────────
 [[mutant]]
 name = "sort_keys_dropped"
 file = "src/analysis/common/config.py"
@@ -16,12 +18,343 @@ file = "src/analysis/common/config.py"
 old = "name: file_sha256(path) if path else None for name, path in input_files.items()"
 new = "name: str(path) if path else None for name, path in input_files.items()"
 tests = ["tests/common/test_config_hash.py", "tests/common/test_pinned_digests.py"]
-expect = "survived"  # a rewritten PONI or mask at the same path keeps the hash
 
+[[mutant]]
+name = "overwrite_not_operational"
+file = "src/analysis/common/config.py"
+old = '''        "overwrite",
+'''
+new = ""
+tests = ["tests/common/test_config_hash.py"]
+
+[[mutant]]
+name = "restore_accepts_a_missing_field"
+file = "src/analysis/common/config.py"
+old = "    if missing or unknown:"
+new = "    if unknown:"
+tests = ["tests/common/test_config_pickle.py"]
+
+[[mutant]]
+name = "post_init_not_rerun_on_unpickle"
+file = "src/analysis/common/config.py"
+old = "        post_init()"
+new = "        pass"
+tests = ["tests/common/test_config_pickle.py"]
+
+# A field swap that leaves the hash alone (pickling is by name): no test may fire.
+[[mutant]]
+name = "harmless_saxs_field_swap"
+file = "src/analysis/saxs/config.py"
+old = '''    trains_per_block: int = 4
+    n_workers: int | None = None
+'''
+new = '''    n_workers: int | None = None
+    trains_per_block: int = 4
+'''
+tests = [
+    "tests/common/test_pinned_digests.py",
+    "tests/common/test_config_pickle.py",
+    "tests/common/test_config_hash.py",
+]
+expect = "survived"
+
+# A new public helper: no test may fire.
+[[mutant]]
+name = "harmless_new_export"
+file = "src/analysis/common/status.py"
+old = '__all__ = ["UNFINISHED", "DataCheckFailed", "FrameStatus"]'
+new = '''__all__ = ["UNFINISHED", "DataCheckFailed", "FrameStatus", "is_ok"]
+
+
+def is_ok(code):
+    return code == 0'''
+tests = ["tests/common/test_pinned_digests.py"]
+expect = "survived"
+
+# ── output lock ──────────────────────────────────────────────────────────────
+[[mutant]]
+name = "lock_truncates_instead_of_exclusive"
+file = "src/analysis/common/lock.py"
+old = "os.O_CREAT | os.O_EXCL | os.O_WRONLY"
+new = "os.O_CREAT | os.O_TRUNC | os.O_WRONLY"
+tests = ["tests/common/test_lock.py"]
+
+[[mutant]]
+name = "lock_live_attempt_counts_as_dead"
+file = "src/analysis/common/lock.py"
+old = "if holder.slurm_restart_count < restart:"
+new = "if holder.slurm_restart_count <= restart:"
+tests = ["tests/common/test_lock.py"]
+
+[[mutant]]
+name = "lock_unverifiable_holder_counts_as_dead"
+file = "src/analysis/common/lock.py"
+old = '''    raise OutputBusy(
+        f"{holder.output} is locked by {holder.describe()}, {where}, so whether "'''
+new = '''    return False, where
+    raise OutputBusy(
+        f"{holder.output} is locked by {holder.describe()}, {where}, so whether "'''
+tests = ["tests/common/test_lock.py"]
+
+# ── droplet physics ──────────────────────────────────────────────────────────
 [[mutant]]
 name = "phi_ferritin_zero"
 file = "src/analysis/utils.py"
 old = "        phi_ferritin=comp.ferritin_volume_fraction_mass,"
 new = "        phi_ferritin=0.0 * comp.ferritin_volume_fraction_mass,"
 tests = ["tests/test_utils.py"]
-expect = "survived"  # the phi-conservation test passes trivially for phi = 0
+
+[[mutant]]
+name = "chord_from_the_vertical_radius"
+file = "src/analysis/utils.py"
+old = '"chord_mm": 2 * fit.radius.sel(dim="x") * DROPLET_PX_MM,'
+new = '"chord_mm": 2 * fit.radius.sel(dim="y") * DROPLET_PX_MM,'
+tests = ["tests/test_utils.py::test_the_subtraction_recovers_the_ferritin_cross_section"]
+
+[[mutant]]
+name = "flux_without_transmission"
+file = "src/analysis/utils.py"
+old = 'ds["flux"] = ds.xgm_uJ * ds.total_transmission'
+new = 'ds["flux"] = ds.xgm_uJ'
+tests = ["tests/test_utils.py::test_the_subtraction_recovers_the_ferritin_cross_section"]
+
+# ── cache ────────────────────────────────────────────────────────────────────
+[[mutant]]
+name = "pulse_mean_averages_missing_frames"
+file = "src/analysis/cache.py"
+old = 'means.append(part.intensity.where(has_frame).mean("pulseId"))'
+new = 'means.append(part.intensity.mean("pulseId"))'
+tests = ["tests/test_cache.py"]
+
+# ── DAMNIT context ───────────────────────────────────────────────────────────
+[[mutant]]
+name = "frames_used_waits_on_the_pass"
+file = "src/amore/context.py"
+old = '''    def jf1_frames_used(
+        self, run, proposal: "meta#proposal", run_no: "meta#run_number"
+    ):'''
+new = '''    def jf1_frames_used(
+        self,
+        run,
+        proposal: "meta#proposal",
+        run_no: "meta#run_number",
+        prep: "self#preprocessing",
+    ):'''
+tests = ["tests/test_context.py"]
+
+[[mutant]]
+name = "legacy_name_beats_current"
+file = "src/analysis/damnit_names.py"
+old = "    if current in names:"
+new = "    if current in names and LEGACY.get(current) not in names:"
+tests = ["tests/test_damnit_names.py"]
+
+[[mutant]]
+name = "legacy_name_asked_for_is_not_translated"
+file = "src/analysis/damnit_names.py"
+old = "    current = _CURRENT.get(name, name)"
+new = "    current = name"
+tests = ["tests/test_damnit_names.py"]
+
+[[mutant]]
+name = "timeline_accepts_shared_train_ids"
+file = "src/analysis/cache.py"
+old = 'if np.unique(tl.trainId).size != tl.sizes["trainId"]:'
+new = "if False:"
+tests = ["tests/test_cache.py::test_runs_that_share_train_ids_are_not_one_droplet"]
+
+[[mutant]]
+name = "saxs_run_reads_the_flat_grid"
+file = "src/analysis/cache.py"
+old = "db[run_nr].file, group=stored_in_file(db[run_nr].file, AGIPD_SAXS)"
+new = 'db[run_nr].file, group="agipd_saxs" if "agipd_saxs" in __import__("h5py").File(db[run_nr].file, "r") else AGIPD_SAXS'
+tests = ["tests/test_cache.py::test_the_grouped_grid_is_read_not_a_stale_flat_one"]
+
+# ── frame table writer ───────────────────────────────────────────────────────
+[[mutant]]
+name = "writer_trusts_the_worker_s_train_id"
+file = "src/analysis/common/writer.py"
+old = 'frames["trainId"][start:stop] = expected_trains'
+new = 'frames["trainId"][start:stop] = result.train_id'
+tests = ["tests/common/test_writer.py"]
+
+[[mutant]]
+name = "writer_skips_the_label_check"
+file = "src/analysis/common/writer.py"
+old = "mislabelled = integrated & (result.train_id != expected_trains)"
+new = "mislabelled = integrated & False"
+tests = ["tests/common/test_writer.py"]
+
+[[mutant]]
+name = "writer_places_rows_by_block_position"
+file = "src/analysis/common/writer.py"
+old = "start, stop = int(rows[0]), int(rows[-1]) + 1"
+new = "start, stop = 3 * block.index, 3 * block.index + rows.size"
+tests = ["tests/common/test_writer.py"]
+
+[[mutant]]
+name = "block_complete_ignores_worker_errors"
+file = "src/analysis/common/writer.py"
+old = "np.isin(status, [int(code) for code in UNFINISHED])"
+new = "np.isin(status, [int(FrameStatus.NOT_PROCESSED)])"
+tests = ["tests/common/test_writer.py"]
+
+[[mutant]]
+name = "reopening_recreates_the_file"
+file = "src/analysis/common/writer.py"
+old = "        if path.exists() and not cfg.overwrite:"
+new = "        if False:"
+tests = ["tests/common/test_writer.py"]
+
+[[mutant]]
+name = "overwrite_is_ignored"
+file = "src/analysis/common/writer.py"
+old = "        if cfg.overwrite or not path.exists():"
+new = "        if not path.exists():"
+tests = ["tests/common/test_writer.py"]
+
+[[mutant]]
+name = "config_hash_of_the_file_not_checked"
+file = "src/analysis/common/writer.py"
+old = "        if stored != config_hash:"
+new = "        if False:"
+tests = ["tests/common/test_writer.py"]
+
+[[mutant]]
+name = "missing_column_not_checked"
+file = "src/analysis/common/writer.py"
+old = '''        if missing:
+            raise SchemaMismatch('''
+new = '''        if False:
+            raise SchemaMismatch('''
+tests = ["tests/common/test_writer.py"]
+
+[[mutant]]
+name = "mark_remaining_stamps_every_frame"
+file = "src/analysis/common/writer.py"
+old = "current[current == FrameStatus.NOT_PROCESSED] = status"
+new = "current[:] = status"
+tests = ["tests/common/test_writer.py"]
+
+[[mutant]]
+name = "retried_block_keeps_its_error"
+file = "src/analysis/common/writer.py"
+old = "        self._resolve_block_error(block)"
+new = "        pass"
+tests = ["tests/common/test_writer.py"]
+
+[[mutant]]
+name = "pooling_counts_every_frame"
+file = "src/analysis/common/writer.py"
+old = "ok = status[rows] == FrameStatus.OK"
+new = "ok = status[rows] < 255"
+tests = ["tests/common/test_writer.py"]
+
+[[mutant]]
+name = "pooled_sigma_roots_the_ratio"
+file = "src/analysis/common/writer.py"
+old = "np.sqrt(variance[positive]) / normalization[positive]"
+new = "np.sqrt(variance[positive] / normalization[positive])"
+tests = ["tests/common/test_writer.py"]
+
+[[mutant]]
+name = "a_block_straddles_a_gap"
+file = "src/analysis/common/plan.py"
+old = "        elif current:"
+new = "        elif False:"
+tests = ["tests/common/test_writer.py"]
+
+# ── fan-out ──────────────────────────────────────────────────────────────────
+[[mutant]]
+name = "fan_out_loses_a_failed_block"
+file = "src/analysis/common/run.py"
+old = "                    out.mark(block, FrameStatus.WORKER_ERROR, repr(error))"
+new = "                    pass"
+tests = ["tests/common/test_fan_out.py"]
+
+[[mutant]]
+name = "fan_out_survives_a_dead_pool"
+file = "src/analysis/common/run.py"
+old = '''                except BrokenExecutor:
+                    out.mark_remaining(FrameStatus.NOT_PROCESSED)
+                    raise'''
+new = '''                except BrokenExecutor:
+                    continue'''
+tests = ["tests/common/test_fan_out.py"]
+
+[[mutant]]
+name = "fan_out_keeps_only_the_last_bits"
+file = "src/analysis/common/run.py"
+old = "totals.bits_present |= block_result.bits_present"
+new = "totals.bits_present = block_result.bits_present"
+tests = ["tests/common/test_fan_out.py"]
+
+[[mutant]]
+name = "progress_skips_failed_blocks"
+file = "src/analysis/common/run.py"
+old = '''                    out.mark(block, FrameStatus.WORKER_ERROR, repr(error))
+                    progress.done(block)'''
+new = '''                    out.mark(block, FrameStatus.WORKER_ERROR, repr(error))'''
+tests = ["tests/common/test_fan_out.py"]
+
+[[mutant]]
+name = "progress_every_fifth"
+file = "src/analysis/common/run.py"
+old = "tenths = self.blocks * 10 // self.n_blocks"
+new = "tenths = self.blocks * 5 // self.n_blocks"
+tests = ["tests/common/test_fan_out.py"]
+
+# ── masks, sampling, cores ───────────────────────────────────────────────────
+[[mutant]]
+name = "frame_bad_ignores_mask_bits"
+file = "src/analysis/common/masks.py"
+old = "return ((flat & np.uint32(mask_bits)) != 0) | static_bad"
+new = "return (flat != 0) | static_bad"
+tests = ["tests/common/test_masks.py"]
+
+[[mutant]]
+name = "frame_bad_drops_the_static_mask"
+file = "src/analysis/common/masks.py"
+old = "return ((flat & np.uint32(mask_bits)) != 0) | static_bad"
+new = "return (flat & np.uint32(mask_bits)) != 0"
+tests = ["tests/common/test_masks.py"]
+
+[[mutant]]
+name = "bits_to_mask_accepts_bit_32"
+file = "src/analysis/common/masks.py"
+old = "if not 0 <= bit < 32:"
+new = "if not 0 <= bit <= 32:"
+tests = ["tests/common/test_masks.py"]
+
+[[mutant]]
+name = "describe_bits_off_by_one"
+file = "src/analysis/common/masks.py"
+old = "member.value.bit_length() - 1: member.name"
+new = "member.value.bit_length(): member.name"
+tests = ["tests/common/test_masks.py"]
+
+[[mutant]]
+name = "evenly_spaced_floors"
+file = "src/analysis/common/plan.py"
+old = "np.unique(np.rint(positions).astype(np.int64))"
+new = "np.unique(np.floor(positions).astype(np.int64))"
+tests = ["tests/common/test_plan.py"]
+
+[[mutant]]
+name = "physical_cores_counts_hyperthreads"
+file = "src/analysis/common/cpu.py"
+old = "groups.add(siblings.strip())"
+new = "groups.add(str(cpu))"
+tests = ["tests/common/test_cpu.py"]
+
+[[mutant]]
+name = "wrapper_gains_logic"
+file = "src/amore/context.py"
+old = '''        from analysis.saxs import damnit
+
+        return damnit.agipd_saxs_from_file(proposal, run_no)'''
+new = '''        from analysis.saxs import damnit
+
+        run_no = int(run_no)
+        return damnit.agipd_saxs_from_file(proposal, run_no)'''
+tests = ["tests/test_context.py"]

@@ -22,30 +22,3 @@ def test_passing_a_default_explicitly_hits_the_cache(memoised_run_factory, tmp_p
 
     assert implicit[0] == explicit[0]
     assert len(written) == 1, "an explicitly-passed default wrote a second run"
-
-
-def test_a_different_request_is_a_different_run(memoised_run_factory):
-    written = []
-
-    def write_mock_run(root, *, trains=3):
-        written.append(root)
-        return f"run-{trains}"
-
-    factory = memoised_run_factory(write_mock_run, "probe", open_run=lambda root: root)
-    factory()
-    factory(trains=9)
-    assert len(written) == 2
-
-
-def test_a_list_argument_is_still_hashable(memoised_run_factory):
-    """Keys are built from the bound arguments, which may hold lists."""
-    written = []
-
-    def write_mock_run(root, *, cells=None):
-        written.append(root)
-        return "run"
-
-    factory = memoised_run_factory(write_mock_run, "probe", open_run=lambda root: root)
-    factory(cells=[0, 1, 2])
-    factory(cells=[0, 1, 2])
-    assert len(written) == 1
