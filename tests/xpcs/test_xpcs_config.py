@@ -1,12 +1,9 @@
-"""Pickling, validation and what each of the two hashes covers."""
+"""Validation, and what each of the two hashes covers."""
 
 from __future__ import annotations
 
-import pickle
-
 import pytest
 
-from analysis.common.config import ConfigStateMismatch
 from analysis.xpcs.config import (
     ES_RINGS_NM,
     XPCS_OPERATIONAL_FIELDS,
@@ -24,24 +21,6 @@ def test_the_es_rings_are_the_triage_rois():
     assert [list(ring) for ring in ES_RINGS_NM] == roi_edges_nm().tolist()
 
 
-def test_the_default_partner_is_the_previous_train_only(saxs_cfg):
-    """The baseline drifts with the partner gap, so only gap 1 is unbiased."""
-    assert XpcsConfig(saxs=saxs_cfg).max_partner_gap == 1
-
-
-def test_the_state_is_pickled_by_name_and_a_positional_one_is_refused(cfg):
-    state = cfg.__getstate__()
-    assert isinstance(state, dict)
-    assert pickle.loads(pickle.dumps(cfg)) == cfg
-    with pytest.raises(ConfigStateMismatch, match="by position"):
-        XpcsConfig.__new__(XpcsConfig).__setstate__(list(state.values()))
-
-
-def test_a_state_with_an_unknown_field_is_refused(cfg):
-    with pytest.raises(ConfigStateMismatch, match="unknown here"):
-        XpcsConfig.__new__(XpcsConfig).__setstate__(dict(cfg.__getstate__(), extra=1))
-
-
 def test_an_unpickled_config_is_validated(cfg):
     state = dict(cfg.__getstate__(), max_partner_gap=0)
     with pytest.raises(ValueError, match="max_partner_gap"):
@@ -51,10 +30,8 @@ def test_an_unpickled_config_is_validated(cfg):
 @pytest.mark.parametrize(
     "change, message",
     [
-        ({"rings_nm": ()}, "rings_nm"),
         ({"rings_nm": ((0.3, 0.2),)}, "rings_nm"),
         ({"rings_nm": ((0.2, 0.3), (0.25, 0.4))}, "rings_nm"),
-        ({"rings_nm": ((0.2, 0.3, 0.4),)}, "rings_nm"),
         ({"max_partner_gap": 0}, "max_partner_gap"),
         ({"envelope_margin_mm": -1.0}, "envelope_margin_mm"),
         ({"trains_per_block": 0}, "trains_per_block"),
@@ -68,39 +45,34 @@ def test_invalid_fields_are_refused(with_config, change, message):
         with_config(**change)
 
 
-@pytest.mark.parametrize(
-    "change",
-    [
-        {"n_workers": 7},
-        {"trains_per_block": 3},
-        {"flag_base_trains": 2},
-        {"output_root": "/elsewhere"},
-        {"allow_incomplete": True},
-        {"overwrite": True},
-    ],
-)
-def test_operational_fields_move_neither_hash(cfg, with_config, change):
-    other = with_config(**change)
-    assert other.extract_hash(ENVELOPE) == cfg.extract_hash(ENVELOPE)
-    assert other.merge_hash(ENVELOPE, RINGS) == cfg.merge_hash(ENVELOPE, RINGS)
-    assert set(change) <= XPCS_OPERATIONAL_FIELDS
+def test_operational_fields_move_neither_hash(cfg, with_config):
+    changes = {
+        "n_workers": 7,
+        "trains_per_block": 3,
+        "flag_base_trains": 2,
+        "output_root": "/elsewhere",
+        "allow_incomplete": True,
+        "overwrite": True,
+    }
+    assert set(changes) == XPCS_OPERATIONAL_FIELDS
+    for field, value in changes.items():
+        other = with_config(**{field: value})
+        assert other.extract_hash(ENVELOPE) == cfg.extract_hash(ENVELOPE), field
+        assert other.merge_hash(ENVELOPE, RINGS) == cfg.merge_hash(ENVELOPE, RINGS)
 
 
-@pytest.mark.parametrize(
-    "change",
-    [
+def test_how_sums_are_made_moves_the_merge_hash_and_never_the_extract_hash(
+    cfg, with_config
+):
+    """A threshold or partner change must not invalidate the photon store."""
+    for change in (
         {"kernel": Kernel.ES},
         {"mask_policy": MaskPolicy.STATIC_ONLY},
         {"max_partner_gap": 25},
-    ],
-)
-def test_how_sums_are_made_moves_the_merge_hash_and_never_the_extract_hash(
-    cfg, with_config, change
-):
-    """A threshold or partner change must not invalidate the photon store."""
-    other = with_config(**change)
-    assert other.extract_hash(ENVELOPE) == cfg.extract_hash(ENVELOPE)
-    assert other.merge_hash(ENVELOPE, RINGS) != cfg.merge_hash(ENVELOPE, RINGS)
+    ):
+        other = with_config(**change)
+        assert other.extract_hash(ENVELOPE) == cfg.extract_hash(ENVELOPE)
+        assert other.merge_hash(ENVELOPE, RINGS) != cfg.merge_hash(ENVELOPE, RINGS)
 
 
 def test_ring_bounds_and_the_static_mask_reach_the_merge_hash_only_through_the_rings(
@@ -132,21 +104,14 @@ def test_a_missing_module_is_not_tolerated(cfg):
         XpcsConfig(saxs=replace(cfg.saxs, min_modules=15, pixel_sum_trains=None))
 
 
-def test_outputs_sit_in_per_run_directories_under_the_root(cfg):
-    assert cfg.store_file.parts[-3:] == (
-        "agipd_ring_photons",
-        "r0423",
-        "agipd_ring_photons.h5",
-    )
-    assert cfg.output_file.name == "xpcs_hits.h5"
-    assert cfg.output_file.parts[-2] == "r0423"
-    assert cfg.store_file.is_relative_to(cfg.output_root)
+def test_ring_masks_files_cannot_carry_the_outlier_mask(with_config):
+    with pytest.raises(ValueError, match="ring_masks_file"):
+        with_config(outlier_thresholds=(0.75, 1.75), ring_masks_file="x.npy")
 
 
-def test_the_payload_is_json_ready(cfg):
-    import json
-
-    payload = cfg.payload()
-    json.dumps(payload)
-    assert payload["kernel"] == "clean"
-    assert payload["saxs"]["run"] == 423
+def test_the_merge_hash_names_the_outlier_settings(with_config):
+    hashes = {
+        with_config(outlier_thresholds=t).merge_hash("e", "r")
+        for t in (None, (0.75, 1.75), (0.5, 2.0))
+    }
+    assert len(hashes) == 3

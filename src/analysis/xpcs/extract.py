@@ -211,8 +211,9 @@ def process_block(block: Block) -> ExtractResult:
 
     The worker never opens the store: the parent merges the file.
 
-    A train whose labels or frame count disagree with the plan, or whose modules
-    sit in different proc sequence files (``Kernel.ES`` chains by file), is
+    A train whose frame count disagrees with the plan, whose ``image.trainId``
+    rows in any module name another train, or whose modules sit in different
+    proc sequence files (``Kernel.ES`` chains by file), is
     ``LABEL_MISMATCH`` and one whose counts are not photons ``DATA_CHECK_FAILED``;
     both are final and carry no photons. Anything else raises, so the block is
     recorded as ``WORKER_ERROR`` and retried.
@@ -238,12 +239,16 @@ def process_block(block: Block) -> ExtractResult:
         sequences = train_sequences(key)
         sequence = min(sequences.values()) if sequences else -1
         train_ids = key.train_id_coordinates()
+        # The reader's train coordinate is the INDEX's, which placed these rows
+        # under ``train_id`` by construction. Only every module's own
+        # ``image.trainId`` rows can say the rows belong to another train.
+        row_labels = selected["image.trainId"].ndarray(decompress_threads=1)
         if (
             len(set(sequences.values())) > 1
             or train_ids.size != expected
             or data.shape[1] != expected
             or mask.shape[1] != expected
-            or not np.all(train_ids == train_id)
+            or not np.all(row_labels == train_id)
         ):
             photons.append(
                 TrainPhotons.failed(train_id, FrameStatus.LABEL_MISMATCH, sequence)

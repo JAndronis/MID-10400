@@ -80,41 +80,36 @@ def same_train(a: TrainPhotons, b: TrainPhotons):
         np.testing.assert_array_equal(getattr(a, name), getattr(b, name))
 
 
-def test_a_merged_block_equals_the_put_path_in_content_and_stored_bytes(
-    tmp_path, path, envelope
-):
+def test_a_merged_block_holds_its_trains_and_their_compressed_bytes(tmp_path, store):
     trains = [train(1), train(2), TrainPhotons.failed(3, FrameStatus.LABEL_MISMATCH, 4)]
-    old = tmp_path / "old.h5"
-    with RingPhotonStore.create(old, HASH, envelope, FlagBase.empty()) as s:
-        for t in trains:
-            s.put(t)
     file = block(tmp_path, "b0.h5", trains)
-    with RingPhotonStore.create(path, HASH, envelope, FlagBase.empty()) as s:
-        assert s.merge_block(file) == 3
-        with RingPhotonStore.open(old) as reference:
-            for t in trains:
-                same_train(s.get(t.train_id), reference.get(t.train_id))
-    assert stored_sizes(path, [1, 2, 3]) == stored_sizes(old, [1, 2, 3])
+    with h5py.File(file, "r") as f:
+        in_block = {
+            (f"trains/{g}", k): ds.id.get_storage_size()
+            for g in f
+            for k, ds in f[g].items()
+        }
+    assert store.merge_block(file) == 3
+    for t in trains:
+        same_train(store.get(t.train_id), t)
+    store._f.flush()
+    assert stored_sizes(store.path, [1, 2, 3]) == in_block
     assert not file.exists()
 
 
 def test_writing_a_block_file_never_touches_the_store(tmp_path, path, store):
-    store.put(train(1))
+    store.merge_block(block(tmp_path, "b1.h5", [train(1)]))
     store._f.flush()
     before = sha(path)
     block(tmp_path, "b0.h5", [train(2)])
     assert sha(path) == before
 
 
-def test_a_block_file_appears_whole_or_not_at_all(tmp_path):
+def test_a_block_file_appears_whole_or_not_at_all(tmp_path, monkeypatch):
     file = block(tmp_path, "b0.h5", [train(1)])
     assert file.exists() and not list(file.parent.glob("*.tmp"))
-    with h5py.File(file, "r") as f:
-        assert f.attrs["extract_hash"] == HASH
-        assert f["t000000000001"].attrs["status"] == 0
+    file.unlink()
 
-
-def test_a_failed_write_leaves_no_block_file_and_no_tmp(tmp_path, monkeypatch):
     def boom(group, photons):
         raise OSError("disk full")
 
@@ -145,12 +140,15 @@ def test_unfinished_groups_are_replaced_by_the_block(tmp_path, store):
     store.mark(1, FrameStatus.WORKER_ERROR, "boom")
     store._f["trains"].create_group("t000000000002")  # a writer died mid-train
     store._f["trains/t000000000002"].create_dataset("count", data=np.ones(3, np.uint8))
-    file = block(tmp_path, "b0.h5", [train(1), train(2)])
-    assert store.merge_block(file) == 2
-    ids = np.array([1, 2], dtype=np.uint64)
+    group = store._f["trains"].create_group("t000000000003")  # a copy died half way
+    group.create_dataset("pixel_step", data=np.zeros(2, np.uint32))
+    file = block(tmp_path, "b0.h5", [train(1), train(2), train(3)])
+    assert store.merge_block(file) == 3
+    ids = np.array([1, 2, 3], dtype=np.uint64)
     assert store.unfinished(ids).size == 0
     assert "error" not in store._f["trains/t000000000001"].attrs
     same_train(store.get(2), train(2))
+    same_train(store.get(3), train(3))
 
 
 def test_status_is_set_only_after_the_copy_checked_out(tmp_path, store, monkeypatch):
@@ -172,13 +170,6 @@ def test_status_is_set_only_after_the_copy_checked_out(tmp_path, store, monkeypa
     same_train(store.get(1), train(1))
 
 
-def test_a_copy_that_crashed_half_way_is_replaced_on_the_next_merge(tmp_path, store):
-    group = store._f["trains"].create_group("t000000000001")
-    group.create_dataset("pixel_step", data=np.zeros(2, np.uint32))
-    assert store.merge_block(block(tmp_path, "b0.h5", [train(1)])) == 1
-    same_train(store.get(1), train(1))
-
-
 def test_recovery_merges_finished_leftovers_and_clears_the_rest(tmp_path, path, store):
     folder = block_dir_for(path)
     write_block_file(folder / "block_000001.h5", HASH, [train(1)])
@@ -190,6 +181,7 @@ def test_recovery_merges_finished_leftovers_and_clears_the_rest(tmp_path, path, 
     (folder / "block_000003.h5.tmp").write_bytes(b"half a block")
     write_block_file(folder / "block_000004.h5", "b" * 64, [train(4)])
     (folder / "block_000005.h5").write_bytes(b"not hdf5")
+    assert store.recover_blocks(tmp_path / "nothing") == 0
     assert store.recover_blocks(folder) == 2
     assert sorted(store.train_ids().tolist()) == [1, 2]
     assert not list(folder.glob("*.tmp"))
@@ -199,7 +191,3 @@ def test_recovery_merges_finished_leftovers_and_clears_the_rest(tmp_path, path, 
         "block_000004.h5.bad",
         "block_000005.h5.bad",
     ]
-
-
-def test_recovery_of_a_missing_directory_is_nothing(tmp_path, store):
-    assert store.recover_blocks(tmp_path / "nothing") == 0

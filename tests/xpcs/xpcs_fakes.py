@@ -17,6 +17,8 @@ TRAIN_IDS = tuple(range(10000, 10010))
 #: A train module 0 reports no frames for, and one nobody wrote a frame for.
 SHORT, EMPTY = 10002, 10004
 FRAMES = 12
+#: The mock run's trains that read whole.
+GOOD = (10000, 10001, 10003, 10005, 10006, 10007, 10009)
 
 
 def make_rings(rng, n_env=300, n_rings=3, outside=0.25) -> Rings:
@@ -67,6 +69,15 @@ def make_train(
         ),
         base=FlagBase.empty(),
     )
+
+
+def merge_trains(store, trains, name: str = "block_000000.h5") -> int:
+    """Put ``trains`` into ``store`` as the pass does: a block file, then a merge."""
+    from analysis.xpcs.store import block_dir_for, write_block_file
+
+    path = block_dir_for(store.path) / name
+    write_block_file(path, store.extract_hash, trains)
+    return store.merge_block(path)
 
 
 def load_extra_speckle_module(relative: str):
