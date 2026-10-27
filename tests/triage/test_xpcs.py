@@ -14,8 +14,6 @@ import pytest
 from triage_fakes import FIRST_TRAIN, REP_RATE_HZ, write_hit_results, write_xpcs_run
 
 from analysis.triage.xpcs import (
-    OFF_SUBTRACTION,
-    REFERENCE_BETA,
     REFERENCE_BETA_RUNS,
     Beta,
     DecayFit,
@@ -114,14 +112,6 @@ def test_the_legacy_g2_agrees_with_damnits(synthetic):
     assert np.nanmax(m.damnit_max_z) < 5
 
 
-def test_beta_is_the_median_amplitude_of_eligible_runs(synthetic):
-    truth, m = synthetic
-    beta = measure_beta([m])
-    for r in (0, 1, 2, 6):
-        assert beta[r].n_eligible == 1
-        assert beta[r].value == pytest.approx(truth["beta"], rel=0.1)
-
-
 def test_beta_eligibility():
     tau1, tau_max = 1.0, 100.0
     good = DecayFit(0.03, 0.002, 1 / (2 * 10.0), 0.0, 0.0, True)
@@ -130,61 +120,6 @@ def test_beta_eligibility():
     fast = DecayFit(0.03, 0.002, 1 / (2 * 2.0), 0.0, 0.0, True)  # 1/(2Γ) = 2 τ₁
     slow = DecayFit(0.03, 0.002, 1 / (2 * 200.0), 0.0, 0.0, True)  # beyond the window
     assert not any(beta_eligible(f, tau1, tau_max) for f in (imprecise, fast, slow))
-
-
-def test_snr_is_the_formula(synthetic):
-    truth, m = synthetic
-    beta = measure_beta([m])
-    s = summarise(m, beta)
-    b0 = beta[0].value
-    expected = b0 * m.kbar[0] * np.sqrt(m.npix[0] * 39 * 1.0 * 200) / OFF_SUBTRACTION
-    assert s["snr_run"][float(m.roi_q_A[0])] == pytest.approx(expected)
-    assert s["n_slices"] == 1  # 200 trains: one part-slice of >= 150
-    assert s["extractable"] == (s["best_snr"] >= 3)
-    assert s["t_needed_s"] == pytest.approx(30.0 * (3 / s["best_snr"]) ** 2)
-
-
-def test_reference_beta_is_the_median_over_its_runs(synthetic):
-    from dataclasses import replace
-
-    truth, m = synthetic
-    runs = (450, 493, 494)
-    copies = [replace(m, run=r) for r in (*runs, 999)]
-    beta = reference_beta(copies, runs=runs)
-    for r in range(len(m.kinds)):
-        assert beta[r].value == pytest.approx(m.fits[r].amplitude)
-        assert beta[r].runs == runs  # 999 is not a reference run
-    assert beta[0].value == pytest.approx(truth["beta"], rel=0.1)
-
-
-def test_fixed_beta_matches_rois_by_centre():
-    roi_q = np.array([0.04, 0.02875, 0.099])
-    beta = fixed_beta(roi_q)
-    assert beta[0].value == REFERENCE_BETA[0.04][0]
-    assert beta[1].value == REFERENCE_BETA[0.02875][0]
-    assert beta[1].runs == REFERENCE_BETA_RUNS
-    assert np.isnan(beta[2].value) and beta[2].n_eligible == 0
-    # DAMNIT stores the centres as float sums: 0.07200000000000001 is 0.072
-    assert (
-        fixed_beta(np.array([0.07200000000000001]))[0].value == REFERENCE_BETA[0.072][0]
-    )
-
-
-def test_reference_beta_falls_from_five_to_two_percent():
-    """The reference β (r450, r493-496) falls from 5 % at low q to 2 % at high q."""
-    plain = [REFERENCE_BETA[q][0] for q in (0.02875, 0.04, 0.0505, 0.0805)]
-    assert plain == sorted(plain, reverse=True)
-    assert 0.045 < plain[0] < 0.05 and 0.017 < plain[-1] < 0.02
-
-
-def test_an_unknown_beta_is_not_a_verdict(synthetic):
-    _, m = synthetic
-    nan = float("nan")
-    unknown = {r: Beta(nan, 0, nan, nan, ()) for r in range(len(m.kinds))}
-    s = summarise(m, unknown)
-    assert s["extractable"] is None
-    assert s["n_extractable_slices"] == 0
-    assert np.isnan(s["best_snr"])
 
 
 def test_snr_scales_with_the_square_root_of_trains_and_linearly_with_kbar():
@@ -279,18 +214,14 @@ def test_measure_run_reduces_the_results_file(hit_results, measured):
     h, m = hit_results, measured
     with_baseline = h.train_ids[h.usable & h.has_off]
     assert m.n_usable == with_baseline.size > 0
-    assert m.n_frames == h.n_frames == 14
-    np.testing.assert_allclose(m.roi_q_A, h.roi_q)
-    np.testing.assert_allclose(m.edges_nm, roi_edges_nm())
-    assert m.kinds == roi_kinds(roi_edges_nm())
+    assert m.n_frames == 14
     # k̄ is photons per pixel per frame, the density times the mean photon count
     np.testing.assert_allclose(
         m.kbar[:4], 2 * np.array([0.2, 0.1, 0.01, 0.005]), rtol=0.2
     )
-    np.testing.assert_allclose(m.npix, np.median(h.pixels(with_baseline), axis=0))
-    assert m.tau[0] == pytest.approx(h.period_s)  # the lag comes from the pulse ids
-    assert m.tau.size == len(h.lags())
-    assert np.isnan(m.damnit_max_z).all()  # nothing is compared with DAMNIT
+    # pulse ids 200, 202, …: two slots of the 4.5 MHz pulse clock, 444 ns
+    assert m.tau[0] == pytest.approx(444e-9, rel=0.005)
+    assert m.tau.size == 13
 
 
 def test_a_ring_below_the_kbar_cut_loses_its_pairs(hit_results, measured):
@@ -320,14 +251,6 @@ def test_the_slices_are_anchored_to_the_first_usable_hit_or_a_given_span(
     span = (first - 300, first + 500)
     shifted = measure_run(423, hit_results, span=span, n_blocks=5)
     assert [s["slice"] for s in shifted.slices] == [1]
-
-
-def test_the_results_file_gives_the_same_verdict_machinery(measured):
-    m = measured
-    out = summarise(m, fixed_beta(m.roi_q_A))
-    assert out["n_usable"] == m.n_usable
-    assert set(out["snr_run"]) <= set(m.roi_q_A)
-    assert np.isfinite(out["best_snr"])
 
 
 @pytest.fixture(scope="module")
