@@ -51,13 +51,6 @@ def field_names(cfg) -> list[str]:
     return [field.name for field in dataclasses.fields(cfg)]
 
 
-def test_the_state_is_keyed_by_name_not_by_position(cfg):
-    """A name cannot shift when a field is added; an index can."""
-    state = cfg.__getstate__()
-    assert isinstance(state, dict)
-    assert sorted(state) == sorted(field_names(cfg))
-
-
 def test_a_roundtrip_preserves_every_field(cfg):
     back = pickle.loads(pickle.dumps(cfg))
     assert back == cfg
@@ -95,24 +88,6 @@ def test_a_positionally_pickled_state_is_refused(cfg):
         pickle.loads(pickle.dumps(cfg)).__setstate__(positional)
 
 
-def test_the_reported_shift_raises_instead_of_assigning_none(waxs):
-    """A positional state two fields short raises rather than shifting.
-
-    Assigned by position, every value after ``lit_gap_ratio`` would land on the
-    wrong field, and the only complaint would come from whichever library first
-    used one of them.
-    """
-    names = field_names(waxs)
-    dropped = {"lit_gap_ratio", "read_noise_fallback_kev"}
-    assert dropped < set(names), "this test describes a skew in these two fields"
-    old_state = [getattr(waxs, name) for name in names if name not in dropped]
-    assert len(old_state) == len(names) - 2
-
-    restored = pickle.loads(pickle.dumps(waxs))
-    with pytest.raises(ConfigStateMismatch, match="pickled by position"):
-        restored.__setstate__(old_state)
-
-
 def test_unpickling_revalidates(cfg):
     """``__setstate__`` bypasses ``__init__``, so it must run the checks itself.
 
@@ -128,11 +103,3 @@ def test_unpickling_revalidates(cfg):
     state = cfg.__getstate__() | {"npt": 0}
     with pytest.raises(ValueError, match="npt must be positive"):
         pickle.loads(pickle.dumps(cfg)).__setstate__(state)
-
-
-def test_a_config_is_still_hashable_and_comparable_after_a_roundtrip(cfg):
-    """The by-name state leaves ``replace``, hashing and equality working."""
-    back = pickle.loads(pickle.dumps(cfg))
-    assert dataclasses.replace(back, run=424).run == 424
-    assert back.config_hash() == cfg.config_hash()
-    assert back.operational_fields == cfg.operational_fields

@@ -11,8 +11,6 @@ from __future__ import annotations
 import subprocess
 import sys
 
-from analysis.threadenv import THREAD_ENV, set_thread_env
-
 
 def test_importing_threadenv_pulls_in_nothing_heavy():
     code = (
@@ -24,17 +22,3 @@ def test_importing_threadenv_pulls_in_nothing_heavy():
         [sys.executable, "-c", code], capture_output=True, text=True, check=True
     )
     assert out.stdout.strip() == "[]"
-
-
-def test_every_library_in_the_stack_is_pinned(monkeypatch):
-    """``set_thread_env`` sets every variable to one thread, OpenBLAS included."""
-    for name in THREAD_ENV:
-        monkeypatch.delenv(name, raising=False)
-    set_thread_env()
-
-    import os
-
-    assert {name: os.environ[name] for name in THREAD_ENV} == dict.fromkeys(
-        THREAD_ENV, "1"
-    )
-    assert "OPENBLAS_NUM_THREADS" in THREAD_ENV

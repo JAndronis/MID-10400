@@ -206,9 +206,10 @@ def process_block(block: Block) -> BlockResult:
     """Read and integrate one block; sum its pixels and histogram its frames if asked.
 
     Every frame's identity comes from the reader's coordinates, never from its
-    position in the array. A train whose labels or frame count disagree with
-    the plan is marked ``LABEL_MISMATCH`` and none of its
-    frames are integrated, summed or histogrammed. The histogram sees the same
+    position in the array. A train whose frame count disagrees with the plan,
+    or whose ``image.trainId`` rows in any module name another train, is marked
+    ``LABEL_MISMATCH`` and none of its frames are integrated, summed or
+    histogrammed. The histogram sees the same
     bad pixels and the same data check as the integration, so a frame has one
     status in both files.
     """
@@ -265,12 +266,16 @@ def process_block(block: Block) -> BlockResult:
         train_ids = counts_key.train_id_coordinates()
         pulse_ids = counts_key.pulse_id_coordinates()
         cell_ids = counts_key.cell_id_coordinates()
+        # The reader's train coordinate is the INDEX's, which placed these rows
+        # under ``train_id`` by construction. Only every module's own
+        # ``image.trainId`` rows can say the rows belong to another train.
+        row_labels = selected["image.trainId"].ndarray(decompress_threads=1)
 
         if (
             train_ids.size != expected
             or data.shape[1] != expected
             or mask.shape[1] != expected
-            or not np.all(train_ids == train_id)
+            or not np.all(row_labels == train_id)
         ):
             result.status[rows] = FrameStatus.LABEL_MISMATCH
             if sums is not None:

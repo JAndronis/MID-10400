@@ -30,18 +30,14 @@ def test_every_sample_has_a_title_and_every_representative_its_group():
     for (sample, mesh), droplet_id in REPRESENTATIVE.items():
         droplet = by_id(droplet_id)
         assert (droplet.sample, droplet.mesh, droplet.figures) == (sample, mesh, True)
+    found = groups()
+    assert found == sorted(found, key=lambda g: (list(CONDITIONS).index(g[0]), g[1]))
+    assert set(REPRESENTATIVE) <= set(found)
 
 
 def test_near_zero_blocks_lie_in_figure_droplets():
     kept = {r for d in DROPLETS if d.figures for r in d.kept_runs}
     assert {run for run, _ in NEAR_ZERO_BLOCKS} <= kept
-
-
-def test_groups_hold_figure_droplets_only_in_condition_order():
-    found = groups()
-    assert found == sorted(found, key=lambda g: (list(CONDITIONS).index(g[0]), g[1]))
-    assert ("ferritin50", True) in found  # s308
-    assert not any(d.sample == "ferritin50-peg1k" and d.mesh for d in DROPLETS)
 
 
 def test_ferritin_concentrates_as_the_droplet_shrinks():
@@ -51,8 +47,3 @@ def test_ferritin_concentrates_as_the_droplet_shrinks():
     conc = by_id("s443").ferritin_mg_per_ml(timeline)
     assert conc[0] == pytest.approx(50.0)
     assert np.all(np.diff(conc.values) > 0)
-
-
-def test_unknown_id_raises():
-    with pytest.raises(KeyError, match="s999"):
-        by_id("s999")

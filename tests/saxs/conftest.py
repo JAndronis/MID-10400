@@ -21,7 +21,6 @@ from extra_geom import AGIPD_1MGeometry  # noqa: E402
 
 from analysis.common.masks import MaskSource, StaticMask  # noqa: E402
 from analysis.saxs.config import NPIX, AgipdSaxsConfig  # noqa: E402
-from analysis.saxs.operator import build_operator  # noqa: E402
 
 #: EXtra-geom's test quad positions, in pixel units (the constructor's default
 #: ``unit`` is ``pixel_size``).
@@ -65,10 +64,48 @@ def geom() -> AGIPD_1MGeometry:
     return AGIPD_1MGeometry.from_quad_positions(quad_pos=QUAD_POS)
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _one_operator_per_geometry():
+    """Build each operator once per session for the pass and its checks.
+
+    ``run_agipd_saxs`` and ``is_complete(geometry=...)`` reach
+    ``analysis.saxs.operator.build_operator``, which takes seconds over all
+    1 048 576 pixels and is deterministic in the geometry and the fields it
+    reads. Tests that import ``build_operator`` directly still get the real
+    build, which is what the operator tests need. The key holds the geometry
+    object itself, so its ``id`` cannot be reused by another one.
+    """
+    from analysis.saxs import operator as module
+
+    real = module.build_operator
+    built: dict[tuple, tuple] = {}
+
+    def build(geom, cfg):
+        key = (
+            id(geom),
+            cfg.npt,
+            cfg.sdd_m,
+            cfg.wavelength_m,
+            cfg.beam_center,
+            tuple(cfg.method),
+            cfg.unit,
+        )
+        if key not in built:
+            built[key] = (geom, real(geom, cfg))
+        return built[key][1]
+
+    patch = pytest.MonkeyPatch()
+    patch.setattr(module, "build_operator", build)
+    yield
+    patch.undo()
+
+
 @pytest.fixture(scope="session")
 def operator_and_engine(geom, cfg):
     """``(SparseOperator, pyFAI engine)`` from the synthetic geometry."""
-    op, ai = build_operator(geom, cfg)
+    from analysis.saxs import operator as module
+
+    op, ai = module.build_operator(geom, cfg)
     probe_method = next(iter(ai.engines))
     return op, ai.engines[probe_method].engine
 
@@ -211,13 +248,13 @@ def mock_pipeline(run_cfg, geom, mock_run_factory):
     from extra_data.components import AGIPD1M
 
     from analysis.common.status import FrameStatus
+    from analysis.saxs import operator as module
     from analysis.saxs.masks import BaseMaskAccumulator, build_static_bad
-    from analysis.saxs.operator import build_operator
     from analysis.saxs.plan import build_plan
 
     run, dc = mock_run_factory()
     plan = build_plan(run_cfg, dc=dc)
-    op, ai = build_operator(geom, run_cfg)
+    op, ai = module.build_operator(geom, run_cfg)
     static = build_static_bad(run_cfg)
 
     det = AGIPD1M(dc, min_modules=run_cfg.min_modules)
