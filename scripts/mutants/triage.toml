@@ -205,3 +205,31 @@ file = "src/analysis/triage/classify.py"
 old = "for attempt in range(MEMBER_TRIES):"
 new = "for attempt in range(MEMBER_TRIES - 5):"
 tests = ["tests/triage/test_classify.py"]
+
+[[mutant]]
+name = "hit_cell_ambiguity_ignored"
+file = "src/analysis/triage/damnit.py"
+old = 'if summary.get("ambiguous"):'
+new = "if False:"
+tests = ["tests/triage/test_hit_diagnostics.py"]
+
+[[mutant]]
+name = "hit_cell_no_hits_green"
+file = "src/analysis/triage/damnit.py"
+old = "        colour = NO_HITS_COLOR"
+new = '        colour = COLORS["good"]'
+tests = ["tests/triage/test_hit_diagnostics.py"]
+
+[[mutant]]
+name = "hit_cell_counts_edge_as_hits"
+file = "src/analysis/triage/damnit.py"
+old = '    on, edge, off = counts["on"], counts["edge"], counts["off"]'
+new = '    on, edge, off = counts["on"] + counts["edge"], counts["edge"], counts["off"]'
+tests = ["tests/triage/test_hit_diagnostics.py"]
+
+[[mutant]]
+name = "hexapod_positions_never_read"
+file = "src/analysis/triage/damnit.py"
+old = "if run is None or HEXAPOD not in run.all_sources:"
+new = "if True:"
+tests = ["tests/triage/test_hit_diagnostics.py"]

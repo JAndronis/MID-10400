@@ -13,11 +13,7 @@ from triage_fakes import in_memory
 matplotlib.use("Agg")
 
 from analysis.diagnostics.damnit import COLORS
-from analysis.triage.damnit import (
-    NO_HITS_COLOR,
-    hit_geometry_figure,
-    hit_summary_cell,
-)
+from analysis.triage.damnit import NO_HITS_COLOR, hit_summary_cell
 
 
 class Cell:
@@ -38,70 +34,40 @@ def memory(root, run):
     return saxs, xgm, trans
 
 
-def test_mesh_cell_counts_classes_and_is_green(mesh_store):
-    cell = hit_summary_cell(
-        10400, 121, *memory(mesh_store, 121), damnit_root=mesh_store, cache_dir=None
-    )
-    assert cell.summary_value.endswith("of 400")
-    assert " hits / " in cell.summary_value and " edge / " in cell.summary_value
-    assert cell.background == COLORS["good"]
-
-
 def test_static_cell_counts_hits_and_off(mesh_store):
     cell = hit_summary_cell(
         10400, 423, *memory(mesh_store, 423), damnit_root=mesh_store, cache_dir=None
     )
     assert cell.summary_value == "600 hits / 0 edge / 20 off of 620"
+    assert cell.background == COLORS["good"]
 
 
-def test_a_run_without_hits_is_grey(monkeypatch):
+@pytest.mark.parametrize(
+    ("classes", "ambiguous", "text", "colour"),
+    [
+        (["on", "edge", "off", "on"], False, "2 hits / 1 edge / 1 off of 4", "good"),
+        (["off"] * 5, False, "0 hits / 0 edge / 5 off of 5", None),
+        (["none"] * 3, True, "0 hits / 0 edge / 0 off of 3 (ambiguous)", "warning"),
+    ],
+)
+def test_the_cell_counts_the_classes_and_colours_the_verdict(
+    monkeypatch, classes, ambiguous, text, colour
+):
     import xarray as xr
 
     import analysis.triage.damnit as module
 
-    tids = np.arange(5, dtype=np.uint64)
+    tids = np.arange(len(classes), dtype=np.uint64)
     found = {
-        "kind": "static",
-        "block": None,
-        "classes": xr.DataArray(np.array(["off"] * 5), dims="trainId",
+        "kind": "mesh", "block": None,
+        "classes": xr.DataArray(np.array(classes), dims="trainId",
                                 coords={"trainId": tids}),
-        "summary": {"ambiguous": False},
+        "summary": {"ambiguous": ambiguous},
     }  # fmt: skip
     monkeypatch.setattr(module, "classify_in_memory", lambda *a, **k: found)
     cell = hit_summary_cell(10400, 1, None, None, None)
-    assert cell.summary_value == "0 hits / 0 edge / 5 off of 5"
-    assert cell.background == NO_HITS_COLOR
-
-
-def test_mesh_figure_has_map_when_positions_are_known(mesh_store):
-    class Run:
-        all_sources = {"MID_EXP_SAM/HEXAPOD/SSHEX"}
-
-        def __getitem__(self, key):
-            import xarray as xr
-
-            tids = memory(mesh_store, 121)[0].trainId.values
-            rng = np.random.default_rng(1)
-            return types.SimpleNamespace(
-                xarray=lambda: xr.DataArray(rng.random(tids.size), dims="trainId",
-                                            coords={"trainId": tids})
-            )  # fmt: skip
-
-    args = memory(mesh_store, 121)
-    with_map = hit_geometry_figure(
-        10400, 121, *args, run=Run(), damnit_root=mesh_store, cache_dir=None
-    )
-    without = hit_geometry_figure(
-        10400, 121, *args, damnit_root=mesh_store, cache_dir=None
-    )
-    assert len(with_map.axes) == 3 and len(without.axes) == 2
-
-
-def test_static_figure_is_timeline_and_counts(mesh_store):
-    fig = hit_geometry_figure(
-        10400, 423, *memory(mesh_store, 423), damnit_root=mesh_store, cache_dir=None
-    )
-    assert len(fig.axes) == 2
+    assert cell.summary_value == text
+    assert cell.background == (NO_HITS_COLOR if colour is None else COLORS[colour])
 
 
 def test_the_scan_map_puts_each_train_at_its_position_in_its_class_colour():
@@ -132,3 +98,25 @@ def test_the_scan_map_puts_each_train_at_its_position_in_its_class_colour():
     assert drawn == {
         (x[i], z[i]): to_rgba(CLASS_COLORS[c]) for i, c in enumerate(classes)
     }
+
+
+def test_hexapod_positions_follow_the_train_ids_and_need_the_hexapod():
+    import xarray as xr
+
+    from analysis.triage.damnit import HEXAPOD, hexapod_positions
+
+    class Run:
+        all_sources = {HEXAPOD}
+
+        def __getitem__(self, key):
+            axis = 1.0 if key[1].startswith("X") else 2.0
+            values = axis * np.array([10.0, 11.0, 12.0])
+            values = xr.DataArray(values, dims="trainId", coords={"trainId": [5, 6, 7]})
+            return types.SimpleNamespace(xarray=lambda: values)
+
+    x, z = hexapod_positions(Run(), np.array([7, 5, 9]))
+    np.testing.assert_array_equal(x, [12.0, 10.0, np.nan])
+    np.testing.assert_array_equal(z, [24.0, 20.0, np.nan])
+    Run.all_sources = set()
+    assert hexapod_positions(Run(), np.array([5])) is None
+    assert hexapod_positions(None, np.array([5])) is None
