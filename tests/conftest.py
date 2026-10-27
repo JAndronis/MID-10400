@@ -8,11 +8,63 @@ The heavy imports (h5py, EXtra-data) happen inside the fixtures that need them.
 from __future__ import annotations
 
 import csv
+import getpass
+import os
 import re
+import shutil
+import tempfile
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 
 import pytest
+
+#: Default basetemp root. ``/tmp`` is a small volume shared with other users, and
+#: the mock runs are hundreds of megabytes, so a session without ``--basetemp``
+#: puts its scratch in RAM-backed ``/dev/shm`` when that is writable.
+_SHM = Path("/dev/shm")
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Choose a per-session basetemp under ``/dev/shm`` when the user gave none."""
+    config._default_basetemp = None  # type: ignore[attr-defined]
+    if config.option.basetemp is not None:
+        return
+    if not (_SHM.is_dir() and os.access(_SHM, os.W_OK)):
+        return
+    chosen = _SHM / f"pytest-of-{getpass.getuser()}" / f"session-{os.getpid()}"
+    chosen.parent.mkdir(exist_ok=True)
+    config.option.basetemp = str(chosen)
+    config._default_basetemp = chosen  # type: ignore[attr-defined]
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """Free the RAM-backed basetemp of a passing session; keep a failing one."""
+    chosen = session.config._default_basetemp  # type: ignore[attr-defined]
+    if chosen is not None and exitstatus == 0:
+        shutil.rmtree(chosen, ignore_errors=True)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _session_tempdir(tmp_path_factory: pytest.TempPathFactory):
+    """Point ``tempfile`` and ``TMPDIR`` at a directory inside the basetemp.
+
+    ``TMPDIR`` is an environment variable so that spawned pool workers, which
+    are fresh interpreters, inherit it. The directory is made after pytest has
+    cleared an explicit basetemp, which is why this is a fixture and not part
+    of ``pytest_configure``.
+    """
+    scratch = tmp_path_factory.getbasetemp() / "tmp"
+    scratch.mkdir(exist_ok=True)
+    saved_env = os.environ.get("TMPDIR")
+    saved_dir = tempfile.tempdir
+    os.environ["TMPDIR"] = str(scratch)
+    tempfile.tempdir = str(scratch)
+    yield scratch
+    tempfile.tempdir = saved_dir
+    if saved_env is None:
+        os.environ.pop("TMPDIR", None)
+    else:
+        os.environ["TMPDIR"] = saved_env
 
 
 def _make_raw_tree(

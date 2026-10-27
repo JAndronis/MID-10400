@@ -1,0 +1,27 @@
+# Mutants for the common layer. Each entry replaces `old` (which must occur exactly
+# once in `file`) by `new` in a copy of src/ and runs `tests` against the copy.
+# expect = "killed" (default): the tests must fail. expect = "survived": a known gap,
+# which stays listed so the fix that closes it flips the entry to killed.
+
+[[mutant]]
+name = "sort_keys_dropped"
+file = "src/analysis/common/config.py"
+old = 'json.dumps(payload, sort_keys=True, separators=(",", ":"))'
+new = 'json.dumps(payload, separators=(",", ":"))'
+tests = ["tests/common/test_config_hash.py", "tests/common/test_pinned_digests.py"]
+
+[[mutant]]
+name = "config_hash_uses_path_not_sha"
+file = "src/analysis/common/config.py"
+old = "name: file_sha256(path) if path else None for name, path in input_files.items()"
+new = "name: str(path) if path else None for name, path in input_files.items()"
+tests = ["tests/common/test_config_hash.py", "tests/common/test_pinned_digests.py"]
+expect = "survived"  # a rewritten PONI or mask at the same path keeps the hash
+
+[[mutant]]
+name = "phi_ferritin_zero"
+file = "src/analysis/utils.py"
+old = "        phi_ferritin=comp.ferritin_volume_fraction_mass,"
+new = "        phi_ferritin=0.0 * comp.ferritin_volume_fraction_mass,"
+tests = ["tests/test_utils.py"]
+expect = "survived"  # the phi-conservation test passes trivially for phi = 0
