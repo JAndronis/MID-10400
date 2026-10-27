@@ -4,7 +4,7 @@ Context file for CLAUDE.md open task 19, written in session S3 (2026-10-13). It 
 measured, where, with which versions, and what was decided. Read `CLAUDE.md` first.
 
 **State:**
-- (c) SLURM helpers: done (`analysis.common.slurm`, `scripts/_common.py`).
+- (c) SLURM helpers: built, then deleted with the node scripts that used them (§1.2).
 - (d) `fan_out` progress lines: done.
 - (a) pyFAI 2026.9: measured, **no speed gain, bit-identical results**. The lock is upgraded on
   branch `claude/s3-speed-tooling-*`; it merges only after the user's review.
@@ -27,38 +27,15 @@ So a DAMNIT job runs on whatever class is free, and `physical_cores()` (pitfall 
 pool to it: 20 workers on an E5-2640 node, 64 on a 9374F. Timings from DAMNIT jobs are
 therefore not comparable with each other unless the host is checked; the provenance records it.
 
-### 1.2 `analysis.common.slurm` and the script flags
+### 1.2 SLURM self-submission (deleted)
 
-Node scripts submit themselves:
-
-```
-python scripts/p4_acceptance.py --run 423 [426 …] -w 36 [-t 01:00:00] [--constraint 9374F]
-                                [--after JOBID] [--dry-run | --local]
-```
-
-- Without `--local`, one job per run. The batch script calls the same script with the same
-  options, the run alone and `--local`. Inside a job (`SLURM_JOB_ID` set) the script works in
-  place.
-- **`-w` is physical cores**: both the worker count and what the job asks for. The batch script
-  requests `-c 2w`, because SLURM counts hardware threads. `-c 36` alone can land on a
-  2 × 10-core node and put 36 workers on 20 cores (user decision 2026-10-13).
-- Paths in the batch script are written as `/gpfs/exfel/exp/MID/202601/p010400/<sub>/…`
-  (`prop_path`): resolved tier paths (`/gpfs/exfel/u/usr/…`) and private aliases (`~/p010400`)
-  are rewritten, and a venv's `bin/python` keeps its name so that the venv is kept (pitfall 22).
-- `export EXTRA_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1` before
-  the command; `-N 1 -n 1`; never `srun` (pitfall 28).
-- `--after JOBID` adds `--dependency=afterok:JOBID --kill-on-invalid-dep=yes`.
-- `--local` with several runs: each run is tried, a failure is logged with its traceback, and the
-  exit status is non-zero, naming the failed runs.
-- Logs: `scratch/slurm_logs/<script>/slurm-<jobid>.out`.
-- Argparse prefix matching is off in these scripts (`--dry` is refused), because the command line
-  is rewritten by exact option name.
-- Importing `analysis.common.slurm` imports numpy (through `analysis.common`); `_common` imports
-  it lazily, after the scripts pin the thread count.
-
-Adopted by `p4_acceptance.py`, `bench_pyfai.py`, `bench_io.py`. Not (yet) by `w1_facts.py`,
-`w4_acceptance.py`, `w6_data_check.py`. `w1_facts` compares runs within one process (O4), so it
-must stay one job for all runs.
+`analysis.common.slurm` (`prop_path`, `batch_script`, `submit`, `run_each`) and the
+`-w/-t/--local/--dry-run` flags of the node scripts were removed once those scripts were. The last
+version is `git show 7edd1ed:src/analysis/common/slurm.py`. What it encoded still holds when
+submitting by hand: `-w` is physical cores, so ask for `-c 2w` because SLURM counts hardware
+threads; `-N 1 -n 1`; never `srun` (pitfall 28); export `EXTRA_NUM_THREADS=1 OMP_NUM_THREADS=1`
+before the command; write paths as `/gpfs/exfel/exp/MID/202601/p010400/<sub>/…`, not resolved
+tier paths or private aliases (pitfall 22).
 
 ### 1.3 Progress lines
 
