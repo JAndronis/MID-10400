@@ -269,9 +269,14 @@ def hit_results(tmp_path_factory):
     return write_hit_results(tmp_path_factory.mktemp("hits") / "xpcs_hits.h5")
 
 
-def test_measure_run_reduces_the_results_file(hit_results):
-    h = hit_results
-    m = measure_run(423, h)
+@pytest.fixture(scope="module")
+def measured(hit_results):
+    """`measure_run` of `hit_results`, with five jackknife blocks to keep it cheap."""
+    return measure_run(423, hit_results, n_blocks=5)
+
+
+def test_measure_run_reduces_the_results_file(hit_results, measured):
+    h, m = hit_results, measured
     with_baseline = h.train_ids[h.usable & h.has_off]
     assert m.n_usable == with_baseline.size > 0
     assert m.n_frames == h.n_frames == 14
@@ -288,35 +293,37 @@ def test_measure_run_reduces_the_results_file(hit_results):
     assert np.isnan(m.damnit_max_z).all()  # nothing is compared with DAMNIT
 
 
-def test_a_ring_below_the_kbar_cut_loses_its_pairs(hit_results):
-    m = measure_run(423, hit_results)
+def test_a_ring_below_the_kbar_cut_loses_its_pairs(hit_results, measured):
+    m = measured
     assert m.phi[0] > 0.98  # k̄ 0.4: only an unlit frame drops a pair
     assert m.phi[-1] < 0.01  # k̄ 2e-4: nearly every pair is dropped
-    everything = measure_run(423, hit_results, kbar_min=10.0)
+    everything = measure_run(423, hit_results, kbar_min=10.0, n_blocks=5)
     assert (everything.phi == 0).all()
     assert np.isnan(everything.g2).all()
 
 
-def test_select_narrows_the_trains_and_unknown_ones_are_refused(hit_results):
-    m = measure_run(423, hit_results)
+def test_select_narrows_the_trains_and_unknown_ones_are_refused(hit_results, measured):
     some = hit_results.train_ids[hit_results.has_off][:20]
-    assert measure_run(423, hit_results, select=some).n_usable == 20
-    assert m.n_usable > 20
+    assert measure_run(423, hit_results, select=some, n_blocks=5).n_usable == 20
+    assert measured.n_usable > 20
     other = np.array([FIRST_TRAIN + 10_000], dtype=np.uint64)
     assert measure_run(423, hit_results, select=other).n_usable == 0
 
 
-def test_the_slices_are_anchored_to_the_first_usable_hit_or_a_given_span(hit_results):
-    m = measure_run(423, hit_results)
+def test_the_slices_are_anchored_to_the_first_usable_hit_or_a_given_span(
+    hit_results, measured
+):
+    m = measured
     assert [s["slice"] for s in m.slices] == [0]
     assert m.slices[0]["n_usable"] == m.n_usable
     first = int(hit_results.train_ids[hit_results.has_off][0])
-    shifted = measure_run(423, hit_results, span=(first - 300, first + 500))
+    span = (first - 300, first + 500)
+    shifted = measure_run(423, hit_results, span=span, n_blocks=5)
     assert [s["slice"] for s in shifted.slices] == [1]
 
 
-def test_the_results_file_gives_the_same_verdict_machinery(hit_results):
-    m = measure_run(423, hit_results)
+def test_the_results_file_gives_the_same_verdict_machinery(measured):
+    m = measured
     out = summarise(m, fixed_beta(m.roi_q_A))
     assert out["n_usable"] == m.n_usable
     assert set(out["snr_run"]) <= set(m.roi_q_A)

@@ -33,6 +33,7 @@ import numpy as np
 
 from analysis.triage.xpcs import (
     KBAR_MIN,
+    N_BLOCKS,
     ROI_MATCH_A,
     Beta,
     fixed_beta,
@@ -110,6 +111,7 @@ def xpcs_snr(
     hits: XpcsHits | None = None,
     select: np.ndarray | None = None,
     span: tuple[int, int] | None = None,
+    n_blocks: int = N_BLOCKS,
 ) -> dict[str, Any]:
     """One run's SNR per plain ROI and 30 s slice, and its keep verdict.
 
@@ -118,6 +120,7 @@ def xpcs_snr(
     :param select: train ids to restrict to (e.g. a mesh run's `on` trains).
     :param span: first and last train id the slices are anchored to (default: the
         first and last usable hit).
+    :param n_blocks: jackknife blocks of the g2 errors and of the fit's.
     :returns: ``summary`` (the `summarise` dict without its slices), ``slices`` (a
         DataFrame: slice, start in s, usable trains, best plain SNR, SNR per ROI),
         ``rois`` (a DataFrame per ROI: kind, k̄, N_pix, φ, ρ, the fit, the β used and
@@ -129,7 +132,7 @@ def xpcs_snr(
     from analysis.triage.xpcs import SLICE_TRAINS, snr
 
     opened = open_results(run, proposal=proposal, output_root=output_root, hits=hits)
-    m = measure_run(run, opened, select=select, span=span)
+    m = measure_run(run, opened, select=select, span=span, n_blocks=n_blocks)
     b = fixed_beta(m.roi_q_A) if beta is None else beta_by_roi(m.roi_q_A, beta)
     summary = summarise(m, b)
     rows = summary.pop("slices")
@@ -224,6 +227,7 @@ def xpcs_score(
     proposal: int = 10400,
     output_root: str | Path = DEFAULT_XPCS_ROOT,
     hits: XpcsHits | None = None,
+    n_blocks: int = N_BLOCKS,
 ) -> dict:
     """The per-run XPCS diagnostic score, over the hits in the run's results file.
 
@@ -238,7 +242,11 @@ def xpcs_score(
     coverage = opened.coverage()
     usable = coverage.n_usable > 0
     kbar = kbar_rois(run, hits=opened) if usable else None
-    snr = xpcs_snr(run, beta, hits=opened)["summary"] if usable else None
+    snr = (
+        xpcs_snr(run, beta, hits=opened, n_blocks=n_blocks)["summary"]
+        if usable
+        else None
+    )
     kinds = roi_kinds(roi_edges_from(opened.bounds_nm, opened.n_rings))
     return {
         "run": int(run),

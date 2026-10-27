@@ -14,6 +14,7 @@ from pathlib import Path
 
 import h5py
 import numpy as np
+import xarray as xr
 
 from analysis.triage.inventory import RUN_COLUMNS, TRACKED
 
@@ -240,3 +241,118 @@ def write_hit_results(
         photons.append(make_train(t, dense, flags))
     path.parent.mkdir(parents=True, exist_ok=True)
     return build_results(path, photons, rings, failed=failed)
+
+
+#: A mesh run's hits sit ON_DEX above its off level; the two spreads in dex.
+ON_DEX, OFF_SD, ON_SD = 1.3, 0.02, 0.05
+
+
+def partial(f):
+    """rel of a train carrying a fraction ``f`` of a full hit's droplet signal."""
+    return np.log10(1 + np.asarray(f) * (10**ON_DEX - 1))
+
+
+def mesh_run(rng, off, hit_fraction, n=800, edge_fraction=0.02, partial_fraction=0.03):
+    """log10(s/F) of one mesh run, and its true classes."""
+    n_on = int(hit_fraction * n)
+    n_edge = int(edge_fraction * n)
+    n_part = int(partial_fraction * n)
+    n_off = n - n_on - n_edge - n_part
+    x = np.concatenate([
+        off + OFF_SD * rng.standard_normal(n_off),
+        off + ON_DEX + ON_SD * rng.standard_normal(n_on),
+        off + rng.uniform(0.2, 0.5, n_edge),
+        off + partial(rng.uniform(0.15, 0.6, n_part)),
+    ])  # fmt: skip
+    truth = np.array(
+        ["off"] * n_off + ["on"] * n_on + ["edge"] * n_edge + ["partial"] * n_part
+    )
+    order = rng.permutation(n)
+    return x[order], truth[order]
+
+
+def write_damnit(path, saxs, *, n_frames=None, xgm=None, trans=None, waxs=None):
+    """agipd_saxs (train, pulse, q), xgm_intensity, total_transmission, jf1."""
+    n, p, nq = saxs.shape
+    tids = FIRST_TRAIN + np.arange(n, dtype=np.uint64)
+    q = np.linspace(0.08, 1.06, nq)
+    with h5py.File(path, "w") as f:
+        g = f.create_group("agipd_saxs")
+        g["trainId"], g["q"] = tids, q
+        g["pulseId"] = np.arange(p, dtype=np.uint64)
+        g["intensity"] = saxs.astype(np.float32)
+        g["n_frames"] = (np.ones((n, p)) if n_frames is None else n_frames).astype(
+            np.uint8
+        )
+        if waxs is not None:
+            j = f.create_group("jungfrau_waxs_jf1")
+            j["trainId"], j["q"] = tids, np.linspace(11.5, 23.7, waxs.shape[2])
+            j["cellId"] = np.arange(waxs.shape[1], dtype=np.uint16)
+            j["intensity"] = waxs.astype(np.float32)
+            j["n_frames"] = np.ones(waxs.shape[:2], np.uint8)
+    for group, name, values in (
+        ("xgm_intensity", "Energy", np.full(n, 500.0) if xgm is None else xgm),
+        ("total_transmission", "__xarray_dataarray_variable__",
+         np.full(n, 0.1) if trans is None else trans),
+    ):  # fmt: skip
+        xr.DataArray(
+            np.asarray(values, float),
+            dims="trainId",
+            coords={"trainId": tids},
+            name=name,
+        ).to_dataset().to_netcdf(path, group=group, mode="a", engine="h5netcdf")
+    return path, q
+
+
+def in_memory(path):
+    """What DAMNIT hands a variable: agipd_saxs as the DataArray the variable
+    returned (``trainId``, ``pulseId``, ``q`` and ``n_frames`` as coordinates),
+    XGM and transmission as per-train arrays, jf1 likewise or None."""
+
+    def grid(g, frame_dim):
+        return xr.DataArray(
+            g["intensity"][()],
+            dims=("trainId", frame_dim, "q"),
+            coords={
+                "trainId": g["trainId"][()],
+                frame_dim: g[frame_dim][()],
+                "q": g["q"][()],
+                "n_frames": (("trainId", frame_dim), g["n_frames"][()]),
+            },
+            name="intensity",
+        )
+
+    with h5py.File(path, "r") as f:
+        saxs = grid(f["agipd_saxs"], "pulseId")
+        jf1 = (
+            grid(f["jungfrau_waxs_jf1"], "cellId") if "jungfrau_waxs_jf1" in f else None
+        )
+    xgm = xr.open_dataset(path, group="xgm_intensity").load().Energy
+    trans = xr.open_dataset(path, group="total_transmission").load()
+    return saxs, xgm, trans.__xarray_dataarray_variable__, jf1
+
+
+MESH_RUNS = (120, 121, 122)
+
+
+def write_mesh_store(root: Path, seed: int = 6) -> Path:
+    """A DAMNIT store of one mesh block (`MESH_RUNS`, 400 trains, 20 % hits) and the
+    static r423 (300 hits, 20 trains off the beam, 300 hits), with its sqlite."""
+    rng = np.random.default_rng(seed)
+    (root / "extracted_data").mkdir(parents=True, exist_ok=True)
+    for r in MESH_RUNS:
+        x, _ = mesh_run(rng, -4.3, 0.2, n=400)
+        level = 10.0**x  # s/F with F = 1 (xgm 10 × transmission 0.1)
+        saxs = np.broadcast_to(level[:, None, None], (400, 2, 30)).copy()
+        write_damnit(root / "extracted_data" / f"p10400_r{r}.h5", saxs,
+                     xgm=np.full(400, 10.0))  # fmt: skip
+    level = 10.0 ** np.r_[np.full(300, -3.0), np.full(20, -4.3), np.full(300, -3.0)]
+    write_damnit(root / "extracted_data" / "p10400_r423.h5",
+                 np.broadcast_to(level[:, None, None], (620, 2, 30)).copy(),
+                 xgm=np.full(620, 10.0))  # fmt: skip
+    rows = [
+        run_row(r, scan_type="dmesh SSHEX", total_transmission=0.0123, pulses=350.0)
+        for r in MESH_RUNS
+    ]
+    write_sqlite(root / "runs.sqlite", rows + [run_row(423)])
+    return root

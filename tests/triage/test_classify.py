@@ -11,12 +11,22 @@ to r240's measured plateau width (robust σ 0.055 dex).
 from __future__ import annotations
 
 import os
+import shutil
 
-import h5py
 import numpy as np
 import pytest
 import xarray as xr
-from triage_fakes import FIRST_TRAIN, run_row, write_sqlite
+from triage_fakes import (
+    OFF_SD,
+    ON_DEX,
+    ON_SD,
+    in_memory,
+    mesh_run,
+    partial,
+    run_row,
+    write_damnit,
+    write_sqlite,
+)
 
 from analysis.triage.classify import (
     ON_FRACTION,
@@ -32,32 +42,6 @@ from analysis.triage.classify import (
     waxs_check,
 )
 from analysis.triage.inventory import read_run_table
-
-ON_DEX, OFF_SD, ON_SD = 1.3, 0.02, 0.05
-
-
-def partial(f):
-    """rel of a train carrying a fraction ``f`` of a full hit's droplet signal."""
-    return np.log10(1 + np.asarray(f) * (10**ON_DEX - 1))
-
-
-def mesh_run(rng, off, hit_fraction, n=800, edge_fraction=0.02, partial_fraction=0.03):
-    """log10(s/F) of one mesh run, and its true classes."""
-    n_on = int(hit_fraction * n)
-    n_edge = int(edge_fraction * n)
-    n_part = int(partial_fraction * n)
-    n_off = n - n_on - n_edge - n_part
-    x = np.concatenate([
-        off + OFF_SD * rng.standard_normal(n_off),
-        off + ON_DEX + ON_SD * rng.standard_normal(n_on),
-        off + rng.uniform(0.2, 0.5, n_edge),
-        off + partial(rng.uniform(0.15, 0.6, n_part)),
-    ])  # fmt: skip
-    truth = np.array(
-        ["off"] * n_off + ["on"] * n_on + ["edge"] * n_edge + ["partial"] * n_part
-    )
-    order = rng.permutation(n)
-    return x[order], truth[order]
 
 
 @pytest.fixture(scope="module")
@@ -223,39 +207,6 @@ def test_run_blocks_key_mesh_runs_by_attenuator_and_sample(tmp_path):
 # ── DAMNIT files ──────────────────────────────────────────────────────────────
 
 
-def write_damnit(path, saxs, *, n_frames=None, xgm=None, trans=None, waxs=None):
-    """agipd_saxs (train, pulse, q), xgm_intensity, total_transmission, jf1."""
-    n, p, nq = saxs.shape
-    tids = FIRST_TRAIN + np.arange(n, dtype=np.uint64)
-    q = np.linspace(0.08, 1.06, nq)
-    with h5py.File(path, "w") as f:
-        g = f.create_group("agipd_saxs")
-        g["trainId"], g["q"] = tids, q
-        g["pulseId"] = np.arange(p, dtype=np.uint64)
-        g["intensity"] = saxs.astype(np.float32)
-        g["n_frames"] = (np.ones((n, p)) if n_frames is None else n_frames).astype(
-            np.uint8
-        )
-        if waxs is not None:
-            j = f.create_group("jungfrau_waxs_jf1")
-            j["trainId"], j["q"] = tids, np.linspace(11.5, 23.7, waxs.shape[2])
-            j["cellId"] = np.arange(waxs.shape[1], dtype=np.uint16)
-            j["intensity"] = waxs.astype(np.float32)
-            j["n_frames"] = np.ones(waxs.shape[:2], np.uint8)
-    for group, name, values in (
-        ("xgm_intensity", "Energy", np.full(n, 500.0) if xgm is None else xgm),
-        ("total_transmission", "__xarray_dataarray_variable__",
-         np.full(n, 0.1) if trans is None else trans),
-    ):  # fmt: skip
-        xr.DataArray(
-            np.asarray(values, float),
-            dims="trainId",
-            coords={"trainId": tids},
-            name=name,
-        ).to_dataset().to_netcdf(path, group=group, mode="a", engine="h5netcdf")
-    return path, q
-
-
 def test_train_signals_average_the_band_over_present_frames(tmp_path):
     root = tmp_path / "amore"
     (root / "extracted_data").mkdir(parents=True)
@@ -284,65 +235,18 @@ def test_train_signals_average_the_band_over_present_frames(tmp_path):
     assert np.isnan(fresh.waxs_ring.values).all()  # no jf1 in the new file
 
 
-def test_hits_end_to_end_on_a_small_block(tmp_path):
-    rng = np.random.default_rng(6)
-    root = tmp_path / "amore"
-    (root / "extracted_data").mkdir(parents=True)
-    rows = []
-    for r in (120, 121, 122):
-        x, _ = mesh_run(rng, -4.3, 0.2, n=400)
-        level = 10.0**x  # s/F with F = 1 (xgm 10 × transmission 0.1)
-        saxs = np.broadcast_to(level[:, None, None], (400, 2, 30)).copy()
-        write_damnit(root / "extracted_data" / f"p10400_r{r}.h5", saxs,
-                     xgm=np.full(400, 10.0))  # fmt: skip
-        rows.append(run_row(r, scan_type="dmesh SSHEX", total_transmission=0.0123,
-                            pulses=350.0))  # fmt: skip
-    rows.append(run_row(423))
-    level = 10.0 ** np.r_[np.full(300, -3.0), np.full(20, -4.3), np.full(300, -3.0)]
-    write_damnit(root / "extracted_data" / "p10400_r423.h5",
-                 np.broadcast_to(level[:, None, None], (620, 2, 30)).copy(),
-                 xgm=np.full(620, 10.0))  # fmt: skip
-    write_sqlite(root / "runs.sqlite", rows)
-
-    h = hits(121, damnit_root=root, cache_dir=tmp_path / "cache")
+def test_hits_end_to_end_on_a_small_block(mesh_store, tmp_path):
+    h = hits(121, damnit_root=mesh_store, cache_dir=tmp_path / "cache")
     assert h["kind"] == "mesh" and h["block"] == "0.012|ferritin50_peg6k"
     assert 0.17 < h["train_ids"].size / 400 < 0.23
     assert set(np.unique(h["classes"].values)) <= {"on", "edge", "off"}
     assert (h["overlap"].sel(trainId=h["train_ids"]) >= ON_FRACTION).all()
-    s = hits(423, damnit_root=root, cache_dir=tmp_path / "cache")
+    s = hits(423, damnit_root=mesh_store, cache_dir=tmp_path / "cache")
     assert s["kind"] == "static" and s["overlap"] is None
     assert s["summary"]["n_off"] == 20
     assert s["train_ids"].size == 600
     with pytest.raises(LookupError):
-        hits(999, damnit_root=root, cache_dir=tmp_path / "cache")
-
-
-def in_memory(path):
-    """What DAMNIT hands a variable: agipd_saxs as the DataArray the variable
-    returned (``trainId``, ``pulseId``, ``q`` and ``n_frames`` as coordinates),
-    XGM and transmission as per-train arrays, jf1 likewise or None."""
-
-    def grid(g, frame_dim):
-        return xr.DataArray(
-            g["intensity"][()],
-            dims=("trainId", frame_dim, "q"),
-            coords={
-                "trainId": g["trainId"][()],
-                frame_dim: g[frame_dim][()],
-                "q": g["q"][()],
-                "n_frames": (("trainId", frame_dim), g["n_frames"][()]),
-            },
-            name="intensity",
-        )
-
-    with h5py.File(path, "r") as f:
-        saxs = grid(f["agipd_saxs"], "pulseId")
-        jf1 = (
-            grid(f["jungfrau_waxs_jf1"], "cellId") if "jungfrau_waxs_jf1" in f else None
-        )
-    xgm = xr.open_dataset(path, group="xgm_intensity").load().Energy
-    trans = xr.open_dataset(path, group="total_transmission").load()
-    return saxs, xgm, trans.__xarray_dataarray_variable__, jf1
+        hits(999, damnit_root=mesh_store, cache_dir=tmp_path / "cache")
 
 
 def test_signals_from_memory_equal_those_from_the_file(tmp_path):
@@ -361,19 +265,10 @@ def test_signals_from_memory_equal_those_from_the_file(tmp_path):
         np.testing.assert_array_equal(got[name].values, want[name].values, name)
 
 
-def test_hits_take_this_run_from_memory_and_skip_members_not_yet_stored(tmp_path):
-    rng = np.random.default_rng(6)
-    root = tmp_path / "amore"
-    (root / "extracted_data").mkdir(parents=True)
-    rows = []
-    for r in (120, 121, 122):
-        x, _ = mesh_run(rng, -4.3, 0.2, n=400)
-        saxs = np.broadcast_to((10.0**x)[:, None, None], (400, 2, 30)).copy()
-        write_damnit(root / "extracted_data" / f"p10400_r{r}.h5", saxs,
-                     xgm=np.full(400, 10.0))  # fmt: skip
-        rows.append(run_row(r, scan_type="dmesh SSHEX", total_transmission=0.0123,
-                            pulses=350.0))  # fmt: skip
-    write_sqlite(root / "runs.sqlite", rows)
+def test_hits_take_this_run_from_memory_and_skip_members_not_yet_stored(
+    mesh_store, tmp_path
+):
+    root = shutil.copytree(mesh_store, tmp_path / "amore")
     stored = hits(121, damnit_root=root, cache_dir=None)
 
     memory = in_memory(root / "extracted_data" / "p10400_r121.h5")
@@ -388,29 +283,12 @@ def test_hits_take_this_run_from_memory_and_skip_members_not_yet_stored(tmp_path
     assert fewer["kind"] == "mesh" and fewer["train_ids"].size > 0
 
 
-def _three_run_block(tmp_path):
-    rng = np.random.default_rng(7)
-    root = tmp_path / "amore"
-    (root / "extracted_data").mkdir(parents=True)
-    rows = []
-    for r in (120, 121, 122):
-        x, _ = mesh_run(rng, -4.3, 0.2, n=400)
-        saxs = np.broadcast_to((10.0**x)[:, None, None], (400, 2, 30)).copy()
-        write_damnit(root / "extracted_data" / f"p10400_r{r}.h5", saxs,
-                     xgm=np.full(400, 10.0))  # fmt: skip
-        rows.append(run_row(r, scan_type="dmesh SSHEX", total_transmission=0.0123,
-                            pulses=350.0))  # fmt: skip
-    write_sqlite(root / "runs.sqlite", rows)
-    return root
-
-
-def test_a_neighbour_being_written_is_waited_for_not_left_out(tmp_path, monkeypatch):
+def test_a_neighbour_being_written_is_waited_for_not_left_out(mesh_store, monkeypatch):
     """A block member's file that is unreadable at first (its own job is writing
     it) is read again, and the block is classified with every member."""
     from analysis.triage import classify
 
-    root = _three_run_block(tmp_path)
-    want = hits(121, damnit_root=root, cache_dir=None)
+    want = hits(121, damnit_root=mesh_store, cache_dir=None)
     monkeypatch.setattr(classify, "MEMBER_WAIT_S", 0.0)
     real, calls = classify.train_signals, {"n": 0}
 
@@ -421,16 +299,15 @@ def test_a_neighbour_being_written_is_waited_for_not_left_out(tmp_path, monkeypa
         return real(run, **kwargs)
 
     monkeypatch.setattr(classify, "train_signals", flaky)
-    got = hits(121, damnit_root=root, cache_dir=None)
+    got = hits(121, damnit_root=mesh_store, cache_dir=None)
     assert calls["n"] == 2 and got["summary"]["block_missing"] == []
     np.testing.assert_array_equal(got["train_ids"], want["train_ids"])
 
 
-def test_a_neighbour_that_stays_unreadable_fails_the_run(tmp_path, monkeypatch):
+def test_a_neighbour_that_stays_unreadable_fails_the_run(mesh_store, monkeypatch):
     """Not "missing": leaving a run out would change the cut of the whole block."""
     from analysis.triage import classify
 
-    root = _three_run_block(tmp_path)
     monkeypatch.setattr(classify, "MEMBER_WAIT_S", 0.0)
     real = classify.train_signals
 
@@ -441,4 +318,4 @@ def test_a_neighbour_that_stays_unreadable_fails_the_run(tmp_path, monkeypatch):
 
     monkeypatch.setattr(classify, "train_signals", broken)
     with pytest.raises(ValueError, match="no q bin"):
-        hits(121, damnit_root=root, cache_dir=None)
+        hits(121, damnit_root=mesh_store, cache_dir=None)

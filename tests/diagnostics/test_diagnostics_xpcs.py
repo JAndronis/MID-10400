@@ -56,7 +56,7 @@ def report_for(m) -> dict:
 
 
 def test_snr_with_a_beta_from_a_report(root, tmp_path):
-    out = xpcs_snr(RUN, {}, output_root=root)
+    out = xpcs_snr(RUN, {}, output_root=root, n_blocks=5)
     m = out["measurement"]
     report = tmp_path / "report.json"
     given = {
@@ -67,7 +67,7 @@ def test_snr_with_a_beta_from_a_report(root, tmp_path):
         }
     }  # fmt: skip
     report.write_text(json.dumps(given))
-    out = xpcs_snr(RUN, load_beta(report), output_root=root)
+    out = xpcs_snr(RUN, load_beta(report), output_root=root, n_blocks=5)
     rois = out["rois"]
     expected = (
         0.03 * m.kbar[0] * np.sqrt(m.npix[0] * (m.n_frames - 1) * m.phi[0] * m.n_usable)
@@ -86,7 +86,7 @@ def test_snr_with_a_beta_from_a_report(root, tmp_path):
 
 
 def test_the_default_beta_is_the_reference_table(root):
-    out = xpcs_snr(RUN, output_root=root)
+    out = xpcs_snr(RUN, output_root=root, n_blocks=5)
     rois = out["rois"]
     for q, (value, _, _) in ES_REFERENCE_BETA.items():  # the fake has ES rings
         row = rois[np.isclose(rois.roi_q_A, q, atol=1e-6)]
@@ -97,7 +97,7 @@ def test_the_default_beta_is_the_reference_table(root):
 
 
 def test_an_unknown_beta_gives_no_verdict(root):
-    out = xpcs_snr(RUN, {}, output_root=root)
+    out = xpcs_snr(RUN, {}, output_root=root, n_blocks=5)
     assert out["summary"]["extractable"] is None
     assert out["summary"]["beta_known"] is False
     assert out["rois"].snr_run.isna().all()
@@ -146,14 +146,14 @@ def test_kbar_rois_over_given_hits(root):
 
 
 def test_the_score_is_taken_over_the_hits_in_the_file(root):
-    score = xpcs_score(RUN, output_root=root)
+    score = xpcs_score(RUN, output_root=root, n_blocks=5)
     assert score["n_hits"] == 60  # the failed hit is counted, and accounted for
     assert score["hits"]["n_usable"] == 59
     assert score["hits"]["by_status"]["NO_FRAMES"] == 1
     assert score["n_rois_kbar_ok"] == 4
     assert score["n_plain_rois_kbar_ok"] == 3
     assert (score["n_rois"], score["n_plain_rois"]) == (7, 4), "the file's ES rings"
-    expected = measure_run(RUN, read(10400, RUN, output_root=root))
+    expected = measure_run(RUN, read(10400, RUN, output_root=root), n_blocks=5)
     assert score["snr"]["n_usable"] == expected.n_usable > 0
 
 
@@ -166,7 +166,7 @@ def test_a_run_with_no_usable_hit_has_no_score(tmp_path):
             FIRST_TRAIN + 1: int(FrameStatus.NO_FRAMES),
         },
     )
-    score = xpcs_score(RUN, output_root=tmp_path)
+    score = xpcs_score(RUN, output_root=tmp_path, n_blocks=5)
     assert score["n_hits"] == 2
     assert score["kbar"] is None and score["snr"] is None
     assert score["n_rois_kbar_ok"] is None

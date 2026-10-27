@@ -68,7 +68,7 @@ def nb_frames(rng, n_frames, n_rings=2, beta=BETA, kbar=KBAR, hot=0, n_pix=N_PIX
 
 @pytest.fixture(scope="module")
 def frames():
-    return nb_frames(np.random.default_rng(3), 1500)
+    return nb_frames(np.random.default_rng(3), 800)
 
 
 def test_the_weighted_contrast_recovers_beta(frames):
