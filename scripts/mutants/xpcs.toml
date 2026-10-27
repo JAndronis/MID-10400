@@ -91,3 +91,242 @@ file = "src/analysis/xpcs/result.py"
 old = "if int(f[\"hits/partner\"][row]) != sums.partner_id:"
 new = "if False:"
 tests = ["tests/xpcs"]
+
+# Guards for the behaviours of tests that were merged or cut, so a cut that
+# loses one shows here.
+
+[[mutant]]
+name = "xpcs_legacy_ttcf_adds_the_baseline"
+file = "src/analysis/xpcs/figures.py"
+old = 'out[start : start + chunk] = part["TTCF_raw"].values - part["TTCF_off"].values'
+new = 'out[start : start + chunk] = part["TTCF_raw"].values + part["TTCF_off"].values'
+tests = ["tests/xpcs/test_xpcs_figures.py"]
+
+[[mutant]]
+name = "xpcs_correction_curves_swapped"
+file = "src/analysis/xpcs/figures.py"
+old = 'curves = (g2["g2"].values, g2["baseline"].values, g2["c2"].values)'
+new = 'curves = (g2["c2"].values, g2["baseline"].values, g2["g2"].values)'
+tests = ["tests/xpcs/test_xpcs_figures.py"]
+
+[[mutant]]
+name = "xpcs_outlier_figure_shows_always_flagged"
+file = "src/analysis/xpcs/figures.py"
+old = "before = q_curves(det, dq_A=dq_A, pixels=correlated)"
+new = "before = q_curves(det, dq_A=dq_A)"
+tests = ["tests/xpcs/test_xpcs_figures.py"]
+
+[[mutant]]
+name = "xpcs_detector_mean_first_trains"
+file = "src/analysis/xpcs/figures.py"
+old = "usable = usable[np.linspace(0, usable.size - 1, max_trains).astype(int)]"
+new = "usable = usable[:max_trains]"
+tests = ["tests/xpcs/test_xpcs_figures.py"]
+
+[[mutant]]
+name = "xpcs_detector_mean_flagged_in_any_train"
+file = "src/analysis/xpcs/figures.py"
+old = "always_flagged &= photons.flagged_any(envelope.size)[good]"
+new = "always_flagged |= photons.flagged_any(envelope.size)[good]"
+tests = ["tests/xpcs/test_xpcs_figures.py"]
+
+[[mutant]]
+name = "xpcs_detector_mean_any_envelope"
+file = "src/analysis/xpcs/figures.py"
+old = 'if sha256_of_array(envelope) != hits.attrs.get("envelope_sha256"):'
+new = "if False:"
+tests = ["tests/xpcs/test_xpcs_figures.py"]
+
+[[mutant]]
+name = "xpcs_intensity_outliers_inverted"
+file = "src/analysis/xpcs/figures.py"
+old = "bad = np.abs(norm - median) / median > out_thresh"
+new = "bad = np.abs(norm - median) / median <= out_thresh"
+tests = ["tests/xpcs/test_xpcs_figures.py"]
+
+[[mutant]]
+name = "xpcs_saxs_figure_ignores_the_store"
+file = "src/analysis/xpcs/figures.py"
+old = "saxs = saxs_rings(hits) if det is None else saxs_curves(det)"
+new = "saxs = saxs_rings(hits)"
+tests = ["tests/xpcs/test_xpcs_figures.py"]
+
+[[mutant]]
+name = "xpcs_fit_wrapper_raises"
+file = "src/analysis/xpcs/damnit.py"
+old = "        return figures.figure_g2_fit(hits)\n    except ValueError as error:"
+new = "        return figures.figure_g2_fit(hits)\n    except KeyError as error:"
+tests = ["tests/xpcs/test_xpcs_figures.py"]
+
+[[mutant]]
+name = "xpcs_g2_wrapper_drops_the_rep_rate"
+file = "src/analysis/xpcs/damnit.py"
+old = "return figures.figure_g2(_open(proposal, run_no, rep_rate_mhz, overrides))"
+new = "return figures.figure_g2(_open(proposal, run_no, None, overrides))"
+tests = ["tests/xpcs/test_xpcs_figures.py"]
+
+[[mutant]]
+name = "xpcs_open_accepts_unfinished"
+file = "src/analysis/xpcs/damnit.py"
+old = "    if unfinished.any():\n        raise IncompleteRun"
+new = "    if False:\n        raise IncompleteRun"
+tests = ["tests/xpcs/test_xpcs_damnit.py"]
+
+[[mutant]]
+name = "xpcs_cell_amber_is_green"
+file = "src/analysis/xpcs/damnit.py"
+old = '''    elif cov.n_usable < cov.n_hits:
+        colour = COLORS["warning"]'''
+new = '''    elif cov.n_usable < cov.n_hits:
+        colour = COLORS["good"]'''
+tests = ["tests/xpcs/test_xpcs_damnit.py"]
+
+[[mutant]]
+name = "xpcs_pass_ignores_overrides"
+file = "src/analysis/xpcs/damnit.py"
+old = "def config_for(proposal: int, run_no: int, **overrides: Any) -> XpcsConfig:"
+new = "def config_for(proposal: int, run_no: int, **_ignored: Any) -> XpcsConfig:\n    overrides = {}"
+tests = ["tests/xpcs/test_xpcs_damnit.py"]
+
+[[mutant]]
+name = "xpcs_store_final_train_replaced"
+file = "src/analysis/xpcs/store.py"
+old = """                ABSENT,
+            ):
+                return False
+            del trains[name]
+        return True"""
+new = """                ABSENT,
+            ):
+                pass
+            del trains[name]
+        return True"""
+tests = ["tests/xpcs/test_xpcs_store_io.py", "tests/xpcs/test_xpcs_store_blocks.py"]
+
+[[mutant]]
+name = "xpcs_store_status_missing_is_ok"
+file = "src/analysis/xpcs/store.py"
+old = 'out[i] = group.attrs.get("status", FrameStatus.NOT_PROCESSED)'
+new = 'out[i] = group.attrs.get("status", FrameStatus.OK)'
+tests = ["tests/xpcs/test_xpcs_store_io.py", "tests/xpcs/test_xpcs_store_blocks.py"]
+
+[[mutant]]
+name = "xpcs_store_mark_overwrites_final"
+file = "src/analysis/xpcs/store.py"
+old = """                ABSENT,
+            ):
+                return
+            del trains[name]"""
+new = """                ABSENT,
+            ):
+                pass
+            del trains[name]"""
+tests = ["tests/xpcs/test_xpcs_store_io.py", "tests/xpcs/test_xpcs_store_blocks.py"]
+
+[[mutant]]
+name = "xpcs_store_reader_writes"
+file = "src/analysis/xpcs/store.py"
+old = """        if not self.writable:
+            raise PermissionError"""
+new = """        if False:
+            raise PermissionError"""
+tests = ["tests/xpcs/test_xpcs_store_io.py", "tests/xpcs/test_xpcs_store_blocks.py"]
+
+[[mutant]]
+name = "xpcs_store_any_schema"
+file = "src/analysis/xpcs/store.py"
+old = "            if schema != SCHEMA:"
+new = "            if False:"
+tests = ["tests/xpcs/test_xpcs_store_io.py", "tests/xpcs/test_xpcs_store_blocks.py"]
+
+[[mutant]]
+name = "xpcs_store_keeps_merged_block_file"
+file = "src/analysis/xpcs/store.py"
+old = """                    raise RuntimeError(f"{name} did not read back from {block_file}")
+        block_file.unlink()"""
+new = """                    raise RuntimeError(f"{name} did not read back from {block_file}")"""
+tests = ["tests/xpcs/test_xpcs_store_io.py", "tests/xpcs/test_xpcs_store_blocks.py"]
+
+[[mutant]]
+name = "xpcs_store_drops_the_sequence"
+file = "src/analysis/xpcs/store.py"
+old = '    group.attrs["sequence"] = photons.sequence'
+new = '    group.attrs["sequence"] = 0'
+tests = ["tests/xpcs/test_xpcs_store_io.py", "tests/xpcs/test_xpcs_store_blocks.py"]
+
+[[mutant]]
+name = "xpcs_unextracted_trains_merged_anyway"
+file = "src/analysis/xpcs/run.py"
+old = "if extracted.unfinished.size and not cfg.allow_incomplete:"
+new = "if False:"
+tests = ["tests/xpcs/test_xpcs_run.py"]
+
+[[mutant]]
+name = "xpcs_overwrite_moves_the_hash"
+file = "src/analysis/xpcs/config.py"
+old = """        "allow_incomplete",
+        "overwrite",
+    }"""
+new = """        "allow_incomplete",
+    }"""
+tests = ["tests/xpcs/test_xpcs_config.py"]
+
+[[mutant]]
+name = "xpcs_unsorted_hits_accepted"
+file = "src/analysis/xpcs/hits.py"
+old = "            if (ids[1:] < ids[:-1]).any():"
+new = "            if False:"
+tests = ["tests/xpcs/test_xpcs_hits.py"]
+
+[[mutant]]
+name = "xpcs_float_hits_truncated"
+file = "src/analysis/xpcs/hits.py"
+old = "            if not np.array_equal(as_int, ids):"
+new = "            if False:"
+tests = ["tests/xpcs/test_xpcs_hits.py"]
+
+[[mutant]]
+name = "xpcs_es_first_train_without_baseline"
+file = "src/analysis/xpcs/kernel.py"
+old = """            off[ring] = s_on[ring][:, None]
+            s_off_cur[ring] = s_on[ring]"""
+new = """            off[ring] = 0
+            s_off_cur[ring] = s_on[ring]"""
+tests = ["tests/xpcs/test_xpcs_kernel.py"]
+
+[[mutant]]
+name = "xpcs_es_chains_across_files"
+file = "src/analysis/xpcs/kernel.py"
+old = "same_file = last is not None and sequence[last] == sequence[i]"
+new = "same_file = last is not None"
+tests = ["tests/xpcs/test_xpcs_partners.py"]
+
+[[mutant]]
+name = "xpcs_delta_steps_never_restart"
+file = "src/analysis/xpcs/store.py"
+old = "    step[starts] = pixel[starts]\n"
+new = "    step[starts[:1]] = pixel[starts[:1]]\n"
+tests = ["tests/xpcs/test_xpcs_store.py"]
+
+[[mutant]]
+name = "xpcs_ring_masks_may_overlap"
+file = "src/analysis/xpcs/rings.py"
+old = "        if (flat.sum(axis=0) > 1).any():"
+new = "        if False:"
+tests = ["tests/xpcs/test_xpcs_rings.py"]
+
+[[mutant]]
+name = "xpcs_static_bad_stays_in_the_rings"
+file = "src/analysis/xpcs/rings.py"
+old = "    label[np.asarray(static_bad, dtype=bool)[envelope.pixels]] = -1"
+new = "    pass"
+tests = ["tests/xpcs/test_xpcs_rings.py"]
+
+[[mutant]]
+name = "xpcs_outlier_settings_not_hashed"
+file = "src/analysis/xpcs/config.py"
+old = """                "outlier": None
+                if self.outlier_thresholds is None"""
+new = """                "outlier": None
+                if True"""
+tests = ["tests/xpcs/test_xpcs_config.py", "tests/xpcs/test_xpcs_outliers.py"]
