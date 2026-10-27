@@ -33,7 +33,7 @@ from analysis.common.cpu import (
 from analysis.common.lock import OutputLock, lock_path, output_lock
 from analysis.common.plan import evenly_spaced
 from analysis.common.run import base_provenance, fan_out
-from analysis.common.writer import IncompleteRun, pooled_per_train, status_counts
+from analysis.common.writer import IncompleteRun, status_counts
 from analysis.waxs import worker as worker_module
 from analysis.waxs.cells import (
     CellAccumulator,
@@ -52,9 +52,9 @@ from analysis.waxs.writer import JungfrauWaxsWriter, per_cell
 __all__ = ["REDUCERS", "run_jungfrau_waxs"]
 
 #: What ``run_jungfrau_waxs`` may return. ``per_cell`` is the (trainId, cellId,
-#: q) grid the DAMNIT variable stores; ``pooled`` is the per-train I(q);
-#: ``none`` skips the reduction for a caller that only wants the file written.
-REDUCERS = ("pooled", "per_cell", "none")
+#: q) grid the DAMNIT variable stores; ``none`` skips the reduction for a caller
+#: that only wants the file written.
+REDUCERS = ("per_cell", "none")
 
 log = logging.getLogger(__name__)
 
@@ -186,11 +186,7 @@ def _from_file(cfg: JungfrauWaxsConfig, path: Path, reduce: str) -> Any:
         summary = status_counts(handle["frames/status"][:], nonzero_only=True)
         lit = tuple(int(cell) for cell in handle["cells/lit"][:])
         data_check = json.loads(handle["provenance"].attrs.get("data_check", "{}"))
-        reduced = None
-        if reduce == "pooled":
-            reduced = pooled_per_train(handle)
-        elif reduce == "per_cell":
-            reduced = per_cell(handle)
+        reduced = per_cell(handle) if reduce == "per_cell" else None
     if cfg.expected_lit_cells is not None and lit != tuple(cfg.expected_lit_cells):
         raise UnexpectedLitCells(
             f"{path} holds cells {list(lit)}, the config expects "
@@ -339,11 +335,7 @@ def _integrate(
         summary = out.status_summary()
         data_check = out.data_check_summary()
         blocking = _blocking(cfg, summary)
-        reduced = None
-        if reduce == "pooled":
-            reduced = out.pooled_per_train()
-        elif reduce == "per_cell":
-            reduced = out.per_cell()
+        reduced = out.per_cell() if reduce == "per_cell" else None
 
     if data_check:
         # Logged whether or not it raises, because a tolerated loss of pixels

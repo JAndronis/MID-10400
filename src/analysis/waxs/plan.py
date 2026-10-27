@@ -122,7 +122,6 @@ def build_plan(
         )
 
     detector_trains = {int(tid): int(c) for tid, c in counts.items()}
-    modules_present = _modules_present(dc, det)
 
     records: list[TrainRecord] = []
     row = 0
@@ -131,15 +130,9 @@ def build_plan(
         entries = detector_trains.get(train_id)
         if not entries:
             # No rows of its own. The offset is where the next train starts, so
-            # the ledger stays monotonic. With one module per detector only
-            # NO_FRAMES can occur, but MISSING_MODULES is kept so the statuses
-            # mean what they mean in the AGIPD ledger.
-            status = (
-                FrameStatus.NO_FRAMES
-                if modules_present.get(train_id, 0) == 0
-                else FrameStatus.MISSING_MODULES
-            )
-            records.append(TrainRecord(train_id, 0, row, status))
+            # the ledger stays monotonic. The detector is one module, so a train
+            # without an entry has no frames rather than missing modules.
+            records.append(TrainRecord(train_id, 0, row, FrameStatus.NO_FRAMES))
             continue
         records.append(TrainRecord(train_id, rows_per_train, row, FrameStatus.OK))
         row += rows_per_train
@@ -164,28 +157,6 @@ def build_plan(
         detector_name=det.detector_name,
         checks=run_checks(control_dc, det, counts, cfg, lit_cells),
     )
-
-
-def _modules_present(dc: Any, det: Any) -> dict[int, int]:
-    """How many detector modules wrote at least one entry, per train.
-
-    ``det.frame_counts`` cannot answer this, because ``JUNGFRAU`` has already
-    dropped every train below ``min_modules``.
-    """
-    import pandas as pd
-
-    per_module = (
-        pd.DataFrame(
-            {
-                src: dc.get_data_counts(src, det._main_data_key)
-                for src in det.source_to_modno
-            }
-        )
-        .fillna(0)
-        .astype(np.uint64)
-    )
-    present = (per_module > 0).sum(axis=1)
-    return {int(tid): int(value) for tid, value in present.items()}
 
 
 def run_checks(

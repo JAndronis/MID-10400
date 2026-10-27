@@ -57,14 +57,6 @@ tests = ["tests/waxs/test_waxs_run.py"]
 expect = "survived"  # sigma_read enters no stored number; wave 3 deletes the error model
 
 [[mutant]]
-name = "waxs_modules_present_empty"
-file = "src/analysis/waxs/plan.py"
-old = "    modules_present = _modules_present(dc, det)"
-new = "    modules_present = {}"
-tests = ["tests/waxs/test_waxs_plan.py"]
-expect = "survived"  # unreachable on a one-module detector; wave 3 deletes it
-
-[[mutant]]
 name = "waxs_label_mismatch_counted_as_refused"
 file = "src/analysis/waxs/writer.py"
 old = "        refused = status == FrameStatus.DATA_CHECK_FAILED"
@@ -84,14 +76,6 @@ file = "src/analysis/waxs/complete.py"
 old = "RTOL = 1e-6"
 new = "RTOL = 0.5"
 tests = ["tests/waxs/test_waxs_integrity.py"]
-
-[[mutant]]
-name = "waxs_lit_count_guard_dropped"
-file = "src/analysis/waxs/worker.py"
-old = "        if expected != len(lit):"
-new = "        if False:"
-tests = ["tests/waxs/test_waxs_run.py", "tests/waxs/test_waxs_writer.py"]
-expect = "survived"  # unreachable: build_plan gives every train len(lit) rows; wave 3 deletes it
 
 [[mutant]]
 name = "waxs_provenance_note_reworded"
@@ -219,8 +203,8 @@ tests = ["tests/waxs/test_waxs_run.py::test_a_train_whose_own_rows_name_another_
 [[mutant]]
 name = "waxs_zero_entry_train_given_rows"
 file = "src/analysis/waxs/plan.py"
-old = "            records.append(TrainRecord(train_id, 0, row, status))\n            continue"
-new = "            records.append(TrainRecord(train_id, rows_per_train, row, status))\n            row += rows_per_train\n            continue"
+old = "            records.append(TrainRecord(train_id, 0, row, FrameStatus.NO_FRAMES))\n            continue"
+new = "            records.append(TrainRecord(train_id, rows_per_train, row, FrameStatus.NO_FRAMES))\n            row += rows_per_train\n            continue"
 tests = ["tests/waxs/test_waxs_plan.py"]
 
 [[mutant]]

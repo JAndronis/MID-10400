@@ -165,15 +165,6 @@ def _empty_result(block: Block, npt: int) -> BlockResult:
     )
 
 
-def _squeeze_module(array: np.ndarray, name: str) -> np.ndarray:
-    """Drop the module and train axes of a one-module, one-train read."""
-    if array.shape[0] != 1 or array.shape[1] != 1:
-        raise ValueError(
-            f"{name} has shape {array.shape}; expected one module and one train"
-        )
-    return array[0, 0]
-
-
 def process_block(block: Block) -> BlockResult:
     """Read and integrate one block.
 
@@ -236,18 +227,14 @@ def process_block(block: Block) -> BlockResult:
             result.status[rows] = FrameStatus.LABEL_MISMATCH
             continue
 
-        frame_data = _squeeze_module(data, "data.adc")
-        frame_mask = _squeeze_module(mask, "data.mask")
-        cells = np.asarray(_squeeze_module(cell_ids, "data.memoryCell")).reshape(-1)
+        frame_data, frame_mask = data[0, 0], mask[0, 0]
+        cells = np.asarray(cell_ids).reshape(-1)
 
         positions = {int(cell): index for index, cell in enumerate(cells.tolist())}
         if len(positions) != cells.size or not set(lit) <= set(positions):
             # Repeated or missing memory cells, so the rows this train owns cannot
             # be filled by label. Filling them by array position could put a
             # frame on the wrong cell.
-            result.status[rows] = FrameStatus.LABEL_MISMATCH
-            continue
-        if expected != len(lit):
             result.status[rows] = FrameStatus.LABEL_MISMATCH
             continue
 
