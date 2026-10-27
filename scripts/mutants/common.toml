@@ -41,8 +41,7 @@ old = "        post_init()"
 new = "        pass"
 tests = ["tests/common/test_config_pickle.py"]
 
-# A field swap that leaves the hash alone (pickling is by name). No test should
-# fire; the field-order pins still do, until they are deleted.
+# A field swap that leaves the hash alone (pickling is by name): no test may fire.
 [[mutant]]
 name = "harmless_saxs_field_swap"
 file = "src/analysis/saxs/config.py"
@@ -57,10 +56,9 @@ tests = [
     "tests/common/test_config_pickle.py",
     "tests/common/test_config_hash.py",
 ]
-expect = "killed"
+expect = "survived"
 
-# A new public helper. No test should fire; the __all__ pins still do, until they
-# are deleted.
+# A new public helper: no test may fire.
 [[mutant]]
 name = "harmless_new_export"
 file = "src/analysis/common/status.py"
@@ -71,7 +69,7 @@ new = '''__all__ = ["UNFINISHED", "DataCheckFailed", "FrameStatus", "is_ok"]
 def is_ok(code):
     return code == 0'''
 tests = ["tests/common/test_pinned_digests.py"]
-expect = "killed"
+expect = "survived"
 
 # ── output lock ──────────────────────────────────────────────────────────────
 [[mutant]]
@@ -348,3 +346,15 @@ file = "src/analysis/common/cpu.py"
 old = "groups.add(siblings.strip())"
 new = "groups.add(str(cpu))"
 tests = ["tests/common/test_cpu.py"]
+
+[[mutant]]
+name = "wrapper_gains_logic"
+file = "src/amore/context.py"
+old = '''        from analysis.saxs import damnit
+
+        return damnit.agipd_saxs_from_file(proposal, run_no)'''
+new = '''        from analysis.saxs import damnit
+
+        run_no = int(run_no)
+        return damnit.agipd_saxs_from_file(proposal, run_no)'''
+tests = ["tests/test_context.py"]

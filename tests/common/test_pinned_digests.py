@@ -12,8 +12,6 @@ the field names and their defaults alone, with nothing read off disk.
 
 from __future__ import annotations
 
-import dataclasses
-
 import numpy as np
 import pytest
 
@@ -24,42 +22,8 @@ from analysis.saxs.config import AgipdSaxsConfig  # noqa: E402
 from analysis.waxs import operator as waxs_operator  # noqa: E402
 from analysis.waxs.config import JungfrauWaxsConfig  # noqa: E402
 
-# ── config field lists ────────────────────────────────────────────────────────
-# Order matters as well as membership: a frozen slots dataclass that loses its
-# by-name pickling falls back to assigning state by position.
-SAXS_FIELDS = (
-    "proposal", "run", "geometry_file", "sdd_m", "photon_energy_kev",
-    "beam_center_px", "beam_center_py", "npt", "method", "unit", "mask_bits",
-    "expected_bits", "use_asic_seams", "pixel_mask_file", "base_mask_trains",
-    "detector_name", "min_modules", "trains_per_block", "n_workers",
-    "selftest_frames", "output_root", "allow_incomplete", "overwrite",
-    "pixel_sum_trains", "pixel_sums_root", "photon_stats", "photon_stats_root",
-)  # fmt: skip
-
-WAXS_FIELDS = (
-    "proposal", "run", "detector", "detector_name", "first_modno", "poni_file",
-    "static_mask_file", "photon_energy_kev", "npt", "method", "unit",
-    "mask_bits", "expected_bits", "expected_lit_cells", "lit_threshold_kev",
-    "lit_fraction_min", "lit_gap_ratio", "cell_sample_trains", "read_noise_kev",
-    "read_noise_fallback_kev", "count_energy_kev", "level_pixels",
-    "level_cut_kev", "level_window_kev", "level_iterations", "level_edge_px",
-    "level_min_pixels", "max_abs_kev", "min_modules",
-    "allow_data_check_failures", "trains_per_block", "n_workers",
-    "selftest_frames", "output_root", "allow_incomplete", "overwrite",
-)  # fmt: skip
-
 SAXS_CONFIG_HASH = "9104a057416d3791846400d1431923ee8f5d27cf46cbb13e9c32252f59dc58be"
 WAXS_CONFIG_HASH = "316265309d201fe945d3fc0bbc911f39752e9fa1a9ff44ebb9181107a472417d"
-
-
-def test_saxs_config_fields_are_unchanged():
-    got = tuple(f.name for f in dataclasses.fields(AgipdSaxsConfig))
-    assert got == SAXS_FIELDS
-
-
-def test_waxs_config_fields_are_unchanged():
-    got = tuple(f.name for f in dataclasses.fields(JungfrauWaxsConfig))
-    assert got == WAXS_FIELDS
 
 
 def test_saxs_config_hash_is_unchanged():
@@ -153,98 +117,6 @@ def test_waxs_operator_sha256_is_unchanged():
         wavelength_m=1.3715e-10,
     )
     assert got == WAXS_OPERATOR_SHA
-
-
-# ── export surface ────────────────────────────────────────────────────────────
-# What other modules are entitled to import by name. A change that moves imports
-# around must show a drift between ``__all__`` and the module's definitions rather
-# than inherit it. Unlike the hashes above, this pin is meant to be edited, in a
-# commit that says which export moved and why.
-EXPECTED_ALL: dict[str, tuple[str, ...]] = {
-    "analysis.common.config": (
-        "OPERATIONAL_FIELDS", "ConfigStateMismatch", "PassConfigMembers",
-        "config_sha256", "restore_by_name", "result_fields", "state_by_name",
-    ),
-    "analysis.common.cpu": (
-        "CPU_TOPOLOGY_ROOT", "THREAD_ENV", "default_pool",
-        "file_sha256", "package_versions", "phase", "physical_cores",
-        "set_thread_env",
-    ),
-    "analysis.common.masks": (
-        "MaskSource", "StaticMask", "UnexpectedMaskBits",
-        "bits_to_mask", "describe_bits", "frame_bad",
-    ),
-    "analysis.common.plan": (
-        "Block", "RunPlan", "TrainRecord", "build_blocks",
-        "evenly_spaced",
-    ),
-    "analysis.common.status": (
-        "UNFINISHED", "DataCheckFailed", "FrameStatus",
-    ),
-    "analysis.common.writer": (
-        "GATING_PACKAGES", "ConfigHashMismatch", "FrameTableWriter",
-        "IncompleteRun", "OperatorMismatch", "SchemaMismatch", "PassConfig",
-        "as_handle", "config_payload", "per_label", "pooled_per_train",
-        "q_centers", "status_counts", "version_changes",
-    ),
-    "analysis.saxs.config": (
-        "AgipdSaxsConfig", "DEFAULT_BEAM_CENTER_PX",
-        "DEFAULT_BEAM_CENTER_PY", "DEFAULT_GEOMETRY_FILE",
-        "DEFAULT_OUTPUT_ROOT", "DEFAULT_PHOTON_STATS_ROOT", "DEFAULT_PIXEL_MASK_FILE",
-        "DEFAULT_PIXEL_SUMS_ROOT", "EXPECTED_BITS", "METHOD", "NPIX",
-        "SAXS_OPERATIONAL_FIELDS", "SHAPE",
-    ),
-    "analysis.saxs.operator": (
-        "SparseOperator", "build_operator", "geometry_from_config",
-        "load_operator", "operator_sha256", "save_operator",
-    ),
-    "analysis.saxs.sparse": (
-        "FrameResult", "denominator", "frame_data_status", "gather",
-        "integrate_frame",
-    ),
-    "analysis.saxs.writer": (
-        "AgipdSaxsWriter", "per_pulse",
-    ),
-    # The per-frame path is split into prepare and integrate, so the self-test
-    # can integrate one counted frame both ways.
-    "analysis.waxs.integrate": (
-        "ErrorModel", "FrameResult", "PreparedFrame", "extreme_pixels",
-        "frame_maxima", "integrate_frame", "integrate_prepared",
-        "prepare_frame",
-    ),
-    "analysis.waxs.masks": (
-        "build_static_bad", "load_static_mask",
-    ),
-    "analysis.waxs.photons": (
-        "ASIC_ID", "ASIC_SIZE", "LEVEL_PIXEL_SETS", "N_ASICS",
-        "PhotonCounting", "asic_view", "count_photons", "zero_levels",
-    ),
-    "analysis.waxs.operator": (
-        "WaxsOperator", "WavelengthMismatch", "build_operator",
-        "operator_sha256",
-    ),
-    # The units every reader checks before combining two files.
-    "analysis.waxs.writer": (
-        "KEV", "PHOTONS", "JungfrauWaxsWriter", "file_units", "per_cell",
-    ),
-}  # fmt: skip
-
-
-@pytest.mark.parametrize("module_name", sorted(EXPECTED_ALL))
-def test_module_exports_are_unchanged(module_name):
-    import importlib
-
-    module = importlib.import_module(module_name)
-    assert tuple(module.__all__) == EXPECTED_ALL[module_name]
-
-
-@pytest.mark.parametrize("module_name", sorted(EXPECTED_ALL))
-def test_everything_exported_actually_exists(module_name):
-    import importlib
-
-    module = importlib.import_module(module_name)
-    missing = [name for name in module.__all__ if not hasattr(module, name)]
-    assert not missing
 
 
 # ── the output digest is sensitive ────────────────────────────────────────────

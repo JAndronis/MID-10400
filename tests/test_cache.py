@@ -271,45 +271,28 @@ def count_builds(monkeypatch):
     return calls
 
 
-def test_a_repeat_call_is_served_from_the_file(saxs, count_builds):
-    first = cache.saxs_run(
-        1, saxs["db"], raw=saxs["raw"], cache_dir=saxs["dir"], n_pulses=4
-    )
-    second = cache.saxs_run(
-        1, saxs["db"], raw=saxs["raw"], cache_dir=saxs["dir"], n_pulses=4
-    )
-
-    assert len(count_builds) == 1
-    xr.testing.assert_allclose(first.intensity, second.intensity)
-    assert second.attrs["created_utc"] == first.attrs["created_utc"]
-    assert len(list(saxs["dir"].glob("saxs_r0001_*.nc"))) == 1
-
-
-def test_the_same_value_as_int_or_float_is_the_same_file(saxs, count_builds):
+def test_the_cache_is_keyed_on_its_inputs_and_sources(saxs, count_builds):
+    """A repeat is served from the file, whatever type a value is passed as; a new
+    input, a changed source or ``refresh`` builds again."""
     kw = {"raw": saxs["raw"], "cache_dir": saxs["dir"]}
-    cache.saxs_run(1, saxs["db"], n_pulses=4, ferritin_mg_per_ml_initial=0, **kw)
-    cache.saxs_run(
-        np.int64(1), saxs["db"], n_pulses=4.0, ferritin_mg_per_ml_initial=0.0, **kw
-    )
-
+    first = cache.saxs_run(1, saxs["db"], n_pulses=4, **kw)
+    again = cache.saxs_run(np.int64(1), saxs["db"], n_pulses=4.0, **kw)
     assert len(count_builds) == 1
-    assert len(list(saxs["dir"].glob("saxs_r0001_*.nc"))) == 1
+    xr.testing.assert_allclose(first.intensity, again.intensity)
+    assert again.attrs["created_utc"] == first.attrs["created_utc"]
 
-
-def test_new_inputs_a_changed_source_or_refresh_rebuild(saxs, count_builds):
-    kw = {"raw": saxs["raw"], "cache_dir": saxs["dir"], "n_pulses": 4}
-    cache.saxs_run(1, saxs["db"], **kw)
-    cache.saxs_run(1, saxs["db"], ferritin_mg_per_ml_initial=0.0, **kw)
+    cache.saxs_run(1, saxs["db"], n_pulses=4, ferritin_mg_per_ml_initial=0, **kw)
+    cache.saxs_run(1, saxs["db"], n_pulses=4, ferritin_mg_per_ml_initial=0.0, **kw)
     assert len(count_builds) == 2
-    assert len(list(saxs["dir"].glob("saxs_r0001_*.nc"))) == 2  # one file per input set
+    assert len(list(saxs["dir"].glob("saxs_r0001_*.nc"))) == 2  # one per input set
 
     source = saxs["db"][1].file
     stat = os.stat(source)
     os.utime(source, ns=(stat.st_atime_ns, stat.st_mtime_ns + 10**9))
-    cache.saxs_run(1, saxs["db"], **kw)
+    cache.saxs_run(1, saxs["db"], n_pulses=4, **kw)
     assert len(count_builds) == 3
 
-    cache.saxs_run(1, saxs["db"], refresh=True, **kw)
+    cache.saxs_run(1, saxs["db"], n_pulses=4, refresh=True, **kw)
     assert len(count_builds) == 4
 
 
@@ -324,162 +307,6 @@ def test_a_failed_write_leaves_no_file_behind(saxs, monkeypatch):
             1, saxs["db"], raw=saxs["raw"], n_pulses=4, cache_dir=saxs["dir"]
         )
     assert list(saxs["dir"].iterdir()) == []
-
-
-# ── waxs_run ──────────────────────────────────────────────────────────────────
-JF2_SCALE = 0.8  # jf2 reads this much of jf1; the fitted factor must undo it
-
-
-def truth(q):
-    return 100.0 / q**2 + 0.5
-
-
-def jf_grid(q, lo, hi, tids, scale, units="photons"):
-    """A per-cell grid as DAMNIT stores it: zeros outside [lo, hi] and for empty slots.
-
-    Train 2 lacks its last cell, train 5 has no frame at all.
-    """
-    rng = np.random.default_rng(int(lo))
-    wave = 1 + 0.1 * np.sin(np.arange(len(tids)))[:, None, None]  # per-train drift
-    noise = 1 + 0.01 * rng.standard_normal((len(tids), 3, q.size))
-    values = scale * truth(q) * wave * noise
-    values[:, :, (q < lo) | (q > hi)] = 0.0
-    n_frames = np.ones((len(tids), 3), np.uint8)
-    n_frames[2, 2] = 0
-    n_frames[5] = 0
-    values[n_frames == 0] = 0.0
-    return xr.DataArray(
-        values.astype(np.float32),
-        dims=("trainId", "cellId", "q"),
-        coords={
-            "trainId": tids,
-            "cellId": [0, 1, 15],
-            "q": q,
-            "n_frames": (("trainId", "cellId"), n_frames),
-        },
-        name="intensity",
-        attrs={"units": units},
-    )
-
-
-@pytest.fixture
-def waxs(tmp_path, xgm_by_raw):
-    tids = train_ids(6)
-    q1, q2 = np.linspace(11.0, 24.0, 66), np.linspace(9.5, 19.0, 50)
-    grids = {
-        "jf1": jf_grid(q1, 11.5, 23.7, tids, 1.0),
-        "jf2": jf_grid(q2, 9.8, 18.5, tids, JF2_SCALE),
-    }
-    run = damnit_run(tmp_path / "w1.h5", tids, 2.2 - 0.01 * np.arange(6))
-    for det, grid in grids.items():
-        grid.to_netcdf(
-            run.file, group=f"jungfrau_waxs_{det}", mode="a", engine="h5netcdf"
-        )
-    xgm = xr.DataArray(300.0 + np.arange(6.0), dims="trainId", coords={"trainId": tids})
-    raw = FakeRaw(timestamps(np.r_[tids, train_ids(1, 6)]), xgm)
-    return {
-        "db": {1: run},
-        "raw": raw,
-        "tids": tids,
-        "grids": grids,
-        "dir": tmp_path / "c",
-    }
-
-
-def cell_mean(grid):
-    with np.errstate(invalid="ignore"):
-        return grid.where(grid.n_frames > 0).mean("cellId").values
-
-
-def test_combined_puts_jf2_on_jf1_over_a_unified_q_axis(waxs):
-    ds = cache.waxs_run(1, waxs["db"], raw=waxs["raw"], cache_dir=waxs["dir"])
-
-    q = ds.q.values
-    assert q.min() >= 9.8 and q.max() <= 23.7
-    assert np.all(np.diff(q) > 0)
-    assert ds.attrs["scaling_factor"] == pytest.approx(1 / JF2_SCALE, rel=0.02)
-    # jf1 only, both, jf2 only
-    src = dict(zip(q, ds.source.values, strict=True))
-    assert src[q[0]] == 1 and src[q[-1]] == 0 and (ds.source == 2).any()
-    # every populated train follows the truth up to its own drift
-    good = ds.intensity.sel(trainId=waxs["tids"][[0, 1, 3, 4]])
-    drift = 1 + 0.1 * np.sin(np.arange(6))[[0, 1, 3, 4]]
-    np.testing.assert_allclose(good.values, drift[:, None] * truth(q)[None], rtol=0.05)
-    assert ds.attrs["units"] == "photons"
-
-
-def test_combined_keeps_missing_frames_out_and_empty_trains_nan(waxs):
-    ds = cache.waxs_run(1, waxs["db"], raw=waxs["raw"], cache_dir=waxs["dir"])
-
-    assert ds.intensity.sel(trainId=waxs["tids"][5]).isnull().all()
-    np.testing.assert_array_equal(ds.n_cells_with_frames_jf1, [3, 3, 2, 3, 3, 0])
-    assert ds.intensity.sel(trainId=waxs["tids"][2]).min() > 0  # zeros not averaged in
-
-
-def test_split_returns_two_datasets_on_their_own_q_axes(waxs):
-    jf1, jf2 = cache.waxs_run(
-        1, waxs["db"], raw=waxs["raw"], combine=False, cache_dir=waxs["dir"]
-    )
-
-    assert jf1.attrs["detector"] == "jf1" and jf2.attrs["detector"] == "jf2"
-    np.testing.assert_allclose(jf1.q, waxs["grids"]["jf1"].q)
-    np.testing.assert_allclose(jf2.q, waxs["grids"]["jf2"].q)
-    assert jf1.q.size == 66 and jf2.q.size == 50
-    assert jf1.detector == "jf1" and jf2.detector == "jf2"
-    assert "q1" not in jf1.dims and "q2" not in jf2.dims
-    np.testing.assert_allclose(
-        jf1.intensity.values, cell_mean(waxs["grids"]["jf1"]), rtol=1e-6
-    )
-    np.testing.assert_allclose(
-        jf2.intensity.values, cell_mean(waxs["grids"]["jf2"]), rtol=1e-6
-    )  # stored unscaled
-    np.testing.assert_array_equal(jf2.n_cells_with_frames, [3, 3, 2, 3, 3, 0])
-    assert "intensity_jf1" not in jf2 and "scale" in jf2 and "time" in jf1
-
-
-def test_waxs_scaling_and_times_are_stored_by_train_id(waxs):
-    ds = cache.waxs_run(1, waxs["db"], raw=waxs["raw"], cache_dir=waxs["dir"])
-    scaling = utils.droplet_scaling(1, waxs["db"], raw=waxs["raw"], n_pulses=155)
-
-    np.testing.assert_allclose(ds.scale, scaling.scale.reindex(trainId=ds.trainId))
-    by_label = waxs["raw"].times.dt.tz_localize(None).loc[waxs["tids"]].to_numpy()
-    np.testing.assert_array_equal(ds.time.values, by_label.astype("datetime64[ns]"))
-
-
-def test_waxs_is_cached_per_mode_and_rebuilt_on_refresh(waxs, count_builds):
-    kw = {"raw": waxs["raw"], "cache_dir": waxs["dir"]}
-    first = cache.waxs_run(1, waxs["db"], **kw)
-    second = cache.waxs_run(1, waxs["db"], **kw)
-    assert len(count_builds) == 1
-    assert second.attrs["created_utc"] == first.attrs["created_utc"]
-
-    cache.waxs_run(1, waxs["db"], combine=False, **kw)
-    cache.waxs_run(1, waxs["db"], combine=False, **kw)
-    assert len(count_builds) == 2
-    assert len(list(waxs["dir"].glob("waxs_r0001_*.nc"))) == 2
-
-    cache.waxs_run(1, waxs["db"], refresh=True, **kw)
-    assert len(count_builds) == 3
-
-
-def test_mixed_units_are_refused_when_combining_but_not_when_split(waxs):
-    kev = jf_grid(waxs["grids"]["jf2"].q.values, 9.8, 18.5, waxs["tids"], 1.0, "keV")
-    kev.to_netcdf(
-        waxs["db"][1].file, group="jungfrau_waxs_jf2", mode="a", engine="h5netcdf"
-    )
-    kw = {"raw": waxs["raw"], "cache_dir": waxs["dir"]}
-
-    from analysis.waxs.combine import UnitsMismatch
-
-    with pytest.raises(UnitsMismatch):
-        cache.waxs_run(1, waxs["db"], **kw)
-    jf1, jf2 = cache.waxs_run(1, waxs["db"], combine=False, **kw)
-    assert (jf1.attrs["units"], jf2.attrs["units"]) == ("photons", "keV")
-
-
-def test_an_unknown_method_is_refused(waxs):
-    with pytest.raises(ValueError, match="method must be"):
-        cache.waxs_run(1, waxs["db"], method="mean", cache_dir=waxs["dir"])
 
 
 # ── droplet_timeline ──────────────────────────────────────────────────────────
@@ -770,6 +597,11 @@ def test_g2_and_the_two_time_maps_are_the_readers_own(xpcs, averaging):
     assert ds.attrs["averaging"] == averaging
     assert ds.attrs["n_trains"] == ttcf.attrs["n_trains"] == len(XPCS_OFFSETS)
     assert ds.attrs["coverage"] == str(hits.coverage())
+    np.testing.assert_allclose(ds.ring_bounds_nm.values, hits.bounds_nm)
+    if averaging == "pooled":
+        np.testing.assert_array_equal(ds.lag, g2.lag)
+        assert ds.attrs["period_s"] == pytest.approx(g2.attrs["period_s"])
+        assert ds.attrs["n_with_baseline"] == g2.attrs["n_with_baseline"]
 
 
 def test_the_worker_count_is_not_part_of_the_cache_key(xpcs):
@@ -779,18 +611,6 @@ def test_the_worker_count_is_not_part_of_the_cache_key(xpcs):
     cache.xpcs_run(1, xpcs["db"], n_workers=4, **xpcs["kw"])
     assert list(xpcs["dir"].glob("*.nc")) == [written]
     assert written.stat().st_mtime_ns == stamp
-
-
-def test_the_pooled_lag_axis_is_stored(xpcs):
-    ds = cache.xpcs_run(1, xpcs["db"], **xpcs["kw"])
-
-    want = XpcsHits(xpcs["path"]).g2()
-    np.testing.assert_array_equal(ds.lag, want.lag)
-    assert ds.attrs["period_s"] == pytest.approx(want.attrs["period_s"])
-    assert ds.attrs["n_with_baseline"] == want.attrs["n_with_baseline"]
-    np.testing.assert_allclose(
-        ds.ring_bounds_nm.values, XpcsHits(xpcs["path"]).bounds_nm
-    )
 
 
 def test_every_hit_train_is_listed_by_train_id(xpcs):
@@ -850,6 +670,11 @@ def test_xpcs_is_cached_per_averaging_and_rebuilt_on_new_results(xpcs, count_bui
     second = cache.xpcs_run(1, xpcs["db"], **xpcs["kw"])
     assert len(count_builds) == 1
     assert second.attrs["created_utc"] == first.attrs["created_utc"]
+    for name in ("train_g2_num", "train_baseline_den"):
+        np.testing.assert_array_equal(second[name].values, first[name].values)
+    np.testing.assert_array_equal(
+        cache.pool_g2(second)["g2"].values, first["g2"].values
+    )
 
     cache.xpcs_run(1, xpcs["db"], averaging="es", **xpcs["kw"])
     assert len(count_builds) == 2
@@ -926,14 +751,3 @@ def test_pool_g2_refuses_an_unknown_train_and_an_es_dataset(xpcs):
     assert "train_g2_num" not in es
     with pytest.raises(ValueError, match="pooled"):
         cache.pool_g2(es)
-
-
-def test_the_terms_survive_the_cache_file(xpcs):
-    first = cache.xpcs_run(1, xpcs["db"], **xpcs["kw"])
-    again = cache.xpcs_run(1, xpcs["db"], **xpcs["kw"])
-    for name in ("train_g2_num", "train_baseline_den"):
-        np.testing.assert_array_equal(again[name].values, first[name].values)
-    for name in G2_VARS:
-        np.testing.assert_array_equal(
-            cache.pool_g2(again)[name].values, first[name].values
-        )

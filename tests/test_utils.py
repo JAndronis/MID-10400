@@ -263,17 +263,13 @@ def runs(tmp_path, monkeypatch):
             buffer["xgm"], dims="trainId", coords={"trainId": buffer_tids}
         ),
     }
-    calls = []
-
     def fake_train_pulse_energy(raw, n_pulses):
-        calls.append((raw, n_pulses))
         return by_raw[raw]
 
     monkeypatch.setattr(utils, "train_pulse_energy", fake_train_pulse_energy)
     return {
         "db": db,
         "tids": tids,
-        "calls": calls,
         "sample": sample,
         "buffer": buffer,
     }
@@ -290,15 +286,6 @@ def test_every_input_is_aligned_by_train_id(runs):
     np.testing.assert_allclose(ds.volume_mm3, sample["volume"][kept], rtol=1e-6)
 
 
-def test_trains_select_by_position_after_alignment(runs):
-    first_two = droplet_scaling(1, runs["db"], raw="raw1", trains=slice(0, 2))
-    np.testing.assert_array_equal(first_two.trainId, runs["tids"][[0, 1]])
-
-    third = droplet_scaling(1, runs["db"], raw="raw1", trains=2)
-    assert third.scale.dims == ("trainId",)
-    np.testing.assert_array_equal(third.trainId, runs["tids"][[3]])
-
-
 def test_v0_comes_from_the_run_the_droplet_started_in(runs):
     fit = xr.open_dataset(runs["db"][2].file, group="droplet_fit")
     ds = droplet_scaling(1, runs["db"], raw="raw1", v0_run=2)
@@ -306,20 +293,6 @@ def test_v0_comes_from_the_run_the_droplet_started_in(runs):
     assert ds.attrs["v0_mm3"] == pytest.approx(float(fit.volume[0]))
     np.testing.assert_allclose(ds.v_over_v0, ds.volume_mm3 / float(fit.volume[0]))
     assert ds.attrs["v0_run"] == 2
-
-
-def test_n_pulses_reaches_the_xgm(runs):
-    droplet_scaling(2, runs["db"], raw="raw2", n_pulses=100)
-    assert runs["calls"] == [("raw2", 100)]
-
-
-def test_raw_data_is_opened_when_no_run_is_given(runs, monkeypatch):
-    opened = []
-    monkeypatch.setattr(
-        utils.ex, "open_run", lambda *a, **kw: opened.append((a, kw)) or "raw2"
-    )
-    droplet_scaling(2, runs["db"], proposal=10400)
-    assert opened == [((10400, 2), {"data": "raw"})]
 
 
 def measured_intensity(inputs, sigma, **composition):

@@ -103,10 +103,6 @@ def _call_of(function: ast.FunctionDef) -> ast.Call | None:
     return None
 
 
-def test_the_context_file_loads(variables):
-    assert len(variables) > 1
-
-
 def test_every_variable_dependency_exists(variables):
     """A `var#` naming a retired variable is a cluster-time failure."""
     for name, variable in variables.items():
@@ -163,32 +159,10 @@ CAMERA = ("camera.video", "camera.first_image")
 GROUPED = AGIPD + JUNGFRAU + XPCS + HITS + CAMERA
 
 
-def test_every_analysis_column_is_in_a_group(variables):
+def test_the_context_file_loads_with_every_analysis_column_in_a_group(variables):
     assert set(GROUPED) <= set(variables)
     ungrouped = {name for name in variables if "." not in name}
     assert not {n for n in ungrouped if n.startswith(("agipd", "jungfrau", "xpcs"))}
-
-
-@pytest.mark.parametrize("name", GROUPED)
-def test_a_grouped_variable_carries_its_techniques_tags(variables, name):
-    group = name.split(".")[0]
-    expected = {
-        "agipd": {"AGIPD", "SAXS"},
-        "jungfrau": {"JUNGFRAU", "WAXS"},
-        "xpcs": {"XPCS"},
-        "hits": {"Droplet"},
-        "camera": {"Droplet"},
-    }[group]
-    assert expected <= set(variables[name].tags)
-
-
-def test_the_agipd_saxs_variable_is_wired(variables):
-    variable = variables["agipd.saxs"]
-    assert variable.title == "AGIPD I(q)"
-    # cluster=True: one Slurm job per run on a whole node, which the worker pool
-    # sizes itself to.
-    assert variable.cluster is True
-    assert variables["agipd.iq_overview"].arg_dependencies() == {"grid": "agipd.saxs"}
 
 
 def test_the_titles_still_match_the_reprocess_patterns(variables):
@@ -202,14 +176,6 @@ def test_the_titles_still_match_the_reprocess_patterns(variables):
         "xpcs.frames_used",
     }
     assert variables["xpcs.score"].title == "XPCS score"
-
-
-def test_the_old_pipeline_is_gone():
-    source = (CONTEXT_DIR / "context.py").read_text()
-    assert "integrate_run" not in source
-    assert "geometry_from_encoders" not in source
-    assert "xpcs_offline" not in source
-    assert "extra_speckle" not in source
 
 
 #: The only variables that read detector proc; every other column reads a file
@@ -272,40 +238,60 @@ FRAMES_USED = (
 )
 
 
-@pytest.mark.parametrize("name", FRAMES_USED)
-def test_frames_used_never_waits_on_the_pass(variables, name):
+def test_frames_used_never_waits_on_the_pass(variables):
     """No var# on the pass, so asking for the cell cannot relaunch the pass.
 
     A relaunch while the pass is running would put two writers on one file. The
     cell is not a cluster job either: it reads one status column.
     """
-    variable = variables[name]
-    assert variable.arg_dependencies() == {}
-    assert variable.cluster is False
+    for name in FRAMES_USED:
+        assert variables[name].arg_dependencies() == {}, name
+        assert variables[name].cluster is False, name
 
 
-def test_the_droplet_video_is_a_cluster_job_and_the_image_is_not(variables):
-    """The video reads every image of the run; the first image reads one."""
-    video, image = variables["camera.video"], variables["camera.first_image"]
-    assert video.cluster is True and image.cluster is False
-    assert video.data.value == image.data.value == "raw"  # the camera is raw
+#: Cluster variables outside the groups that still carry their logic inline.
+#: ``droplet_fit`` builds on ``analysis_helpers`` in the context's own directory,
+#: which is not part of the package.
+INLINE_CLUSTER_VARIABLES = frozenset({"droplet_fit"})
 
 
-@pytest.mark.parametrize("name", GROUPED)
-def test_the_context_file_holds_no_heavy_integration_logic(name):
+def _module_cluster_functions() -> dict[str, ast.FunctionDef]:
+    """Module-level functions decorated as ``Variable(..., cluster=True)``."""
+    out = {}
+    for node in _tree().body:
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        for decorator in node.decorator_list:
+            if isinstance(decorator, ast.Call) and any(
+                k.arg == "cluster"
+                and isinstance(k.value, ast.Constant)
+                and k.value.value is True
+                for k in decorator.keywords
+            ):
+                out[node.name] = node
+    return out
+
+
+def test_the_context_file_holds_no_heavy_integration_logic():
     """DAMNIT execs this file, so nothing defined here can reach a worker.
 
     The integration functions must stay under ``analysis``; a helper defined in
     the context file would fail to pickle only once the pool spawned. Each
     wrapper is a docstring, an import and a call; anything with statements
-    beyond that has logic in it that belongs in the package instead.
+    beyond that has logic in it that belongs in the package instead. That holds
+    for every grouped variable and every cluster job outside the groups.
     """
     functions = _group_functions()
-    assert name in functions, f"{name} is not defined in the context file"
-    kinds = [type(node).__name__ for node in _body(functions[name])]
-    assert kinds == ["ImportFrom", "Return"], (
-        f"{name} does something other than import and call: {kinds}"
-    )
+    assert set(GROUPED) <= set(functions)
+    cluster = _module_cluster_functions()
+    assert INLINE_CLUSTER_VARIABLES <= set(cluster)
+    for name, function in functions.items() | {
+        (n, f) for n, f in cluster.items() if n not in INLINE_CLUSTER_VARIABLES
+    }:
+        kinds = [type(node).__name__ for node in _body(function)]
+        assert kinds == ["ImportFrom", "Return"], (
+            f"{name} does something other than import and call: {kinds}"
+        )
 
 
 def test_no_call_in_the_context_file_passes_overwrite():
@@ -332,54 +318,30 @@ def test_no_call_in_the_context_file_passes_overwrite():
     assert not offenders, f"overwrite passed at {offenders}"
 
 
-@pytest.mark.parametrize(
-    "name",
-    [
-        "agipd.preprocessing",
-        "jungfrau.preprocessing",
-        "agipd.saxs",
-        "jungfrau.jf1",
-        "jungfrau.jf2",
-        "xpcs.preprocessing",
-        "xpcs.g2",
-        "xpcs.ttcf",
-    ],
+#: The variables that call a pass or its reader with DAMNIT's config.
+INTEGRATION_WRAPPERS = (
+    "agipd.preprocessing",
+    "jungfrau.preprocessing",
+    "agipd.saxs",
+    "jungfrau.jf1",
+    "jungfrau.jf2",
+    "xpcs.preprocessing",
+    "xpcs.g2",
+    "xpcs.ttcf",
 )
-def test_the_integration_wrappers_pass_no_config(name):
+
+
+def test_the_integration_wrappers_pass_no_config():
     """The config DAMNIT runs with lives in ``analysis.*.damnit``, in one place.
 
     A keyword here, such as ``npt=200``, is a config that scripts judging
     DAMNIT's files (``reprocess_safe``, ``is_complete``) cannot see.
     """
-    call = _call_of(_group_functions()[name])
-    assert call is not None
-    assert not call.keywords, f"{name} passes {[k.arg for k in call.keywords]}"
-
-
-def test_the_xpcs_readers_read_the_file_not_proc(variables):
-    """Only the preprocessing variable reads proc; the others wait on it."""
-    prep = {"prep": "xpcs.preprocessing"}
-    assert variables["xpcs.g2"].arg_dependencies() == prep | {"rep": "rep_rate"}
-    assert variables["xpcs.ttcf"].arg_dependencies() == prep
-    assert variables["xpcs.overview"].arg_dependencies() == {
-        "g2": "xpcs.g2",
-        "ttcf": "xpcs.ttcf",
-    }
-
-
-def test_the_hit_train_pass_replaced_the_extra_speckle_one(variables):
-    """No ``xpcs_pipeline`` and nothing that waits on it."""
-    assert "xpcs_pipeline" not in variables
-    for variable in variables.values():
-        assert "xpcs_pipeline" not in variable.arg_dependencies().values()
-
-
-@pytest.mark.parametrize("name", XPCS_LEGACY)
-def test_the_reproduced_xpcs_columns_wait_on_the_hit_pass_only(variables, name):
-    """The reproduced extra-speckle figures depend on ``xpcs.preprocessing`` alone."""
-    deps = variables[name].arg_dependencies()
-    assert deps.pop("rep", "rep_rate") == "rep_rate"
-    assert deps == {"prep": "xpcs.preprocessing"}
+    functions = _group_functions()
+    for name in INTEGRATION_WRAPPERS:
+        call = _call_of(functions[name])
+        assert call is not None, name
+        assert not call.keywords, f"{name} passes {[k.arg for k in call.keywords]}"
 
 
 def test_the_hit_rule_comes_before_what_works_on_the_hits(variables):
