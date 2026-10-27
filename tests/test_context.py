@@ -24,7 +24,11 @@ matplotlib.use("Agg")
 pytest.importorskip("extra_data")
 damnit_pkg = pytest.importorskip("damnit")
 
-CONTEXT_DIR = pathlib.Path(__file__).resolve().parents[1] / "src" / "amore"
+import analysis  # noqa: E402
+
+#: The context beside the ``analysis`` package on the import path, so a run
+#: against a copy of ``src/`` checks that copy's context.
+CONTEXT_DIR = pathlib.Path(analysis.__file__).resolve().parents[1] / "amore"
 
 
 @pytest.fixture(scope="module")

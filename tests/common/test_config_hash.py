@@ -9,6 +9,7 @@ directions are pinned here, for both configs.
 from __future__ import annotations
 
 import dataclasses
+from pathlib import Path
 
 import pytest
 
@@ -243,6 +244,36 @@ def test_result_fields_renders_sets_and_tuples_stably(waxs):
     # An unpinned set is None, not an empty tuple: "measure it" and "measure it
     # and expect nothing" are different instructions and must not render alike.
     assert result_fields(waxs)["expected_lit_cells"] is None
+
+
+def test_rewriting_an_input_file_in_place_moves_the_hash(geometry, tmp_path):
+    """A new PONI or mask at the same path is a different result.
+
+    The hash must follow what the file holds, not where it lives, or a stored
+    file integrated with the old mask would be resumed under the new one.
+    """
+    import shutil
+
+    import fabio
+
+    poni, edf = (Path(shutil.copy(path, tmp_path)) for path in geometry)
+    cfg = JungfrauWaxsConfig(
+        proposal=10400,
+        run=423,
+        detector="jf1",
+        poni_file=str(poni),
+        static_mask_file=str(edf),
+    )
+    before = cfg.config_hash()
+
+    data = fabio.open(str(edf)).data.copy()
+    data[200] = 1
+    fabio.edfimage.EdfImage(data=data).write(str(edf))
+    after_mask = cfg.config_hash()
+    assert after_mask != before
+
+    poni.write_text(poni.read_text().replace("Distance: 0.232", "Distance: 0.233"))
+    assert cfg.config_hash() != after_mask
 
 
 def test_the_stored_file_says_which_fields_the_hash_covers(waxs, tmp_path):

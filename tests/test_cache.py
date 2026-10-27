@@ -1,6 +1,6 @@
 """The on-disk cache in `analysis.cache`.
 
-A fake DAMNIT database whose runs point at small netCDF files (``agipd_saxs`` and
+A fake DAMNIT database whose runs point at small netCDF files (``agipd.saxs`` and
 ``droplet_fit`` groups), fake raw runs that hand out labelled train timestamps, and a
 stand-in for the XGM. The cache must store what the sources hold, averaged over pulses
 and nothing else, label everything by trainId, and rebuild exactly when its inputs or
@@ -86,8 +86,8 @@ def timestamps(tids, start="2026-05-12T00:32:00", step_s=0.1) -> pd.Series:
     return times.iloc[np.random.default_rng(3).permutation(len(times))]
 
 
-def damnit_run(path, tids, volume, *, transmission=None, grid=None):
-    """One fake DAMNIT run file: droplet_fit (and agipd_saxs, if `grid` is given)."""
+def damnit_run(path, tids, volume, *, transmission=None, grid=None, group="agipd.saxs"):
+    """One fake DAMNIT run file: droplet_fit, and `grid` under `group` if given."""
     radius_x = 60.0 - 0.1 * np.arange(len(tids))
     fit = xr.Dataset(
         {
@@ -103,7 +103,7 @@ def damnit_run(path, tids, volume, *, transmission=None, grid=None):
     )
     fit.to_netcdf(path, group="droplet_fit", engine="h5netcdf")
     if grid is not None:
-        grid.to_netcdf(path, group="agipd_saxs", mode="a", engine="h5netcdf")
+        grid.to_netcdf(path, group=group, mode="a", engine="h5netcdf")
     if transmission is None:
         transmission = np.ones(len(tids))
     return FakeRun(
@@ -222,6 +222,39 @@ def test_timestamps_follow_train_ids(saxs):
 
     by_label = saxs["raw"].times.dt.tz_localize(None).loc[saxs["tids"]].to_numpy()
     np.testing.assert_array_equal(ds.time.values, by_label.astype("datetime64[ns]"))
+
+
+def test_the_grouped_grid_is_read_not_a_stale_flat_one(saxs):
+    """A reprocessed run's file still carries the previous generation's column."""
+    stale = saxs["grid"].copy(deep=True)
+    stale["intensity"][:] = 1e9
+    stale.to_netcdf(saxs["db"][1].file, group="agipd_saxs", mode="a", engine="h5netcdf")
+
+    ds = cache.saxs_run(
+        1, saxs["db"], raw=saxs["raw"], n_pulses=4, cache_dir=saxs["dir"]
+    )
+    np.testing.assert_allclose(
+        ds.intensity.values, expected_mean(saxs["grid"], [2, 4, 6, 8]), rtol=1e-6
+    )
+
+
+def test_a_run_with_only_the_flat_grid_is_read_with_a_warning(saxs, tmp_path):
+    from analysis.damnit_names import LegacyNameUsed
+
+    old = damnit_run(
+        tmp_path / "old.h5",
+        saxs["tids"],
+        2.2 - 0.01 * np.arange(6),
+        grid=saxs["grid"],
+        group="agipd_saxs",
+    )
+    with pytest.warns(LegacyNameUsed):
+        ds = cache.saxs_run(
+            1, {1: old}, raw=saxs["raw"], n_pulses=4, cache_dir=saxs["dir"]
+        )
+    np.testing.assert_allclose(
+        ds.intensity.values, expected_mean(saxs["grid"], [2, 4, 6, 8]), rtol=1e-6
+    )
 
 
 @pytest.fixture
@@ -531,6 +564,16 @@ def test_a_number_overrides_t_star_and_a_bad_word_is_refused(tmp_path):
         )
 
 
+def test_runs_that_share_train_ids_are_not_one_droplet(tmp_path):
+    t = np.arange(0.0, 1200.0, 2.0)
+    db, raws, tids = timeline_runs(tmp_path, piecewise_volume(t))
+    db[2] = damnit_run(tmp_path / "again.h5", tids[:300], piecewise_volume(t[:300]))
+    raws[2] = raws[1]
+
+    with pytest.raises(ValueError, match="share trainIds"):
+        cache.droplet_timeline([1, 2], db, raws=raws, cache_dir=tmp_path / "c")
+
+
 def test_the_timeline_is_cached_and_reloaded(tmp_path, monkeypatch):
     t = np.arange(0.0, 1200.0, 2.0)
     db, raws, _ = timeline_runs(tmp_path, piecewise_volume(t))
@@ -626,9 +669,10 @@ def test_sums_are_cached_and_rebuilt_on_new_trains_a_changed_run_or_refresh(
     cache.detector_sums(1, [10000, 10001], label="pair", refresh=True, **kw)
     assert len(reads) == 3
 
-    some_file = next(proc_run.path.glob("*.h5"))
-    stat = os.stat(some_file)
-    os.utime(some_file, ns=(stat.st_atime_ns, stat.st_mtime_ns + 10**9))
+    # One file rewritten: it becomes the newest file of the run.
+    files = sorted(proc_run.path.glob("*.h5"))
+    newest = max(os.stat(p).st_mtime_ns for p in files)
+    os.utime(files[3], ns=(newest + 10**9, newest + 10**9))
     cache.detector_sums(1, [10000, 10001], label="pair", **kw)
     assert len(reads) == 4
     assert len(list(tmp_path.glob("sums_r0001_pair_*.nc"))) == 2
