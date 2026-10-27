@@ -250,3 +250,35 @@ def test_build_operator_reproduces_extra_speckle_configsaxs(geom, centred_cfg):
         (theirs.ai.poni1, theirs.ai.poni2)
     )
     assert ours.q.shape == (centred_cfg.npt,)
+
+
+def test_each_pixel_sits_at_the_q_of_its_distance_from_the_beam_centre(
+    geom, centred_cfg
+):
+    """An analytic oracle for the beam-centre convention, with no pyFAI in it.
+
+    ``cfg.beam_center`` is in pixels of the ``to_distortion_array()`` frame,
+    whose origin is the corner of the assembled bounding box. Measured from
+    there, a pixel at in-plane distance r from the beam scatters at
+    2θ = atan(r / sdd), and its operator column must put its weight at
+    q = 4π sin θ / λ, to within a bin.
+    """
+    op, _ = build_operator(geom, centred_cfg)
+    corners = geom.to_distortion_array().reshape(NPIX, 4, 3)
+    centres = corners[:, :, 1:].mean(axis=1)  # (y, x) in metres
+    pixel = geom.to_pyfai_detector().pixel1
+    beam = np.array(
+        [centred_cfg.beam_center_py * pixel, centred_cfg.beam_center_px * pixel]
+    )
+    r = np.hypot(*(centres - beam).T)
+    theta = np.arctan2(r, centred_cfg.sdd_m) / 2
+    q_nm = 4 * np.pi * np.sin(theta) / (centred_cfg.wavelength_m * 1e9)
+
+    bin_width = np.diff(op.q).mean()
+    sample = np.random.default_rng(0).choice(NPIX, 200, replace=False)
+    sample = sample[op.indptr[sample + 1] > op.indptr[sample]]
+    assert sample.size > 150
+    for p in sample:
+        cols = slice(op.indptr[p], op.indptr[p + 1])
+        q_op = np.average(op.q[op.bins[cols]], weights=op.coef[cols])
+        assert q_op == pytest.approx(q_nm[p], abs=bin_width), p

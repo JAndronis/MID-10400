@@ -21,6 +21,7 @@ pytest.importorskip("extra_data")
 matplotlib.use("Agg")
 
 import h5py  # noqa: E402
+from mockrun import AWKWARD  # noqa: E402
 from test_run import InlinePool  # noqa: E402  (tests/saxs is on sys.path)
 
 from analysis.common.status import FrameStatus  # noqa: E402
@@ -30,27 +31,32 @@ from analysis.saxs.writer import per_pulse  # noqa: E402
 
 
 @pytest.fixture
-def finished(mock_pipeline, geom, tmp_path):
-    """A completed pass over the mock run, plus its output file."""
+def finished(run_cfg, geom, mock_run_factory, tmp_path):
+    """A completed pass over the awkward mock run, and its output file.
+
+    The run has a dropped train, a train short of modules and a zero-frame
+    train, so a frame's position and its labels part ways after each of them.
+    """
     from analysis.saxs.run import run_agipd_saxs
 
+    run, dc = mock_run_factory(**AWKWARD)
     output = tmp_path / "out.h5"
     run_agipd_saxs(
-        mock_pipeline.cfg,
-        dc=mock_pipeline.dc,
+        run_cfg,
+        dc=dc,
         geometry=geom,
-        run_dir=mock_pipeline.run.path,
+        run_dir=run.path,
         output_path=output,
         work_dir=tmp_path,
         pool_factory=InlinePool,
         reduce="none",
     )
-    return mock_pipeline, output
+    return run, output
 
 
 # ── the per-pulse grid ────────────────────────────────────────────────────────
 def test_per_pulse_has_the_dims_p5_asks_for(finished):
-    pipeline, output = finished
+    run, output = finished
     grid = per_pulse(output)
 
     assert grid.dims == ("trainId", "pulseId", "q")
@@ -59,8 +65,8 @@ def test_per_pulse_has_the_dims_p5_asks_for(finished):
     with h5py.File(output) as handle:
         assert np.array_equal(grid["trainId"].values, handle["trains/trainId"][:])
         assert np.array_equal(grid["q"].values, handle["q/centers"][:])
-    assert int(grid["n_frames"].values.sum()) == pipeline.plan.n_frames
-    assert grid.attrs["n_placed"] == pipeline.plan.n_frames
+    assert int(grid["n_frames"].values.sum()) == run.n_frames
+    assert grid.attrs["n_placed"] == run.n_frames
 
 
 def test_every_frame_lands_on_the_slot_its_labels_name(finished):
@@ -230,11 +236,11 @@ def test_agipd_saxs_asks_for_the_per_pulse_grid(monkeypatch):
 
 
 def test_readers_round_trip_a_finished_run(finished):
-    pipeline, output = finished
+    run, output = finished
     grid = damnit.per_pulse_from_file(output)
     pooled = damnit.pooled_from_file(output)
-    assert int(grid["n_frames"].values.sum()) == pipeline.plan.n_frames
-    assert int(pooled["n_frames"].values.sum()) == pipeline.plan.n_frames
+    assert int(grid["n_frames"].values.sum()) == run.n_frames
+    assert int(pooled["n_frames"].values.sum()) == run.n_frames
 
 
 # ── the overview figure ───────────────────────────────────────────────────────

@@ -20,6 +20,7 @@ pytest.importorskip("extra_data")
 pytest.importorskip("h5netcdf")  # analysis.cache writes its reference as netCDF
 
 import h5py  # noqa: E402
+from mockrun import AWKWARD  # noqa: E402
 from test_run import BrokenPool, InlinePool  # noqa: E402
 
 from analysis import cache  # noqa: E402
@@ -41,14 +42,6 @@ from analysis.saxs.pixel_sums import (  # noqa: E402
 )
 from analysis.saxs.run import run_agipd_saxs, run_pixel_sums  # noqa: E402
 from analysis.saxs.sparse import gather  # noqa: E402
-
-#: A dropped train (10002), one short of modules (10004), one with no frames
-#: (10006): three windows of three train ids from 10000 hold 2, 2 and 1 trains.
-AWKWARD = {
-    "train_ids": (10000, 10001, 10003, 10004, 10005, 10006, 10007),
-    "short_module_trains": (10004,),
-    "zero_frame_trains": (10006,),
-}
 
 
 @pytest.fixture

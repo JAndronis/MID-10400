@@ -176,3 +176,23 @@ def test_selftest_aggregates_over_several_frames(op, engine, make_frame, make_ma
     report = run_selftest(engine, op, frames, tolerance=TOLERANCE)
     assert report.n_frames == 3
     assert report.passed
+
+
+def test_selftest_fails_when_only_the_normalization_is_wrong(
+    op, engine, make_frame, make_masks
+):
+    """A wrong base denominator moves N alone, and N alone must fail the gate.
+
+    That is the shape of a base-mask correction bug: the signal and the
+    variance gather over the frame's own mask and stay exact.
+    """
+    rng = np.random.default_rng(1)
+    x = make_frame(rng, 0.02)
+    bad, base_bad = make_masks(rng, disagree=1000)
+    wrong = denominator(op, base_bad) * 1.001
+    with pytest.raises(SelfTestFailed) as excinfo:
+        run_selftest(engine, op, [(x, bad, base_bad, wrong)], tolerance=TOLERANCE)
+    report = excinfo.value.report
+    assert report.max_rel_signal < TOLERANCE
+    assert report.max_rel_variance < TOLERANCE
+    assert report.max_rel_normalization > 100 * TOLERANCE

@@ -152,13 +152,31 @@ def test_the_per_pulse_grid_comes_from_the_file_too(
     assert stats(tmp_path) == before
 
 
+@pytest.mark.parametrize(
+    ("name", "dataset", "rows"),
+    [
+        ("out.h5", "frames/status", slice(0, 3)),
+        (PHOTON_FILE, "frames/status", slice(0, 3)),
+        (FILE_NAME, "trains/status", slice(1, 2)),
+    ],
+)
 def test_a_complete_file_with_final_failures_raises_as_the_pass_would(
-    pipeline, complete_run, tmp_path, monkeypatch
+    pipeline, complete_run, tmp_path, monkeypatch, name, dataset, rows
 ):
-    """``LABEL_MISMATCH`` is final, so the file is complete, and still refused."""
+    """``LABEL_MISMATCH`` is final, so the run is complete, and still refused.
+
+    Each of the three files can carry it, and each must refuse on its own.
+    """
     copy_of(complete_run, tmp_path)
-    with h5py.File(tmp_path / "out.h5", "r+") as handle:
-        handle["frames/status"][:3] = FrameStatus.LABEL_MISMATCH
+    with h5py.File(tmp_path / name, "r+") as handle:
+        handle[dataset][rows] = FrameStatus.LABEL_MISMATCH
+    assert is_complete(
+        tmp_path / "out.h5",
+        pipeline.cfg,
+        pixel_sums_path=tmp_path / FILE_NAME,
+        photon_stats_path=tmp_path / PHOTON_FILE,
+        geometry=pipeline.geometry,
+    )
     before = stats(tmp_path)
     forbid_writing(monkeypatch)
 
@@ -221,6 +239,27 @@ def test_is_complete_says_why_not(pipeline, complete_run, tmp_path, change, expe
     )
     assert not verdict
     assert any(expected in reason for reason in verdict.reasons), verdict.reasons
+
+
+def test_window_sums_that_miss_a_frame_table_train_are_not_complete(
+    pipeline, complete_run, tmp_path
+):
+    """Every window written and finalised, but one train of the frame table absent."""
+    copy_of(complete_run, tmp_path)
+    with h5py.File(tmp_path / FILE_NAME, "r+") as handle:
+        group = handle["trains"]
+        for key in list(group):
+            kept = group[key][1:]
+            del group[key]
+            group[key] = kept
+    verdict = is_complete(
+        tmp_path / "out.h5",
+        pipeline.cfg,
+        pixel_sums_path=tmp_path / FILE_NAME,
+        photon_stats_path=tmp_path / PHOTON_FILE,
+        geometry=pipeline.geometry,
+    )
+    assert verdict.reasons == ("window sums: its trains are not the frame table's",)
 
 
 def test_another_operator_or_config_is_not_complete(pipeline, complete_run):
@@ -319,7 +358,7 @@ def test_a_missing_file_is_not_complete(pipeline, tmp_path):
 
 
 # ── the lock ──────────────────────────────────────────────────────────────────
-@pytest.mark.parametrize("locked", ["out.h5", FILE_NAME])
+@pytest.mark.parametrize("locked", ["out.h5", FILE_NAME, PHOTON_FILE])
 def test_a_live_writer_s_lock_refuses_the_run_before_anything_is_written(
     pipeline, tmp_path, job_state, locked
 ):

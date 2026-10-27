@@ -242,3 +242,42 @@ def test_rerun_of_a_complete_run_does_no_work(pipeline, tmp_path, monkeypatch):
     monkeypatch.setattr(worker, "process_block", forbidden)
     pooled = run_on_mock(pipeline, tmp_path)
     assert pooled.n_frames.values.sum() == pipeline.plan.n_frames
+
+
+def test_a_train_whose_frames_carry_another_train_id_is_label_mismatch(
+    pipeline, mock_run_factory, tmp_path
+):
+    """Module 0's rows of train 10003 say 11003; the INDEX still files them under 10003.
+
+    The frames' identity is then unknown, so none of that train's frames may be
+    integrated, summed or histogrammed, while every other train is.
+    """
+    from analysis.saxs.photon_stats import FILE_NAME as PHOTON_FILE
+    from analysis.saxs.pixel_sums import FILE_NAME as SUMS_FILE
+
+    run, dc = mock_run_factory(mislabel_train=10003)
+    cfg = replace(pipeline.cfg, pixel_sum_trains=3)
+    kwargs = {
+        "dc": dc,
+        "geometry": pipeline.geometry,
+        "run_dir": run.path,
+        "output_path": tmp_path / "out.h5",
+        "work_dir": tmp_path,
+        "pool_factory": InlinePool,
+    }
+    with pytest.raises(IncompleteRun, match="LABEL_MISMATCH"):
+        run_agipd_saxs(cfg, **kwargs)
+
+    first, n = run.first_row(10003), run.frames_by_train[10003]
+    for name in ("out.h5", PHOTON_FILE):
+        with h5py.File(tmp_path / name) as f:
+            status = f["frames/status"][:]
+        mislabelled = np.zeros(status.size, dtype=bool)
+        mislabelled[first : first + n] = True
+        assert (status[mislabelled] == FrameStatus.LABEL_MISMATCH).all(), name
+        assert (status[~mislabelled] == FrameStatus.OK).all(), name
+    with h5py.File(tmp_path / SUMS_FILE) as f:
+        ids, codes = f["trains/trainId"][:], f["trains/status"][:]
+    trains = dict(zip(ids.tolist(), codes, strict=True))
+    assert trains.pop(10003) == FrameStatus.LABEL_MISMATCH
+    assert all(code == FrameStatus.OK for code in trains.values())

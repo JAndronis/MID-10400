@@ -39,6 +39,15 @@ STATIC_BIT = np.uint32(1 << 0)  # OFFSET_OUT_OF_THRESHOLD
 DYNAMIC_BIT = np.uint32(1 << 12)  # VALUE_OUT_OF_RANGE
 
 
+#: A dropped train (10002), one short of modules (10004) and one with no frames
+#: (10006): every way a train's position in the run and its id can part.
+AWKWARD = {
+    "train_ids": (10000, 10001, 10003, 10004, 10005, 10006, 10007),
+    "short_module_trains": (10004,),
+    "zero_frame_trains": (10006,),
+}
+
+
 @dataclass(frozen=True)
 class MockRun:
     """A written run and the facts a test asserts against it."""
@@ -94,6 +103,7 @@ def write_mock_run(
     zero_frame_trains: tuple[int, ...] = (),
     float_data_module: int | None = None,
     negative_counts_module: int | None = None,
+    mislabel_train: int | None = None,
 ) -> MockRun:
     """Write an ``n_modules``-module proc-like run under ``root``.
 
@@ -104,6 +114,9 @@ def write_mock_run(
     :param zero_frame_trains: trains written with no frames in any module.
     :param float_data_module: give this module float ``image/data``, to drive
         ``DATA_CHECK_FAILED``.
+    :param mislabel_train: module 0's ``image/trainId`` rows for this train
+        carry another train's id, while ``INDEX`` still files them under it:
+        the frames' own labels disagree with the index that places them.
     """
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
@@ -135,6 +148,8 @@ def write_mock_run(
         _renumber_trains(path, module, train_ids, counts)
         if module == 0 and short_module_trains:
             _zero_module_counts(path, module, train_ids, short_module_trains)
+        if module == 0 and mislabel_train is not None:
+            _mislabel_rows(path, module, mislabel_train)
         _rewrite_images(
             path,
             module,
@@ -184,6 +199,18 @@ def _zero_module_counts(
         for target in targets:
             counts[train_ids.index(target)] = 0
         index["count"][:] = counts
+
+
+def _mislabel_rows(path: Path, module: int, target: int) -> None:
+    """Relabel this module's ``image/trainId`` rows of ``target``, INDEX untouched."""
+    with h5py.File(path, "r+") as handle:
+        labels = handle[f"INSTRUMENT/{source(module)}/image/trainId"]
+        values = labels[:]
+        rows = values == target
+        if not rows.any():
+            raise ValueError(f"train {target} has no rows to mislabel")
+        values[rows] = target + 1000
+        labels[:] = values
 
 
 def _rewrite_images(
