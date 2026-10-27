@@ -177,9 +177,9 @@ def _squeeze_module(array: np.ndarray, name: str) -> np.ndarray:
 def process_block(block: Block) -> BlockResult:
     """Read and integrate one block.
 
-    Every frame's identity comes from the reader: the train from
-    ``train_id_coordinates()`` and the cell from ``data.memoryCell``, never from
-    array position. ``JUNGFRAU.cell_ids()`` is not used because it reads the
+    Every frame's identity comes from the entry's own labels: the train from
+    ``data.trainId`` and the cell from ``data.memoryCell``, never from array
+    position. ``JUNGFRAU.cell_ids()`` is not used because it reads the
     first train only and assumes the rest match.
 
     A train whose labels disagree with the plan, or which is missing one of the
@@ -219,12 +219,15 @@ def process_block(block: Block) -> BlockResult:
         mask = mask_key.ndarray()
         timings["read_mask"] += time.perf_counter() - started
 
-        train_ids = adc_key.train_id_coordinates()
+        # The reader's train coordinate is the INDEX's, which filed this entry
+        # under ``train_id`` by construction. Only the entry's own
+        # ``data.trainId`` row can say it belongs to another train.
+        row_labels = np.asarray(selected["data.trainId"].ndarray()).reshape(-1)
         cell_ids = selected["data.memoryCell"].ndarray()
 
         if (
-            train_ids.size != 1
-            or int(train_ids[0]) != train_id
+            row_labels.size != 1
+            or int(row_labels[0]) != train_id
             or data.shape[:2] != (1, 1)
             or mask.shape != data.shape
             or data.shape[2] != CELLS_PER_TRAIN

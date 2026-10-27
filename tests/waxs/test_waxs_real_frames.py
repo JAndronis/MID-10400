@@ -1,227 +1,101 @@
-"""Real r0423 frames from both detectors, through the integrator.
+"""One real r0423 train per detector, read from proc, through the pass.
 
-``data/`` is not committed (it is facility data), so this skips wherever the
-exported train is absent. Where it is present, it is the only place the pass is
-exercised on real JUNGFRAU values (dense float32 keV with a negative tail and a
-static mask over most of the module) rather than on the mock's.
-
-The exported files are one train of r0423 (2637695397) read as
-
-    JUNGFRAU(run, detector_name=f"MID_EXP_JF500K{n}")
-        .select_trains(...).get_array("data.adc").squeeze("module")
-
-The export has two limits.
-
-It carries no ``data.memoryCell``. The lit array positions are 0-7, but the cell
-ids those positions hold are 0-6 and 15 (``EXPECTED_LIT_CELLS``). Anything here
-that classifies cells is therefore about positions, and says so.
-
-``proc_mask_jf2_r423.nc`` is a byte-identical copy of jf1's mask export
-(``module=1``). So jf2's ``data.mask`` assertions are skipped until it is
-re-exported.
-
-The geometry is synthetic too: the PONI files live on GPFS, so the q values here
-mean nothing. What is tested is the frame arithmetic and the masks, neither of
-which depends on where the beam centre is.
+This is the only place the pass meets the real cell order: ``storageCellStart``
+is 15, so array position 0 holds memory cell 15. The mock reproduces that
+order, and this checks that the real files still have it and that the worker
+places each real frame on the cell ``data.memoryCell`` names. It reads the real
+PONI and ``.edf`` and skips wherever the proc files are not readable.
 """
 
 from __future__ import annotations
 
-import dataclasses
+import os
 from pathlib import Path
 
 import numpy as np
 import pytest
 
 pytest.importorskip("pyFAI")
-pytest.importorskip("fabio")
-xr = pytest.importorskip("xarray")
+pytest.importorskip("extra_data")
 
-from waxs_mockrun import write_synthetic_poni  # noqa: E402
-
-from analysis.common.masks import frame_bad  # noqa: E402
+from analysis.common.plan import Block  # noqa: E402
+from analysis.waxs import worker  # noqa: E402
 from analysis.waxs.cells import CellAccumulator  # noqa: E402
-from analysis.waxs.config import (  # noqa: E402
-    EXPECTED_BITS,
-    EXPECTED_LIT_CELLS,
-    JungfrauWaxsConfig,
-)
+from analysis.waxs.config import EXPECTED_LIT_CELLS, config_for  # noqa: E402
 from analysis.waxs.integrate import integrate_frame  # noqa: E402
 from analysis.waxs.operator import build_operator  # noqa: E402
 from analysis.waxs.photons import PhotonCounting  # noqa: E402
+from analysis.waxs.plan import open_detector  # noqa: E402
 from analysis.waxs.selftest import run_selftest  # noqa: E402
 
-DATA = Path(__file__).resolve().parents[2] / "data"
+PROC = Path("/gpfs/exfel/exp/MID/202601/p010400/proc/r0423")
+#: A train in the science block of r0423, lit in cells 0-6 and 15.
+TRAIN_ID = 2637695397
 
-#: Measured on r0423 train 2637695397. ``static_fraction`` comes from the
-#: ``.edf``, which is correct for both detectors; the rest depends on
-#: ``data.mask`` and so is trustworthy for jf1 only (see the module docstring).
-MEASURED = {
-    "jf1": {
-        "read_noise_kev": 0.3230,
-        "static_fraction": 0.759,
-        "kept_per_cell": 126125,
-    },
-    "jf2": {"read_noise_kev": 0.3175, "static_fraction": 0.844, "kept_per_cell": 81767},
-}
-
-#: ``proc_mask_jf2_r423.nc`` is a duplicate of jf1's export, so anything that
-#: reads it for jf2 is reading the wrong detector's mask.
-MASK_EXPORT_TRUSTWORTHY = {"jf1": True, "jf2": False}
+pytestmark = pytest.mark.skipif(
+    not (PROC.is_dir() and os.access(PROC, os.R_OK | os.X_OK)),
+    reason="the r0423 proc files are readable on Maxwell only",
+)
 
 
-def files_for(detector):
-    return (
-        DATA / f"proc_data_{detector}_r423.nc",
-        DATA / f"proc_mask_{detector}_r423.nc",
-        DATA / f"{detector}_mask.edf",
-    )
+@pytest.fixture(scope="module", params=["jf1", "jf2"])
+def real(request):
+    from extra_data import by_id, open_run
 
-
-@pytest.fixture(params=["jf1", "jf2"])
-def real(request, tmp_path):
-    detector = request.param
-    data_file, mask_file, edf = files_for(detector)
-    for path in (data_file, mask_file, edf):
-        if not path.exists():
-            pytest.skip(f"{path} is absent (facility data is not committed)")
-
-    cfg = JungfrauWaxsConfig(
-        proposal=10400,
-        run=423,
-        detector=detector,
-        poni_file=str(write_synthetic_poni(tmp_path / f"{detector}.poni")),
-        static_mask_file=str(edf),
-        npt=500,
-    )
+    cfg = config_for(10400, 423, request.param, npt=200)
     op, ai = build_operator(cfg)
-    data = xr.open_dataarray(data_file).values[0]
-    mask = xr.open_dataarray(mask_file).values[0]
-    return dataclasses.replace(cfg), op, ai, data, mask, detector
+    det = open_detector(cfg, open_run(10400, 423, data="proc"))
+    selected = det.select_trains(by_id[[TRAIN_ID]])
+    data = np.asarray(selected["data.adc"].ndarray())[0, 0]
+    mask = np.asarray(selected["data.mask"].ndarray())[0, 0]
+    cells = np.asarray(selected["data.memoryCell"].ndarray()).reshape(-1)
+    return cfg, op, ai, det, data, mask, cells
 
 
-def test_the_data_is_what_claude_md_records(real):
-    cfg, op, ai, data, mask, detector = real
-    assert data.dtype == np.float32
-    assert data.shape == (16, 512, 1024)
-    assert mask.dtype == np.uint32
-
-    bits = int(np.bitwise_or.reduce(mask, axis=None))
-    assert {b for b in range(32) if bits >> b & 1} == set(EXPECTED_BITS)
-    # Bit 22 NON_STANDARD_SIZE is set, which is why no seam mask is needed.
-    assert bits & (1 << 22)
-
-    expected = MEASURED[detector]
-    # The .edf is correct for both detectors.
-    assert op.static_bad.mean() == pytest.approx(expected["static_fraction"], abs=0.001)
-    if MASK_EXPORT_TRUSTWORTHY[detector]:
-        kept = int((~op.static_bad & (mask[0].reshape(-1) == 0)).sum())
-        assert kept == expected["kept_per_cell"]
-
-
-def test_the_lit_array_positions_are_the_first_eight(real):
-    """Positions, not cell ids: the export carries no ``data.memoryCell``.
-
-    Feeding ``arange(16)`` as the cell ids makes this a statement about where
-    the lit frames sit in the array, which is 0-7. What cell ids they carry is
-    a different question, and the answer is 0-6 and 15. Reading one off the
-    other would label frames with the wrong cell.
-    """
-    cfg, op, ai, data, mask, detector = real
-    positions = np.arange(16, dtype=np.uint16)
+def test_each_row_holds_the_real_frame_its_memory_cell_labels(real):
+    cfg, op, ai, det, data, mask, cells = real
+    assert int(cells[0]) == 15
     accumulator = CellAccumulator(cfg, op.static_bad)
-    accumulator.update(data, mask, positions)
-    result = accumulator.finalise()
+    accumulator.update(data, mask, cells)
+    lit = accumulator.finalise().lit
+    assert lit == tuple(EXPECTED_LIT_CELLS)
 
-    assert result.lit == tuple(range(8))
-    # The two populations sit far apart: above 40 % against below 0.1 %.
-    assert result.lit_fraction[:8].min() > 0.40
-    assert result.lit_fraction[8:].max() < 0.001
+    worker.init_from_detector(cfg, op, ai, lit, det)
+    try:
+        result = worker.process_block(Block(0, (TRAIN_ID,), (len(lit),), (0,)))
+    finally:
+        worker._STATE = None
 
-    # Positions 0-7 are consecutive, so the run-invariant shape check passes.
-    # It cannot catch positions read as cell ids.
-    result.check_structure(16)
-    # ...and so this set is *not* the expected one, which is about cell ids.
-    from analysis.waxs.cells import UnexpectedLitCells
-
-    with pytest.raises(UnexpectedLitCells):
-        result.check_expected(EXPECTED_LIT_CELLS)
-
-
-def test_the_read_noise_is_recovered(real):
-    cfg, op, ai, data, mask, detector = real
-    if not MASK_EXPORT_TRUSTWORTHY[detector]:
-        pytest.skip(f"proc_mask_{detector}_r423.nc is a copy of jf1's export")
-    accumulator = CellAccumulator(cfg, op.static_bad)
-    accumulator.update(data, mask, np.arange(16, dtype=np.uint16))
-    result = accumulator.finalise()
-    assert result.read_noise_kev == pytest.approx(
-        MEASURED[detector]["read_noise_kev"], abs=0.001
-    )
+    counting = PhotonCounting.from_config(cfg)
+    bits = np.uint32(cfg.mask_bits)
+    position = {int(cell): index for index, cell in enumerate(cells)}
+    assert list(result.cell_id) == list(lit)
+    for row, cell in enumerate(lit):
+        at = position[cell]
+        dynamic = (mask[at].reshape(-1) & bits) != 0
+        alone = integrate_frame(
+            ai, op, counting, data[at], dynamic, max_abs_kev=cfg.max_abs_kev
+        )
+        assert np.array_equal(result.signal[row], alone.signal.astype(np.float32)), cell
 
 
 def test_the_nan_path_equals_the_reference_on_real_frames(real):
-    """The NaN path equals the per-frame-mask reference exactly, in every bin."""
-    cfg, op, ai, data, mask, detector = real
-    counting = PhotonCounting.from_config(cfg)
-    # Array positions 0-7, which is where the lit frames are in the export.
+    """Exactly, in every bin, on dense keV data with a negative tail."""
+    cfg, op, ai, det, data, mask, cells = real
     bits = np.uint32(cfg.mask_bits)
+    position = {int(cell): index for index, cell in enumerate(cells)}
     frames = [
-        (data[position], (mask[position].reshape(-1) & bits) != 0)
-        for position in range(8)
+        (data[position[cell]], (mask[position[cell]].reshape(-1) & bits) != 0)
+        for cell in EXPECTED_LIT_CELLS
     ]
-    report = run_selftest(ai, op, counting, frames, max_abs_kev=cfg.max_abs_kev)
-
-    assert report.n_frames == 8
+    report = run_selftest(
+        ai,
+        op,
+        PhotonCounting.from_config(cfg),
+        frames,
+        max_abs_kev=cfg.max_abs_kev,
+    )
+    assert report.n_frames == len(EXPECTED_LIT_CELLS)
     assert report.max_rel_signal == 0.0
     assert report.max_rel_normalization == 0.0
     assert report.max_rel_variance == 0.0
-    assert len(ai.engines) == 1  # the matrix was never rebuilt
-
-
-def test_a_real_frame_integrates_to_something_sensible(real):
-    cfg, op, ai, data, mask, detector = real
-    counting = PhotonCounting.from_config(cfg)
-    bad = frame_bad(mask[0], cfg.mask_bits, op.static_bad)
-    dynamic = (mask[0].reshape(-1) & np.uint32(cfg.mask_bits)) != 0
-    result = integrate_frame(
-        ai, op, counting, data[0], dynamic, max_abs_kev=cfg.max_abs_kev
-    )
-
-    assert np.isfinite(result.signal).all()
-    assert (result.normalization > 0).all()
-    assert result.energy_valid > 0
-    assert result.n_photons > 0
-    # Every ASIC keeps far more usable pixels than min_pixels, so none lacks a
-    # level.
-    assert result.n_level_missing == 0
-    assert np.abs(result.asic_level).max() < 0.5
-    # Every extreme pixel sits under the .edf, so the kept maximum is modest.
-    assert result.max_kev < 100
-    assert result.n_bad_pixels == int(bad.sum())
-
-
-def test_the_value_check_catches_extremes_the_static_mask_would_have_hidden(real):
-    """Without the ``.edf``, the value check excludes extreme pixels, not frames.
-
-    In the export every extreme pixel sits under the ``.edf``. Strip it away and
-    the value check is what stops such a pixel reaching a q bin, by dropping the
-    pixel and keeping the frame.
-    """
-    cfg, op, ai, data, mask, detector = real
-    from analysis.waxs.integrate import extreme_pixels
-
-    extreme = np.abs(data) > cfg.max_abs_kev
-    assert extreme.any(), "the export should carry some extreme pixels"
-    # Every one of them is under the .edf, so none reaches the integrator.
-    assert not (extreme.reshape(16, -1)[:, ~op.static_bad]).any()
-
-    naked = dataclasses.replace(cfg, static_mask_file=None)
-    naked_op, _ = build_operator(naked, poni_file=cfg.poni_file)
-    caught = [
-        int(extreme_pixels(data[cell], naked_op.static_bad, cfg.max_abs_kev).sum())
-        for cell in range(16)
-    ]
-    assert any(caught), "without the .edf the value check must fire"
-    # And it stays a handful of pixels, never the whole frame.
-    assert max(caught) < 0.01 * naked_op.static_bad.size

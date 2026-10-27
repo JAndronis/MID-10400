@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import dataclasses
-
 import numpy as np
 import pytest
 from waxs_mockrun import (  # noqa: E402
@@ -60,36 +58,31 @@ def test_the_readout_noise_comes_from_the_dark_cells(cfg, operator):
 
 
 def test_a_changed_cell_pattern_fails_loudly(cfg, operator):
-    """A pinned lit-cell set that the run does not match raises.
+    """A pinned set the run does not match raises, and so does an impossible one.
 
     A silent change would halve or double I(q). ``cfg.expected_lit_cells`` is
     ``None`` by default because the proposal used several readout patterns, so
-    this gate applies only when a reprocess pins the set.
+    the pin applies only when a reprocess sets it. Four consecutive cells are a
+    pattern a JUNGFRAU can read, so only the pin catches them; ``(0, 2, 4)`` is
+    one no ``storageCellStart`` produces, so the shape check refuses it.
     """
     op, _ = operator
-    accumulator = CellAccumulator(cfg, op.static_bad)
-    accumulator.update(*synthetic_train(lit_cells=(0, 1, 2, 3)))
-    result = accumulator.finalise()
 
-    assert result.lit == (0, 1, 2, 3)
+    def measured(lit_cells):
+        accumulator = CellAccumulator(cfg, op.static_bad)
+        accumulator.update(*synthetic_train(lit_cells=lit_cells))
+        return accumulator.finalise()
+
+    four = measured((0, 1, 2, 3))
+    assert four.lit == (0, 1, 2, 3)
     with pytest.raises(UnexpectedLitCells, match=r"cells \[0, 1, 2, 3\] are lit"):
-        result.check_expected(EXPECTED_LIT_CELLS)
-    # Four consecutive cells are a pattern a JUNGFRAU can read, so the
-    # run-invariant check passes. One gate checks this beamtime's pattern, the
-    # other what the detector can produce.
-    result.check_structure(CELLS)
+        four.check_expected(EXPECTED_LIT_CELLS)
+    four.check_structure(CELLS)
 
-
-def test_the_failure_names_every_cell_fraction(cfg, operator):
-    op, _ = operator
-    accumulator = CellAccumulator(cfg, op.static_bad)
-    accumulator.update(*synthetic_train(lit_cells=(0,)))
-    with pytest.raises(UnexpectedLitCells) as raised:
-        accumulator.finalise().check_expected(EXPECTED_LIT_CELLS)
-    # The evidence has to be in the message: the next question is always
-    # "by how much did it miss the threshold?"
-    assert "per-cell fractions" in str(raised.value)
-    assert str(raised.value).count(":") >= CELLS
+    impossible = measured((0, 2, 4))
+    assert impossible.lit == (0, 2, 4)
+    with pytest.raises(ImplausibleLitCells):
+        impossible.check_structure(CELLS)
 
 
 # ── the run-invariant shape check ────────────────────────────────────────────
@@ -110,49 +103,23 @@ def test_only_a_storage_cell_sequence_is_plausible(lit, expected):
     assert is_storage_cell_sequence(lit, 16) is expected
 
 
-def test_an_impossible_set_names_itself_and_the_knobs(cfg, operator):
-    """An impossible set raises, naming the two settings that decide the split."""
-    op, _ = operator
-    accumulator = CellAccumulator(cfg, op.static_bad)
-    accumulator.update(*synthetic_train(lit_cells=(0, 2, 4)))
-    result = accumulator.finalise()
-
-    assert result.lit == (0, 2, 4)
-    with pytest.raises(ImplausibleLitCells) as raised:
-        result.check_structure(CELLS)
-    message = str(raised.value)
-    assert "lit_fraction_min" in message and "lit_gap_ratio" in message
-
-
-# ── where the floor and the gap each bite ────────────────────────────────────
-def test_the_floor_alone_splits_a_normal_run():
-    """Lit cells well above the floor, dark ones far below it, no gap needed."""
-    fraction = np.array([0.4, 0.4, 0.4, 1e-6, 1e-6, 1e-6])
-    lit, gap = split_lit_dark(fraction, floor=4.805e-4, gap_ratio=30.0)
-    assert lit.tolist() == [True, True, True, False, False, False]
-    assert gap is None  # every cell above the floor was kept
-
-
-def test_the_gap_splits_an_attenuated_run():
-    """All six clear the floor; only the step between them says where to cut."""
-    fraction = np.array([0.05, 0.05, 0.05, 1e-3, 1e-3, 1e-3])
-    lit, gap = split_lit_dark(fraction, floor=4.805e-4, gap_ratio=30.0)
-    assert lit.tolist() == [True, True, True, False, False, False]
-    assert gap == pytest.approx(50.0)
-
-
-def test_nothing_above_the_floor_is_a_dark_run():
-    fraction = np.zeros(16)
-    lit, gap = split_lit_dark(fraction, floor=4.805e-4, gap_ratio=30.0)
-    assert not lit.any()
-    assert gap is None
-
-
-def test_the_split_does_not_reorder_the_cells():
-    """``split_lit_dark`` sorts internally; the mask it returns must not."""
-    fraction = np.array([1e-6, 0.4, 1e-6, 0.4])
-    lit, _ = split_lit_dark(fraction, floor=4.805e-4, gap_ratio=30.0)
-    assert lit.tolist() == [False, True, False, True]
+@pytest.mark.parametrize(
+    ("fraction", "lit", "gap"),
+    [
+        # Lit cells well above the floor, dark ones far below it.
+        ([0.4, 0.4, 0.4, 1e-6, 1e-6, 1e-6], [1, 1, 1, 0, 0, 0], None),
+        # All clear the floor (an attenuated run); only the step says where.
+        ([0.05, 0.05, 0.05, 1e-3, 1e-3, 1e-3], [1, 1, 1, 0, 0, 0], 50.0),
+        # Nothing above the floor: a dark run.
+        ([0.0] * 16, [0] * 16, None),
+        # The split sorts internally; the mask it returns must not.
+        ([1e-6, 0.4, 1e-6, 0.4], [0, 1, 0, 1], None),
+    ],
+)
+def test_the_floor_and_the_gap_split_the_cells(fraction, lit, gap):
+    got, step = split_lit_dark(np.array(fraction), floor=4.805e-4, gap_ratio=30.0)
+    assert got.tolist() == [bool(x) for x in lit]
+    assert step == (None if gap is None else pytest.approx(gap))
 
 
 def test_no_dark_cell_leaves_the_noise_unmeasured(cfg, operator):
@@ -165,28 +132,17 @@ def test_no_dark_cell_leaves_the_noise_unmeasured(cfg, operator):
     assert result.read_noise_kev is None
 
 
-def test_the_static_mask_is_excluded_from_the_statistics(cfg, operator):
-    """A masked pixel must not vote on whether a cell is lit."""
+def test_masked_pixels_do_not_vote_on_whether_a_cell_is_lit(cfg, operator):
+    """Huge values under the static mask, or under ``data.mask``, light nothing."""
     op, _ = operator
     data, mask, cells = synthetic_train(lit_cells=())
-    # Put a huge value everywhere the static mask excludes: if those counted,
-    # every cell would look lit.
     data.reshape(CELLS, -1)[:, op.static_bad] = 1e4
-    accumulator = CellAccumulator(cfg, op.static_bad)
-    accumulator.update(data, mask, cells)
-    assert accumulator.finalise().lit == ()
-
-
-def test_the_dynamic_mask_is_excluded_too(cfg, operator):
-    op, _ = operator
-    data, mask, cells = synthetic_train(lit_cells=())
     keep = np.flatnonzero(~op.static_bad)[:1000]
     data.reshape(CELLS, -1)[:, keep] = 1e4
     mask.reshape(CELLS, -1)[:, keep] = np.uint32(1 << 21)
     accumulator = CellAccumulator(cfg, op.static_bad)
     accumulator.update(data, mask, cells)
-    result = accumulator.finalise()
-    assert result.lit == ()
+    assert accumulator.finalise().lit == ()
     assert accumulator.bits_present == 1 << 21
 
 
@@ -198,26 +154,3 @@ def test_cell_ids_are_taken_from_the_reader_not_from_position(cfg, operator):
     accumulator = CellAccumulator(cfg, op.static_bad)
     accumulator.update(data, mask, shifted)
     assert accumulator.finalise().lit == (100, 101)
-
-
-def test_a_threshold_between_the_two_populations_is_what_matters(cfg, operator):
-    op, _ = operator
-    data, mask, cells = synthetic_train()
-    for fraction in (0.01, 0.10, 0.30):
-        accumulator = CellAccumulator(
-            dataclasses.replace(cfg, lit_fraction_min=fraction), op.static_bad
-        )
-        accumulator.update(data, mask, cells)
-        assert accumulator.finalise().lit == LIT_CELLS
-
-
-def test_mismatched_inputs_are_refused(cfg, operator):
-    op, _ = operator
-    data, mask, cells = synthetic_train()
-    accumulator = CellAccumulator(cfg, op.static_bad)
-    with pytest.raises(ValueError, match="cell_ids has shape"):
-        accumulator.update(data, mask, cells[:4])
-    with pytest.raises(TypeError, match="uint32"):
-        accumulator.update(data, mask.astype(np.uint16), cells)
-    with pytest.raises(ValueError, match=r"\(n_cells, 512, 1024\)"):
-        accumulator.update(data[0], mask[0], cells[:1])

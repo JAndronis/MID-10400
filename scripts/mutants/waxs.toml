@@ -1,0 +1,252 @@
+# Mutants for the JUNGFRAU WAXS pass (src/analysis/waxs). Each entry replaces
+# `old` (which must occur exactly once in `file`) by `new` in a copy of src/ and
+# runs `tests` against the copy. expect = "killed" (default): the tests must
+# fail. expect = "survived": a known gap, listed so the fix flips it.
+
+[[mutant]]
+name = "waxs_position_is_cell_id"
+file = "src/analysis/waxs/worker.py"
+old = "            position = positions[cell]"
+new = "            position = cell"
+tests = [
+    "tests/waxs/test_waxs_run.py::test_each_row_holds_the_frame_its_memory_cell_labels",
+    "tests/waxs/test_waxs_real_frames.py::test_each_row_holds_the_real_frame_its_memory_cell_labels",
+]
+
+[[mutant]]
+name = "waxs_policy_refuses_data_check_failed"
+file = "src/analysis/waxs/config.py"
+old = "return frozenset({FrameStatus.OK.name, FrameStatus.DATA_CHECK_FAILED.name})"
+new = "return frozenset({FrameStatus.OK.name})"
+tests = ["tests/waxs/test_waxs_run.py::test_a_fully_masked_frame_is_refused_counted_and_tolerated"]
+
+[[mutant]]
+name = "waxs_pass_ignores_policy"
+file = "src/analysis/waxs/run.py"
+old = "    tolerated = cfg.tolerated_statuses"
+new = '    tolerated = {"OK", "DATA_CHECK_FAILED"}'
+tests = ["tests/waxs/test_waxs_run.py::test_a_fully_masked_frame_is_refused_counted_and_tolerated"]
+
+[[mutant]]
+name = "waxs_damnit_reader_ignores_policy"
+file = "src/analysis/waxs/damnit.py"
+old = "    if set(summary) - cfg.tolerated_statuses:"
+new = '    if set(summary) - {"OK"}:'
+tests = ["tests/waxs/test_waxs_damnit.py::test_a_refused_frame_is_tolerated_everywhere_or_nowhere"]
+
+[[mutant]]
+name = "waxs_preprocess_colour_ignores_policy"
+file = "src/analysis/waxs/damnit.py"
+old = "        tolerated[detector] = cfg.tolerated_statuses"
+new = '        tolerated[detector] = frozenset({"OK", "DATA_CHECK_FAILED"})'
+tests = ["tests/waxs/test_waxs_damnit.py::test_a_refused_frame_is_tolerated_everywhere_or_nowhere"]
+
+[[mutant]]
+name = "waxs_dead_frame_stored_as_ok"
+file = "src/analysis/waxs/worker.py"
+old = "                result.status[row] = FrameStatus.DATA_CHECK_FAILED"
+new = "                result.status[row] = FrameStatus.OK"
+tests = ["tests/waxs/test_waxs_run.py::test_a_fully_masked_frame_is_refused_counted_and_tolerated"]
+
+[[mutant]]
+name = "waxs_measured_noise_beats_configured"
+file = "src/analysis/waxs/run.py"
+old = "    if cfg.read_noise_kev is not None:\n        return ErrorModel("
+new = "    if cfg.read_noise_kev is not None and classification.read_noise_kev is None:\n        return ErrorModel("
+tests = ["tests/waxs/test_waxs_run.py"]
+expect = "survived"  # sigma_read enters no stored number; wave 3 deletes the error model
+
+[[mutant]]
+name = "waxs_modules_present_empty"
+file = "src/analysis/waxs/plan.py"
+old = "    modules_present = _modules_present(dc, det)"
+new = "    modules_present = {}"
+tests = ["tests/waxs/test_waxs_plan.py"]
+expect = "survived"  # unreachable on a one-module detector; wave 3 deletes it
+
+[[mutant]]
+name = "waxs_label_mismatch_counted_as_refused"
+file = "src/analysis/waxs/writer.py"
+old = "        refused = status == FrameStatus.DATA_CHECK_FAILED"
+new = "        refused = (status == FrameStatus.DATA_CHECK_FAILED) | (status == FrameStatus.LABEL_MISMATCH)"
+tests = ["tests/waxs/test_waxs_run.py::test_a_label_mismatch_still_takes_the_run_down"]
+
+[[mutant]]
+name = "waxs_rint_to_floor"
+file = "src/analysis/waxs/photons.py"
+old = "np.rint"
+new = "np.floor"
+tests = ["tests/waxs/test_waxs_photons.py", "tests/waxs/test_waxs_integrate.py"]
+
+[[mutant]]
+name = "waxs_operator_rtol_loose"
+file = "src/analysis/waxs/complete.py"
+old = "RTOL = 1e-6"
+new = "RTOL = 0.5"
+tests = ["tests/waxs/test_waxs_integrity.py"]
+
+[[mutant]]
+name = "waxs_lit_count_guard_dropped"
+file = "src/analysis/waxs/worker.py"
+old = "        if expected != len(lit):"
+new = "        if False:"
+tests = ["tests/waxs/test_waxs_run.py", "tests/waxs/test_waxs_writer.py"]
+expect = "survived"  # unreachable: build_plan gives every train len(lit) rows; wave 3 deletes it
+
+[[mutant]]
+name = "waxs_provenance_note_reworded"
+file = "src/analysis/waxs/run.py"
+old = "and does not enter it"
+new = "and does not enter the variance"
+tests = ["tests/waxs/test_waxs_run.py::test_provenance_records_what_was_decided"]
+expect = "survived"  # provenance prose; only the deleted golden digest caught it
+
+# Controls: behaviours the suite already pins, listed so that the deletions
+# that trimmed each test file are shown not to have lost them.
+
+[[mutant]]
+name = "waxs_any_lit_set_is_a_sequence"
+file = "src/analysis/waxs/config.py"
+old = "    if not lit or len(lit) >= n_cells:\n        return True"
+new = "    if True:\n        return True"
+tests = ["tests/waxs/test_waxs_config.py", "tests/waxs/test_waxs_cells.py"]
+
+[[mutant]]
+name = "waxs_method_not_checked"
+file = "src/analysis/waxs/config.py"
+old = "        if tuple(self.method) != METHOD:"
+new = "        if False:"
+tests = ["tests/waxs/test_waxs_config.py"]
+
+[[mutant]]
+name = "waxs_other_detectors_name_allowed"
+file = "src/analysis/waxs/config.py"
+old = "            if self.detector_name == DETECTOR_NAMES[other]:"
+new = "            if False:"
+tests = ["tests/waxs/test_waxs_config.py"]
+
+[[mutant]]
+name = "waxs_wavelength_not_checked"
+file = "src/analysis/waxs/operator.py"
+old = "    if relative > float(np.finfo(np.float32).eps):"
+new = "    if relative > 1.0:"
+tests = ["tests/waxs/test_waxs_operator.py"]
+
+[[mutant]]
+name = "waxs_edf_inverted"
+file = "src/analysis/waxs/masks.py"
+old = "    bad = array.reshape(-1) != 0"
+new = "    bad = array.reshape(-1) == 0"
+tests = ["tests/waxs/test_waxs_operator.py"]
+
+[[mutant]]
+name = "waxs_pyfai_mask_frozen"
+file = "src/analysis/waxs/operator.py"
+old = '    mask_2d = np.array(static.bad.reshape(MODULE_SHAPE), dtype=bool, order="C")'
+new = '    mask_2d = np.array(static.bad.reshape(MODULE_SHAPE), dtype=bool, order="C"); mask_2d.flags.writeable = False'
+tests = ["tests/waxs/test_waxs_operator.py"]
+
+[[mutant]]
+name = "waxs_extreme_pixels_not_excluded"
+file = "src/analysis/waxs/integrate.py"
+old = "    return (~excluded) & (~finite | (np.abs(flat) > max_abs_kev))"
+new = "    return (~excluded) & ~finite"
+tests = ["tests/waxs/test_waxs_integrate.py"]
+
+[[mutant]]
+name = "waxs_asic_edge_kept"
+file = "src/analysis/waxs/photons.py"
+old = "    tiles = tiles[..., edge : ASIC_SIZE - edge, edge : ASIC_SIZE - edge]"
+new = "    tiles = tiles[..., :, :]"
+tests = ["tests/waxs/test_waxs_photons.py"]
+
+[[mutant]]
+name = "waxs_level_from_too_few_pixels"
+file = "src/analysis/waxs/photons.py"
+old = "        if n_pixels[asic] < counting.min_pixels:"
+new = "        if n_pixels[asic] < 1:"
+tests = ["tests/waxs/test_waxs_photons.py"]
+
+[[mutant]]
+name = "waxs_gap_split_ignored"
+file = "src/analysis/waxs/cells.py"
+old = "        if step > ratio:"
+new = "        if False:"
+tests = ["tests/waxs/test_waxs_cells.py"]
+
+[[mutant]]
+name = "waxs_resume_redoes_every_block"
+file = "src/analysis/waxs/run.py"
+old = "        todo = [b for b in plan.blocks if not out.block_complete(b)]"
+new = "        todo = list(plan.blocks)"
+tests = ["tests/waxs/test_waxs_run.py::test_resume_processes_only_the_missing_blocks"]
+
+[[mutant]]
+name = "waxs_damnit_npt_default"
+file = "src/analysis/waxs/damnit.py"
+old = 'DAMNIT_OVERRIDES: dict[str, Any] = {"npt": 200}'
+new = "DAMNIT_OVERRIDES: dict[str, Any] = {}"
+tests = ["tests/waxs/test_waxs_damnit.py"]
+
+[[mutant]]
+name = "waxs_hash_reads_input_path_not_bytes"
+file = "src/analysis/common/config.py"
+old = "name: file_sha256(path) if path else None for name, path in input_files.items()"
+new = "name: str(path) if path else None for name, path in input_files.items()"
+tests = ["tests/waxs/test_waxs_config.py"]
+
+[[mutant]]
+name = "waxs_masked_wild_pixel_counted_as_extreme"
+file = "src/analysis/waxs/integrate.py"
+old = "    return (~excluded) & (~finite | (np.abs(flat) > max_abs_kev))"
+new = "    return ~finite | (np.abs(flat) > max_abs_kev)"
+tests = ["tests/waxs/test_waxs_integrate.py"]
+
+[[mutant]]
+name = "waxs_negative_counts_kept"
+file = "src/analysis/waxs/photons.py"
+old = "    return np.clip(photons, np.float32(0), None)"
+new = "    return photons"
+tests = ["tests/waxs/test_waxs_photons.py"]
+
+[[mutant]]
+name = "waxs_train_label_from_index"
+file = "src/analysis/waxs/worker.py"
+old = "            or int(row_labels[0]) != train_id"
+new = "            or int(adc_key.train_id_coordinates()[0]) != train_id"
+tests = ["tests/waxs/test_waxs_run.py::test_a_train_whose_own_rows_name_another_train_is_a_label_mismatch"]
+
+[[mutant]]
+name = "waxs_zero_entry_train_given_rows"
+file = "src/analysis/waxs/plan.py"
+old = "            records.append(TrainRecord(train_id, 0, row, status))\n            continue"
+new = "            records.append(TrainRecord(train_id, rows_per_train, row, status))\n            row += rows_per_train\n            continue"
+tests = ["tests/waxs/test_waxs_plan.py"]
+
+[[mutant]]
+name = "waxs_per_cell_places_by_position"
+file = "src/analysis/common/writer.py"
+old = "            label_index = np.searchsorted(labels, row_label[start:stop][keep])"
+new = "            label_index = np.arange(int(keep.sum())) % labels.size"
+tests = ["tests/waxs/test_waxs_writer.py::test_per_cell_places_frames_by_label"]
+
+[[mutant]]
+name = "waxs_overview_traces_not_scaled_together"
+file = "src/analysis/waxs/damnit.py"
+old = '        ax1.plot(q, curve * factor, label=f"{label}{suffix}", lw=1.2)'
+new = '        ax1.plot(q, curve * factor * (1 + index), label=f"{label}{suffix}", lw=1.2)'
+tests = ["tests/waxs/test_waxs_damnit.py::test_the_overview_draws_two_one_or_no_detectors"]
+
+[[mutant]]
+name = "waxs_mean_curve_population_std"
+file = "src/analysis/waxs/combine.py"
+old = "        flat.std(axis=0, ddof=1) / np.sqrt(flat.shape[0])"
+new = "        flat.std(axis=0, ddof=0) / np.sqrt(flat.shape[0])"
+tests = ["tests/waxs/test_waxs_combine.py"]
+
+[[mutant]]
+name = "waxs_pooled_error_over_sqrt_count"
+file = "src/analysis/waxs/combine.py"
+old = "        error = np.sqrt((sigma[present] ** 2).sum(axis=0)) / count"
+new = "        error = np.sqrt((sigma[present] ** 2).sum(axis=0)) / np.sqrt(count)"
+tests = ["tests/waxs/test_waxs_combine.py"]

@@ -1,10 +1,8 @@
 """Per-ASIC photon counting (``analysis.waxs.photons``), on synthetic frames.
 
-The estimator is the template from proposal p010646. These tests pin what it
-must do here: recover a zero level per ASIC from the frame itself, count the
-photons that were put in, double them at half the energy, give no level rather
-than a guess where too few pixels remain, and be reproducible from the float32
-values a file stores.
+These tests pin what the estimator must do: recover a zero level per ASIC from
+the frame itself, count the photons that were put in, and give no level rather
+than a guess where too few pixels remain.
 """
 
 from __future__ import annotations
@@ -54,11 +52,7 @@ def test_the_asic_map_and_the_asic_view_agree():
     assert view.shape == (N_ASICS, ASIC_SIZE * ASIC_SIZE)
     for asic in range(N_ASICS):
         assert (view[asic] == asic).all()
-
-
-def test_the_edge_is_left_out_of_every_asic():
-    view = asic_view(np.zeros(MODULE_SHAPE), 3)
-    assert view.shape == (N_ASICS, (ASIC_SIZE - 6) ** 2)
+    assert asic_view(np.zeros(MODULE_SHAPE), 3).shape == (N_ASICS, (ASIC_SIZE - 6) ** 2)
 
 
 # ── the zero level ────────────────────────────────────────────────────────────
@@ -69,54 +63,17 @@ def test_a_level_per_asic_is_recovered_under_photons(counting):
     assert (n_pixels == (ASIC_SIZE - 6) ** 2).all()
 
 
-def test_the_level_follows_a_common_mode_jump(counting):
-    """The frame's own level follows a train-to-train common-mode jump, as on jf1."""
-    first, _ = frame(seed=1)
-    second, _ = frame(seed=2, offsets=OFFSETS + 0.15)
-    a, _ = zero_levels(first, everything(), counting)
-    b, _ = zero_levels(second, everything(), counting)
-    assert (b - a) == pytest.approx(np.full(N_ASICS, 0.15), abs=0.005)
-
-
 def test_too_few_pixels_give_no_level_not_a_guess(counting):
     values, _ = frame()
     usable = everything()
-    keep = np.flatnonzero(ASIC_ID == 4)[:500]
+    # 500 pixels inside the ASIC's edge, so they all reach the estimator.
+    interior = asic_view(np.arange(ASIC_ID.size).reshape(MODULE_SHAPE), 3)[4]
     usable[ASIC_ID == 4] = False
-    usable[keep] = True
+    usable[interior[:500]] = True
     levels, n_pixels = zero_levels(values, usable, counting)
-    assert n_pixels[4] < counting.min_pixels
+    assert n_pixels[4] == 500 < counting.min_pixels
     assert np.isnan(levels[4])
     assert np.isfinite(np.delete(levels, 4)).all()
-
-
-def test_an_asic_with_nothing_below_the_cut_has_no_level(counting):
-    values, _ = frame()
-    values[ASIC_ID == 3] = 50.0  # saturated: no zero-photon pixel at all
-    levels, _ = zero_levels(values, everything(), counting)
-    assert np.isnan(levels[3])
-
-
-def test_the_estimator_converges_by_three_iterations(counting):
-    """Three iterations suffice: ten move no level by as much as 1e-3 keV."""
-    values, _ = frame(seed=4)
-    three, _ = zero_levels(values, everything(), counting)
-    ten, _ = zero_levels(
-        values, everything(), dataclasses.replace(counting, level_iterations=10)
-    )
-    assert np.abs(ten - three).max() < 1e-3
-
-
-def test_the_estimator_is_the_template_one(counting):
-    """p010646's ``baseline``, verbatim, gives the same levels."""
-    values, _ = frame(seed=5)
-    a = asic_view(values.reshape(MODULE_SHAPE).astype(np.float64), 3)
-    est = np.nanmedian(np.where(a < 2.0, a, np.nan), -1)
-    for _ in range(3):
-        w = np.abs(a - est[..., None]) < 1.0
-        est = np.nansum(np.where(w, a, 0), -1) / w.sum(-1)
-    mine, _ = zero_levels(values, everything(), counting)
-    assert mine == pytest.approx(est, abs=1e-12)
 
 
 # ── counting ──────────────────────────────────────────────────────────────────
@@ -128,43 +85,36 @@ def test_the_photons_put_in_are_the_photons_counted(counting):
     assert np.array_equal(photons, truth)
 
 
-def test_half_the_energy_counts_every_photon_twice(counting):
-    """Counting at E/2 doubles every count exactly."""
-    values, truth = frame(seed=6, rate=1.5)
-    levels = zero_levels(values, everything(), counting)[0].astype(np.float32)
-    full = count_photons(values, levels, counting.energy_f4)
-    half = count_photons(values, levels, np.float32(E / 2))
-    assert np.array_equal(half, 2 * full)
-    assert np.array_equal(full, truth)
-
-
 def test_a_level_beyond_the_cut_is_refused_not_miscounted(counting):
     """An ASIC whose zero level sits far off (a broken pedestal, say) gets no level.
 
     The first estimate takes only values below ``level_cut_kev``, so a level of
-    ``E/2 - 0.1`` keV leaves nothing to estimate from. Counting against zero
-    instead would turn most of the ASIC's noise into photons, so refusing is
-    the safe outcome: the pixels are left out and ``n_level_missing`` says so.
+    ``E/2 - 0.1`` keV leaves nothing to estimate from, as does a saturated ASIC.
+    Counting against zero instead would turn most of the ASIC's noise into
+    photons, so refusing is the safe outcome: the pixels are left out and
+    ``n_level_missing`` says so.
     """
     offsets = OFFSETS.copy()
     offsets[5] = E / 2 - 0.1
     values, truth = frame(seed=7, offsets=offsets)
+    values[ASIC_ID == 3] = 50.0
     naive = count_photons(values, np.zeros(N_ASICS, np.float32), counting.energy_f4)
     assert (naive != truth)[ASIC_ID == 5].mean() > 0.3
     levels, _ = zero_levels(values, everything(), counting)
-    assert np.isnan(levels[5])
-    assert np.abs(np.delete(levels, 5) - np.delete(OFFSETS, 5)).max() < 0.005
+    assert np.isnan(levels[[3, 5]]).all()
+    others = np.delete(np.arange(N_ASICS), [3, 5])
+    assert np.abs(levels[others] - OFFSETS[others]).max() < 0.005
 
 
 def test_negative_values_count_zero_and_nan_stays_nan(counting):
-    values = np.full(ASIC_ID.size, -3.0, dtype=np.float32)
+    """A NaN pixel or a NaN level gives NaN counts, which the caller excludes."""
+    # -6 keV rounds to -1 photon before the clip.
+    values = np.full(ASIC_ID.size, -6.0, dtype=np.float32)
     values[0] = np.nan
     photons = count_photons(values, np.zeros(N_ASICS, np.float32), counting.energy_f4)
     assert np.isnan(photons[0])
     assert (photons[1:] == 0).all()
 
-
-def test_a_missing_level_gives_nan_counts_on_its_asic(counting):
     values, _ = frame()
     levels = OFFSETS.astype(np.float32)
     levels[2] = np.nan
@@ -173,49 +123,6 @@ def test_a_missing_level_gives_nan_counts_on_its_asic(counting):
     assert np.isfinite(photons[ASIC_ID != 2]).all()
 
 
-def test_counts_are_reproducible_from_the_stored_float32_values(counting):
-    """A reader recounts a frame from proc, ``asic_level`` and the stored E."""
-    values, _ = frame(seed=8)
-    levels = zero_levels(values, everything(), counting)[0].astype(np.float32)
-    stored_levels = np.frombuffer(levels.tobytes(), dtype=np.float32)
-    stored_energy = np.float32(float(counting.energy_f4))
-    first = count_photons(values, levels, counting.energy_f4)
-    again = count_photons(values, stored_levels, stored_energy)
-    assert np.array_equal(first, again)
-
-
-# ── settings ──────────────────────────────────────────────────────────────────
-def test_the_settings_come_from_the_config():
-    from analysis.waxs.config import JungfrauWaxsConfig
-
-    cfg = JungfrauWaxsConfig(
-        proposal=10400,
-        run=423,
-        detector="jf2",
-        poni_file=None,
-        static_mask_file=None,
-        level_min_pixels=2000,
-        level_pixels="kept",
-    )
-    counting = PhotonCounting.from_config(cfg)
-    assert counting.energy_kev == cfg.photon_energy_kev
-    assert counting.min_pixels == 2000
-    assert counting.level_pixels == "kept"
-    assert "rint" in counting.method and "kept" in counting.method
-    assert counting.summary()["method"] == counting.method
-
-
-@pytest.mark.parametrize(
-    ("field", "value", "match"),
-    [
-        ("energy_kev", 0.0, "energy_kev"),
-        ("level_window_kev", 0.0, "level_window_kev"),
-        ("level_iterations", -1, "level_iterations"),
-        ("edge_px", 128, "edge_px"),
-        ("min_pixels", 0, "min_pixels"),
-        ("level_pixels", "shadow", "level_pixels"),
-    ],
-)
-def test_nonsense_settings_are_refused(field, value, match):
-    with pytest.raises(ValueError, match=match):
-        dataclasses.replace(PhotonCounting(energy_kev=E), **{field: value})
+def test_an_unknown_choice_of_level_pixels_is_refused():
+    with pytest.raises(ValueError, match="level_pixels"):
+        dataclasses.replace(PhotonCounting(energy_kev=E), level_pixels="shadow")

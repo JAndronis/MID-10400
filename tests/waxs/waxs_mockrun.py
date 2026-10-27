@@ -14,6 +14,12 @@ The awkward-train cases are produced the way EXtra-data actually decides them:
 * dropped train: ``INDEX/trainId`` and the per-entry ``trainId`` are
   renumbered to a non-contiguous sequence, so the run itself has a gap.
 
+The memory cells are written in acquisition order, cell 15 first, as on the
+real detectors (``storageCellStart`` 15), and every lit cell has its own photon
+rate (:func:`lit_rate`). So a frame read from the array position equal to its
+cell id, instead of the position ``data.memoryCell`` gives, lands on the wrong
+cell and carries the wrong rate.
+
 There is no missing-module case: each of this experiment's detectors is a single
 JUNGFRAU-500K module with its own PONI and mask, and ``plan.open_detector``
 refuses a multi-module selection outright, so a train can only have its one
@@ -56,6 +62,10 @@ SEAM_BIT = np.uint32(1 << 22)  # NON_STANDARD_SIZE, set here, unlike AGIPD
 #: Enough photons for the lit-cell fraction to clear ``lit_fraction_min`` by a
 #: wide margin, as the real data does.
 LIT_RATE = 0.6
+#: The order the cells are stored in each entry. The real detectors start at
+#: cell 15, so array position 0 holds cell 15 and position ``c + 1`` holds
+#: cell ``c``.
+CELL_ORDER = (15, *range(15))
 PHOTON_KEV = 9.04
 READ_NOISE_KEV = 0.32
 
@@ -103,6 +113,15 @@ class MockRun:
         raise KeyError(train_id)
 
 
+def lit_rate(cell: int) -> float:
+    """Mean photons per pixel per frame in one lit cell.
+
+    Neighbouring cells differ by about 3 % of ``LIT_RATE``, far above the
+    Poisson error of a frame's mean over the module's kept pixels.
+    """
+    return LIT_RATE * (1 + cell / 32)
+
+
 def device_id(detector_name: str, module: int = 1) -> str:
     """Karabo device id. ``write_instrument`` appends ``:daqOutput`` itself.
 
@@ -136,12 +155,13 @@ def write_mock_run(
     legacy_alias: bool = True,
     train_ids: tuple[int, ...] = (10000, 10001, 10002, 10003),
     lit_cells: tuple[int, ...] = LIT_CELLS,
+    cell_order: tuple[int, ...] = CELL_ORDER,
     zero_entry_trains: tuple[int, ...] = (),
     static_fraction: float = 0.4,
-    nonfinite_train: int | None = None,
     extreme_train: int | None = None,
-    extreme_flagged: bool = False,
+    dead_frame_train: int | None = None,
     shuffled_cells_train: int | None = None,
+    mislabel_train: int | None = None,
     fill: bool = True,
     seed: int = 0,
 ) -> MockRun:
@@ -149,19 +169,21 @@ def write_mock_run(
 
     :param train_ids: the run's train ids. Pass a non-contiguous sequence to
         simulate a train the DAQ dropped.
+    :param cell_order: the memory cell stored at each array position of an
+        entry, a permutation of the sixteen cells.
     :param zero_entry_trains: trains the module wrote no entry for, which the
         plan records as ``NO_FRAMES``.
     :param static_fraction: fraction of pixels the returned static mask
         excludes. The real ``.edf`` masks exclude most of the module.
-    :param nonfinite_train: put a NaN on a kept pixel of this train's first lit
-        cell.
     :param extreme_train: put an unflagged 1.8e5 keV pixel on a kept pixel of
         this train's first lit cell, which the value check excludes.
-    :param extreme_flagged: also set that pixel's dynamic bit, so ``data.mask``
-        removes the value before the value check sees it. ``max_kev_static``
-        still records it, and ``n_extreme_pixels`` does not count it.
+    :param dead_frame_train: set the dynamic bit on every pixel of this train's
+        first lit cell, so that frame has nothing left to integrate.
     :param shuffled_cells_train: give this train a repeated ``memoryCell``
         entry, so its rows cannot be filled by label.
+    :param mislabel_train: write another train id into this train's own
+        ``data/trainId`` entry while ``INDEX`` still files it under this train,
+        as a DAQ that misfiled an entry would.
     :param fill: write frame content. ``False`` leaves ``data/adc``,
         ``data/mask`` and ``data/memoryCell`` created but unwritten, which for
         a chunked dataset means no space is allocated for them at all, so the
@@ -192,6 +214,10 @@ def write_mock_run(
         chunksize=1,
     )
     _renumber_trains(path, detector_name, train_ids, module)
+    if mislabel_train is not None:
+        with h5py.File(path, "r+") as handle:
+            rows = handle[f"INSTRUMENT/{source(detector_name, module)}/data/trainId"]
+            rows[train_ids.index(mislabel_train)] = mislabel_train + 1000
     if zero_entry_trains:
         _zero_entry_counts(path, detector_name, train_ids, zero_entry_trains, module)
     if legacy_alias:
@@ -203,11 +229,11 @@ def write_mock_run(
             module,
             train_ids,
             lit_cells=lit_cells,
+            cell_order=cell_order,
             static=static,
             seed=seed,
-            nonfinite_train=nonfinite_train,
             extreme_train=extreme_train,
-            extreme_flagged=extreme_flagged,
+            dead_frame_train=dead_frame_train,
             shuffled_cells_train=shuffled_cells_train,
             common_mode=common_mode,
         )
@@ -356,17 +382,19 @@ def _fill_frames(
     train_ids: tuple[int, ...],
     *,
     lit_cells: tuple[int, ...],
+    cell_order: tuple[int, ...],
     static: np.ndarray,
     seed: int,
-    nonfinite_train: int | None,
     extreme_train: int | None,
-    extreme_flagged: bool,
+    dead_frame_train: int | None,
     shuffled_cells_train: int | None,
     common_mode: np.ndarray,
 ) -> None:
     """Fill ``data/adc``, ``data/mask`` and ``data/memoryCell`` with content.
 
-    Lit cells get Poisson photons at ``PHOTON_KEV`` plus readout noise; dark
+    Arrays are indexed by array position and ``data/memoryCell`` says which
+    cell each position holds (``cell_order``). Lit cells get Poisson photons at
+    ``PHOTON_KEV`` and their own :func:`lit_rate`, plus readout noise; dark
     cells get the noise alone, so the dark-cell spread a run measures is
     ``READ_NOISE_KEV`` and the lit fraction is far above any sane threshold,
     as on the real detectors. Every cell then carries the zero level of
@@ -378,6 +406,10 @@ def _fill_frames(
     asic_offset = np.asarray(ASIC_OFFSET_KEV)[asic]
     keep = ~static.reshape(-1)
     first_kept = int(np.flatnonzero(keep)[0])
+    if sorted(cell_order) != list(range(CELLS)):
+        raise ValueError(f"cell_order {cell_order} is not a permutation of 0-15")
+    position = {cell: index for index, cell in enumerate(cell_order)}
+    first_lit = position[lit_cells[0]] if lit_cells else None
 
     with h5py.File(path, "r+") as handle:
         group = handle[f"INSTRUMENT/{source(detector_name, module)}/data"]
@@ -389,8 +421,10 @@ def _fill_frames(
             rng = np.random.default_rng(seed * 1000 + entry)
             values = rng.normal(0.0, READ_NOISE_KEV, (CELLS, *MODULE_SHAPE))
             for cell in lit_cells:
-                values[cell] += PHOTON_KEV * rng.poisson(LIT_RATE, MODULE_SHAPE)
-                values[cell] += LIT_SHIFT_KEV
+                values[position[cell]] += PHOTON_KEV * rng.poisson(
+                    lit_rate(cell), MODULE_SHAPE
+                )
+                values[position[cell]] += LIT_SHIFT_KEV
             if entry < common_mode.size:
                 values += asic_offset + common_mode[entry]
             frame_mask = np.zeros((CELLS, *MODULE_SHAPE), dtype=np.uint32)
@@ -398,27 +432,24 @@ def _fill_frames(
             for cell in range(CELLS):
                 # per memory cell: the same pixels every time the cell appears
                 cell_rng = np.random.default_rng(7000 + cell)
-                flat_mask[cell, cell_rng.choice(N_MODULE_PX, 400, replace=False)] |= (
+                at = position[cell]
+                flat_mask[at, cell_rng.choice(N_MODULE_PX, 400, replace=False)] |= (
                     STATIC_BIT
                 )
-                flat_mask[cell, cell_rng.choice(N_MODULE_PX, 200, replace=False)] |= (
+                flat_mask[at, cell_rng.choice(N_MODULE_PX, 200, replace=False)] |= (
                     SEAM_BIT
                 )
                 # per frame: a handful, as bit 21 behaves in the real data
-                flat_mask[cell, rng.choice(N_MODULE_PX, 5, replace=False)] |= (
-                    DYNAMIC_BIT
-                )
+                flat_mask[at, rng.choice(N_MODULE_PX, 5, replace=False)] |= DYNAMIC_BIT
 
             train_id = train_ids[entry] if entry < len(train_ids) else None
             flat_values = values.reshape(CELLS, -1)
-            if train_id is not None and train_id == nonfinite_train:
-                flat_values[lit_cells[0], first_kept] = np.nan
             if train_id is not None and train_id == extreme_train:
-                flat_values[lit_cells[0], first_kept] = 1.8e5
-                if extreme_flagged:
-                    flat_mask[lit_cells[0], first_kept] |= DYNAMIC_BIT
+                flat_values[first_lit, first_kept] = 1.8e5
+            if train_id is not None and train_id == dead_frame_train:
+                flat_mask[first_lit] |= DYNAMIC_BIT
 
-            cells = np.arange(CELLS, dtype=np.uint8)
+            cells = np.array(cell_order, dtype=np.uint8)
             if train_id is not None and train_id == shuffled_cells_train:
                 cells[1] = cells[0]
 

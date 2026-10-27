@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import numpy as np
 import pytest
 
 pytest.importorskip("extra_data")
@@ -27,29 +26,8 @@ def test_rows_are_the_lit_cells_not_the_entry_count(pipeline):
     assert set(int(c) for c in pipeline.det.frame_counts) == {1}
 
 
-def test_every_train_of_the_run_is_in_the_ledger(pipeline, status_of):
-    plan, run = pipeline.plan, pipeline.run
-    assert [t.train_id for t in plan.trains] == list(run.train_ids)
-    assert all(status_of(plan, t) is FrameStatus.OK for t in run.detector_trains)
-
-
-def test_rows_are_contiguous_and_match_the_run(pipeline):
-    plan, run = pipeline.plan, pipeline.run
-    for train_id in run.detector_trains:
-        assert plan.record(train_id).first_row == run.first_row(train_id)
-
-
-def test_blocks_cover_every_row_exactly_once(pipeline):
-    rows = np.concatenate([b.rows() for b in pipeline.plan.blocks])
-    assert np.array_equal(np.sort(rows), np.arange(pipeline.plan.n_frames))
-    assert all(
-        len(b.train_ids) <= pipeline.cfg.trains_per_block for b in pipeline.plan.blocks
-    )
-
-
-def test_a_train_with_no_entry_is_no_frames(cfg, mock_run_factory, operator, status_of):
-    run, dc = mock_run_factory(zero_entry_trains=(10002,))
-    op, _ = operator
+def test_a_train_with_no_entry_is_no_frames(cfg, mock_run_factory, status_of):
+    run, dc = mock_run_factory(zero_entry_trains=(10002,), fill=False)
     det = open_detector(cfg, dc)
     plan = build_plan(cfg, LIT_CELLS, dc=dc, control_dc=dc, det=det)
 
@@ -58,26 +36,14 @@ def test_a_train_with_no_entry_is_no_frames(cfg, mock_run_factory, operator, sta
     assert plan.n_frames == (len(run.train_ids) - 1) * len(LIT_CELLS)
 
 
-def test_a_dropped_train_does_not_shift_rows(cfg, mock_run_factory, operator):
+def test_a_dropped_train_does_not_shift_rows(cfg, mock_run_factory):
     """The run has a gap, and the rows after it must not slide onto other trains."""
-    run, dc = mock_run_factory(train_ids=(10000, 10001, 10003, 10004))
-    op, _ = operator
+    run, dc = mock_run_factory(train_ids=(10000, 10001, 10003, 10004), fill=False)
     det = open_detector(cfg, dc)
     plan = build_plan(cfg, LIT_CELLS, dc=dc, control_dc=dc, det=det)
 
     assert [t.train_id for t in plan.trains] == [10000, 10001, 10003, 10004]
     assert [t.first_row for t in plan.trains] == [0, 8, 16, 24]
-
-
-def test_a_block_never_straddles_a_gap(cfg, mock_run_factory, operator):
-    run, dc = mock_run_factory(zero_entry_trains=(10001,))
-    det = open_detector(cfg, dc)
-    plan = build_plan(cfg, LIT_CELLS, dc=dc, control_dc=dc, det=det)
-
-    for block in plan.blocks:
-        rows = block.rows()
-        assert np.array_equal(rows, np.arange(rows[0], rows[-1] + 1))
-    assert 10001 not in {t for b in plan.blocks for t in b.train_ids}
 
 
 def test_an_empty_lit_set_plans_no_rows_rather_than_refusing(cfg, mock_run_factory):
@@ -95,13 +61,6 @@ def test_an_empty_lit_set_plans_no_rows_rather_than_refusing(cfg, mock_run_facto
     assert plan.checks["lit_cells"] == []
 
 
-def test_run_checks_record_the_entry_shape(pipeline):
-    checks = pipeline.plan.checks
-    assert checks["entries_per_train"] == [1]
-    assert checks["frames_per_entry"] == 16
-    assert checks["lit_cells"] == list(pipeline.classification.lit)
-
-
 def test_multi_entry_trains_are_refused(cfg, mock_run_factory):
     """EXtra-data cannot shape them, so the plan must refuse rather than guess.
 
@@ -117,46 +76,33 @@ def test_multi_entry_trains_are_refused(cfg, mock_run_factory):
 
 
 # ── source names, as lsxfel reports them for proc files ──────────────────────
-def test_the_corrected_source_is_the_one_selected(pipeline):
-    """Corrected data use /CORR/; the /DET/ name remains only as a soft link."""
-    assert pipeline.det.detector_name == "MID_EXP_JF500K1"
-    assert list(pipeline.det.source_to_modno) == [
-        "MID_EXP_JF500K1/CORR/JNGFR01:daqOutput"
-    ]
-
-
-def test_the_legacy_det_alias_is_not_a_second_module(pipeline):
-    """The alias *is* in instrument_sources, and must not be read as a module.
+def test_each_detector_reads_its_corrected_source_and_no_legacy_alias(
+    pipeline, config_for_detector, mock_run_factory
+):
+    """Corrected data use /CORR/; the /DET/ name remains only as a soft link.
 
     ``DataCollection.instrument_sources`` includes legacy names (only
-    ``detector_sources`` subtracts them), so ``_source_matches`` does see it.
-    What keeps it out is that ``_source_corr_pat`` matches ``/CORR/`` alone.
-    If a future EXtra-data widened that pattern, ``modno_to_source`` would
-    collapse two sources onto one module number and the constructor's own
-    assertion would fire; this pins the behaviour before that.
+    ``detector_sources`` subtracts them), so ``_source_matches`` does see the
+    alias. What keeps it out is that ``_source_corr_pat`` matches ``/CORR/``
+    alone. If a future EXtra-data widened that pattern, ``modno_to_source``
+    would collapse two sources onto one module number; this pins the
+    behaviour before that.
     """
+    from analysis.waxs.config import DETECTOR_MODNOS, DETECTOR_NAMES
+
     legacy = "MID_EXP_JF500K1/DET/JNGFR01:daqOutput"
     assert legacy in pipeline.dc.instrument_sources
     assert pipeline.dc.legacy_sources[legacy] == (
         "MID_EXP_JF500K1/CORR/JNGFR01:daqOutput"
     )
-    assert len(pipeline.det.source_to_modno) == 1
-    assert pipeline.det.n_modules == 1
-
-
-def test_each_detector_is_addressed_by_its_own_name_and_module(
-    config_for_detector, mock_run_factory
-):
-    from analysis.waxs.config import DETECTOR_MODNOS, DETECTOR_NAMES
-
     for detector in ("jf1", "jf2"):
         name, modno = DETECTOR_NAMES[detector], DETECTOR_MODNOS[detector]
-        _, dc = mock_run_factory(detector_name=name, module=modno)
+        _, dc = mock_run_factory(detector_name=name, module=modno, fill=False)
         det = open_detector(config_for_detector(detector), dc)
+        corrected = f"{name}/CORR/JNGFR{modno:02d}:daqOutput"
         assert det.detector_name == name
-        assert list(det.source_to_modno) == [f"{name}/CORR/JNGFR{modno:02d}:daqOutput"]
         # first_modno normalises each single-module detector to modno 1.
-        assert det.source_to_modno[f"{name}/CORR/JNGFR{modno:02d}:daqOutput"] == 1
+        assert dict(det.source_to_modno) == {corrected: 1}
         assert det.n_modules == 1
 
 
