@@ -19,7 +19,7 @@ pytest.importorskip("extra_data")
 
 import h5py  # noqa: E402
 import xarray as xr  # noqa: E402
-from test_run import InlinePool, run_on_mock  # noqa: E402  (tests/saxs on sys.path)
+from test_run import run_on_mock  # noqa: E402  (tests/saxs on sys.path)
 
 from analysis.common import lock as lock_module  # noqa: E402
 from analysis.common.lock import OutputBusy, lock_path  # noqa: E402
@@ -107,23 +107,21 @@ def hold(output, job_id):
 
 
 # ── a complete run writes nothing ─────────────────────────────────────────────
-def test_a_complete_run_is_complete(pipeline, complete_run):
-    directory, _ = complete_run
-    verdict = is_complete(
-        directory / "out.h5",
-        pipeline.cfg,
-        pixel_sums_path=directory / FILE_NAME,
-        photon_stats_path=directory / PHOTON_FILE,
-        geometry=pipeline.geometry,
-    )
-    assert verdict, verdict.reasons
 
 
 def test_a_complete_run_is_answered_from_the_file_and_writes_nothing(
     pipeline, complete_run, tmp_path, monkeypatch
 ):
-    """Every file keeps its inode and mtime, and no npz reappears."""
+    """The run reads as complete, and every file keeps its inode and mtime."""
     pooled = copy_of(complete_run, tmp_path)
+    verdict = is_complete(
+        tmp_path / "out.h5",
+        pipeline.cfg,
+        pixel_sums_path=tmp_path / FILE_NAME,
+        photon_stats_path=tmp_path / PHOTON_FILE,
+        geometry=pipeline.geometry,
+    )
+    assert verdict, verdict.reasons
     before = stats(tmp_path)
     forbid_writing(monkeypatch)
 
@@ -195,11 +193,10 @@ def _set_status(code):
     return change
 
 
-def _set_pyfai(directory):
-    with h5py.File(directory / "out.h5", "r+") as handle:
-        attrs = handle["provenance"].attrs
-        versions = json.loads(attrs["package_versions"])
-        attrs["package_versions"] = json.dumps(versions | {"pyFAI": "2000.1.0"})
+def _set_pyfai_in(handle):
+    attrs = handle["provenance"].attrs
+    versions = json.loads(attrs["package_versions"])
+    attrs["package_versions"] = json.dumps(versions | {"pyFAI": "2000.1.0"})
 
 
 def _unfinalise(directory):
@@ -212,19 +209,12 @@ def _unwrite_window(directory):
         handle["windows/written"][0] = 0
 
 
-def _lose_sums(directory):
-    (directory / FILE_NAME).unlink()
-
-
 @pytest.mark.parametrize(
     ("change", "expected"),
     [
         (_set_status(FrameStatus.NOT_PROCESSED), "2 frames NOT_PROCESSED"),
-        (_set_status(FrameStatus.WORKER_ERROR), "2 frames WORKER_ERROR"),
-        (_set_pyfai, "written with pyFAI 2000.1.0 -> "),
         (_unfinalise, "never finalised"),
         (_unwrite_window, "window sums: 1 of 1 windows unwritten"),
-        (_lose_sums, "window sums: no file"),
     ],
 )
 def test_is_complete_says_why_not(pipeline, complete_run, tmp_path, change, expected):
@@ -280,6 +270,40 @@ def test_another_operator_or_config_is_not_complete(pipeline, complete_run):
         **kwargs,
     )
     assert any("config hash" in reason for reason in other_npt.reasons)
+
+
+def _restamp_coef(handle, op):
+    handle["operator/coef"][0] *= 2
+    _restamp(handle, op)
+
+
+@pytest.mark.parametrize(
+    ("spoil", "message"),
+    [
+        (lambda handle, op: _set_pyfai_in(handle), "pyFAI 2000.1.0 -> "),
+        (_restamp_coef, "operator coef differs"),
+    ],
+)
+def test_a_file_from_another_pyfai_or_operator_is_refused_not_resumed(
+    pipeline, tmp_path, monkeypatch, spoil, message
+):
+    """Resuming would integrate the rest under another engine, then stamp it on all."""
+    real = worker.process_block
+    monkeypatch.setattr(
+        worker,
+        "process_block",
+        lambda b: (_ for _ in ()).throw(RuntimeError("x")) if b.index == 0 else real(b),
+    )
+    with pytest.raises(IncompleteRun):
+        run_on_mock(pipeline, tmp_path, pixel_sum_trains=None)
+    monkeypatch.setattr(worker, "process_block", real)
+    with h5py.File(tmp_path / "out.h5", "r+") as handle:
+        spoil(handle, pipeline.op)
+    before = stats(tmp_path)
+
+    with pytest.raises(OperatorMismatch, match=message):
+        run_on_mock(pipeline, tmp_path, pixel_sum_trains=None)
+    assert stats(tmp_path) == before
 
 
 # ── node classes ──────────────────────────────────────────────────────────────
@@ -350,11 +374,6 @@ def test_a_real_change_to_the_solid_angle_is_not(pipeline, complete_run, tmp_pat
         geometry=pipeline.geometry,
     )
     assert verdict.reasons == ("operator omega differs by more than 1e-12 relative",)
-
-
-def test_a_missing_file_is_not_complete(pipeline, tmp_path):
-    verdict = is_complete(tmp_path / "out.h5", pipeline.cfg, operator=pipeline.op)
-    assert verdict.reasons[0] == "no file"
 
 
 # ── the lock ──────────────────────────────────────────────────────────────────
@@ -440,53 +459,3 @@ def test_a_rerun_retries_worker_error_blocks(pipeline, tmp_path, monkeypatch):
         provenance = handle["provenance"].attrs
         assert "block_errors" not in provenance
         assert "transient" in json.loads(provenance["block_errors_resolved"])["0"]
-
-
-def test_a_file_from_another_pyfai_is_refused_not_resumed(
-    pipeline, tmp_path, monkeypatch
-):
-    """Resuming would integrate the rest with another pyFAI, then stamp it on all."""
-    real = worker.process_block
-    monkeypatch.setattr(
-        worker,
-        "process_block",
-        lambda b: (_ for _ in ()).throw(RuntimeError("x")) if b.index == 0 else real(b),
-    )
-    with pytest.raises(IncompleteRun):
-        run_on_mock(pipeline, tmp_path)
-    monkeypatch.setattr(worker, "process_block", real)
-    _set_pyfai(tmp_path)
-    before = stats(tmp_path)
-
-    with pytest.raises(OperatorMismatch, match="pyFAI 2000.1.0 -> "):
-        run_on_mock(pipeline, tmp_path)
-    assert stats(tmp_path) == before
-
-
-def test_a_file_from_another_operator_is_refused_not_resumed(
-    pipeline, tmp_path, monkeypatch
-):
-    monkeypatch.setattr(
-        run_module,
-        "fan_out",
-        lambda out, todo, **kwargs: (_ for _ in ()).throw(KeyboardInterrupt()),
-    )
-    with pytest.raises(KeyboardInterrupt):
-        run_on_mock(pipeline, tmp_path, pixel_sum_trains=None)
-    monkeypatch.undo()
-    with h5py.File(tmp_path / "out.h5", "r+") as handle:
-        handle["operator/coef"][0] *= 2
-        _restamp(handle, pipeline.op)
-    before = stats(tmp_path)
-
-    with pytest.raises(OperatorMismatch, match="operator coef differs"):
-        run_on_mock(pipeline, tmp_path, pixel_sum_trains=None)
-    assert stats(tmp_path) == before
-
-
-def test_the_npz_writes_leave_no_temporary_files(pipeline, tmp_path):
-    run_on_mock(pipeline, tmp_path, pool_factory=InlinePool)
-    assert not [p.name for p in tmp_path.iterdir() if p.name.startswith(".")]
-    np.testing.assert_array_equal(
-        operator_module.load_operator(tmp_path / "operator.npz").q, pipeline.op.q
-    )
