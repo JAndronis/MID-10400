@@ -6,7 +6,7 @@
 [[mutant]]
 name = "waxs_position_is_cell_id"
 file = "src/analysis/waxs/worker.py"
-old = "            position = positions[cell]"
+old = "            position = train.positions[cell]"
 new = "            position = cell"
 tests = [
     "tests/waxs/test_waxs_run.py::test_each_row_holds_the_frame_its_memory_cell_labels",
@@ -195,9 +195,9 @@ tests = ["tests/waxs/test_waxs_photons.py"]
 
 [[mutant]]
 name = "waxs_train_label_from_index"
-file = "src/analysis/waxs/worker.py"
-old = "            or int(row_labels[0]) != train_id"
-new = "            or int(adc_key.train_id_coordinates()[0]) != train_id"
+file = "src/analysis/waxs/plan.py"
+old = "        or int(row_labels[0]) != train_id"
+new = "        or int(adc_key.train_id_coordinates()[0]) != train_id"
 tests = ["tests/waxs/test_waxs_run.py::test_a_train_whose_own_rows_name_another_train_is_a_label_mismatch"]
 
 [[mutant]]
