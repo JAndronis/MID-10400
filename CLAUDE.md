@@ -611,7 +611,7 @@ statistics (open task 6). Integer data cannot carry NaN, so bad pixels must come
     `*.writing.h5` temp files left by killed jobs. The files were intact (every object read). Judge
     them only once nothing was modified for 8 minutes; use `--concurrent-jobs` 3–5; remember
     `reprocess_safe` refuses while any array is active, one's own included. A mesh block's hit rule
-    reads its neighbours' files and now retries, then fails the run, instead of dropping a neighbour.
+    reads its neighbours' files and now retries, then fails the run, instead of dropping a neighbour. On 2026-10-28 the retry still missed h5py's `RuntimeError` ("bad local heap signature") and h5netcdf's `AttributeError`, so r178–182 got no hit set, and an h5py `KeyError` would have dropped the neighbour silently. Since then every read failure but a missing file is retried, "no agipd_saxs" included, because a partial file can look like one.
 34. **A reprocess reuses what it finds complete.** Window sums, photon histograms and the XPCS
     photon store were "never moved", so a "fresh" run read them. `reprocess_safe start --fresh` moves
     them aside with the output; stale locks go with a directory renamed aside. Check the new files'

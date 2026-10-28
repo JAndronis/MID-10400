@@ -280,39 +280,81 @@ def test_hits_take_this_run_from_memory_and_skip_members_not_yet_stored(
     assert fewer["kind"] == "mesh" and fewer["train_ids"].size > 0
 
 
-def test_a_neighbour_being_written_is_waited_for_not_left_out(mesh_store, monkeypatch):
-    """A block member's file that is unreadable at first (its own job is writing
-    it) is read again, and the block is classified with every member."""
+#: Damage to the neighbour r122's DAMNIT file, (offset, byte, length), and the
+#: error the reader raises on it: what a read part-way through that run's own
+#: write produced on the cluster ("bad local heap signature", h5netcdf's
+#: AttributeError), a header h5py reports as a KeyError, damage that makes the
+#: file look as if it held no agipd_saxs, and a file cut short.
+MID_WRITE = {
+    "local heap": ((672, 0xFF, 16), RuntimeError),
+    "object header": ((800, 0xFF, 16), KeyError),
+    "dimension scale": ((5904, 0xFF, 16), AttributeError),
+    "no saxs yet": ((720, 0x00, 16), LookupError),
+    "truncated": ((40_000, None, None), OSError),
+}
+
+
+def _damaged(good: bytes, offset: int, byte: int | None, length: int | None) -> bytes:
+    if byte is None:
+        return good[:offset]
+    return good[:offset] + bytes([byte]) * length + good[offset + length :]
+
+
+def _damage_r122(root, damage, raises):
+    """Damage r122's file, check the reader fails on it, return the good bytes."""
+    path = root / "extracted_data" / "p10400_r122.h5"
+    good = path.read_bytes()
+    path.write_bytes(_damaged(good, *damage))
+    with pytest.raises(raises):
+        train_signals(122, damnit_root=root, cache_dir=None)
+    return path, good
+
+
+@pytest.mark.parametrize("case", MID_WRITE, ids=list(MID_WRITE))
+def test_a_neighbour_read_mid_write_is_read_again(
+    case, mesh_store, tmp_path, monkeypatch
+):
+    """Whatever the half-written file raises, the block is classified with every
+    member once the write ends, as if the file had been whole."""
     from analysis.triage import classify
 
-    want = hits(121, damnit_root=mesh_store, cache_dir=None)
-    monkeypatch.setattr(classify, "MEMBER_WAIT_S", 0.0)
-    real, calls = classify.train_signals, {"n": 0}
-
-    def flaky(run, **kwargs):
-        if run == 122 and calls["n"] < 2:
-            calls["n"] += 1
-            raise OSError("bad object header version number")
-        return real(run, **kwargs)
-
-    monkeypatch.setattr(classify, "train_signals", flaky)
-    got = hits(121, damnit_root=mesh_store, cache_dir=None)
+    root = shutil.copytree(mesh_store, tmp_path / "amore")
+    want = hits(121, damnit_root=root, cache_dir=None)
+    path, good = _damage_r122(root, *MID_WRITE[case])
+    monkeypatch.setattr(classify.time, "sleep", lambda s: path.write_bytes(good))
+    got = hits(121, damnit_root=root, cache_dir=None)
     assert got["summary"]["block_missing"] == []
     np.testing.assert_array_equal(got["train_ids"], want["train_ids"])
 
 
-def test_a_neighbour_that_stays_unreadable_fails_the_run(mesh_store, monkeypatch):
+@pytest.mark.parametrize("case", [c for c in MID_WRITE if c != "no saxs yet"], ids=str)
+def test_a_neighbour_that_stays_unreadable_fails_the_run(
+    case, mesh_store, tmp_path, monkeypatch
+):
     """Not "missing": leaving a run out would change the cut of the whole block."""
     from analysis.triage import classify
 
-    monkeypatch.setattr(classify, "MEMBER_WAIT_S", 0.0)
-    real = classify.train_signals
+    root = shutil.copytree(mesh_store, tmp_path / "amore")
+    damage, raises = MID_WRITE[case]
+    _damage_r122(root, damage, raises)
+    waits = []
+    monkeypatch.setattr(classify.time, "sleep", waits.append)
+    with pytest.raises(raises):
+        hits(121, damnit_root=root, cache_dir=None)
+    assert len(waits) == classify.MEMBER_TRIES - 1
 
-    def broken(run, **kwargs):
-        if run == 122:
-            raise ValueError("agipd.saxs has no q bin in (0.3, 0.5)")
-        return real(run, **kwargs)
 
-    monkeypatch.setattr(classify, "train_signals", broken)
-    with pytest.raises(ValueError, match="no q bin"):
-        hits(121, damnit_root=mesh_store, cache_dir=None)
+def test_a_neighbour_that_keeps_lacking_saxs_is_left_out_after_waiting(
+    mesh_store, tmp_path, monkeypatch
+):
+    """A file mid-write can look as if it held no agipd_saxs, so that too is read
+    again before the run is left out of its block."""
+    from analysis.triage import classify
+
+    root = shutil.copytree(mesh_store, tmp_path / "amore")
+    _damage_r122(root, *MID_WRITE["no saxs yet"])
+    waits = []
+    monkeypatch.setattr(classify.time, "sleep", waits.append)
+    got = hits(121, damnit_root=root, cache_dir=None)
+    assert got["summary"]["block_missing"] == [122]
+    assert len(waits) == classify.MEMBER_TRIES - 1

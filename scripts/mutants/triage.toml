@@ -115,6 +115,29 @@ new = "for attempt in range(MEMBER_TRIES - 5):"
 tests = ["tests/triage/test_classify.py"]
 
 [[mutant]]
+name = "neighbour_header_error_counts_as_missing"
+file = "src/analysis/triage/classify.py"
+old = "except (NoSaxs, FileNotFoundError):"
+new = "except (LookupError, FileNotFoundError):"
+tests = ["tests/triage/test_classify.py"]
+
+[[mutant]]
+name = "neighbour_retry_only_oserror"
+file = "src/analysis/triage/classify.py"
+old = "except Exception:  # noqa: BLE001 - re-raised after the last try"
+new = "except (OSError, ValueError):"
+tests = ["tests/triage/test_classify.py"]
+
+[[mutant]]
+name = "neighbour_without_saxs_not_read_again"
+file = "src/analysis/triage/classify.py"
+old = """        except FileNotFoundError:
+            raise"""
+new = """        except (FileNotFoundError, NoSaxs):
+            raise"""
+tests = ["tests/triage/test_classify.py"]
+
+[[mutant]]
 name = "hit_cell_ambiguity_ignored"
 file = "src/analysis/triage/damnit.py"
 old = 'if summary.get("ambiguous"):'

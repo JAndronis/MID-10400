@@ -57,6 +57,7 @@ __all__ = [
     "CACHE_DIR",
     "MID_BAND_NM",
     "OFF_SIGMA",
+    "NoSaxs",
     "ON_FRACTION",
     "WAXS_RING_NM",
     "block_cut",
@@ -91,6 +92,10 @@ SEPARATION_BANDS = 2.0
 ON_FRACTION = 0.75
 #: Fewer trains above t_on than this, and a run's full-hit level is its block's on_mode.
 PLATEAU_MIN_TRAINS = 20
+
+
+class NoSaxs(LookupError):
+    """A run's DAMNIT file holds no agipd_saxs."""
 
 
 def _band_mean(path: Path, group: str, band) -> tuple | None:
@@ -204,7 +209,7 @@ def train_signals(
     XGM or a transmission carries NaN where the value is missing.
 
     :param cache_dir: where to cache, or None to read DAMNIT every time.
-    :raises LookupError: the run has no agipd_saxs in DAMNIT.
+    :raises NoSaxs: the run has no agipd_saxs in DAMNIT.
     """
     import xarray as xr
 
@@ -228,7 +233,7 @@ def train_signals(
 
     saxs = _band_mean(path, AGIPD_SAXS, MID_BAND_NM)
     if saxs is None:
-        raise LookupError(f"r{run}: no agipd_saxs in {path}")
+        raise NoSaxs(f"r{run}: no agipd_saxs in {path}")
     tids, mid, present = saxs
     ds = xr.Dataset(
         {
@@ -516,8 +521,9 @@ def run_blocks(runs_table):
 
 
 #: A neighbour's DAMNIT file is rewritten by that run's own jobs, so reading it
-#: mid-write fails (HDF5 "bad object header", or a q axis not yet filled). Such a
-#: read is retried this many times, this many seconds apart.
+#: mid-write fails with whatever h5py or h5netcdf makes of the partial file
+#: (OSError, RuntimeError, KeyError, AttributeError, ...), or finds no
+#: agipd_saxs. Such a read is retried this many times, this many seconds apart.
 MEMBER_TRIES = 6
 MEMBER_WAIT_S = 20.0
 
@@ -525,20 +531,23 @@ MEMBER_WAIT_S = 20.0
 def _member_signals(run: int, **kwargs):
     """`train_signals` of another run of a mesh block, retried through a write.
 
-    :raises LookupError: the run has no agipd_saxs. The caller leaves it out of
-        the block.
-    :raises FileNotFoundError: the run has no DAMNIT file. The caller leaves it
-        out of the block.
-    :raises OSError: the file stayed unreadable through every try (or
-        ValueError). Not treated as missing, because leaving a run out of its
-        block silently changes the cut every run of the block is classified with.
+    Every failure but a missing file is retried, since a partial file can raise
+    almost anything; a genuine bug therefore surfaces only after the last try.
+
+    :raises FileNotFoundError: the run has no DAMNIT file, at once. The caller
+        leaves it out of the block.
+    :raises NoSaxs: the file still held no agipd_saxs at the last try. The caller
+        leaves it out of the block.
+    :raises Exception: whatever the last try raised. Not treated as missing,
+        because leaving a run out of its block silently changes the cut every
+        run of the block is classified with.
     """
     for attempt in range(MEMBER_TRIES):
         try:
             return train_signals(run, **kwargs)
-        except (LookupError, FileNotFoundError):
+        except FileNotFoundError:
             raise
-        except (OSError, ValueError):
+        except Exception:  # noqa: BLE001 - re-raised after the last try
             if attempt == MEMBER_TRIES - 1:
                 raise
             time.sleep(MEMBER_WAIT_S)
@@ -569,9 +578,10 @@ def hits(
     :param signals: this run's `train_signals`, when they come from memory
         (`signals_from`) rather than DAMNIT's file. The other runs of a mesh
         block are still read from their files; one with no ``agipd_saxs`` yet
-        is left out of the block and named in ``summary["block_missing"]``. A
-        file that stays unreadable (a concurrent write) raises after
-        `MEMBER_TRIES` tries rather than being left out.
+        is left out of the block and named in ``summary["block_missing"]``, after
+        `MEMBER_TRIES` reads, since a file mid-write can look the same. A file
+        that stays unreadable raises after those tries rather than being left
+        out.
     :returns: ``train_ids`` (the hits), ``classes`` (a DataArray over every train:
         "on"/"edge"/"off"/"none" for mesh runs, "on"/"off"/"none" for the others),
         ``overlap`` (a DataArray of f per train for mesh runs, None for the others),
@@ -605,7 +615,7 @@ def hits(
                     int(r), damnit_root=damnit_root, proposal=proposal,
                     cache_dir=cache_dir,
                 )  # fmt: skip
-            except (LookupError, FileNotFoundError):
+            except (NoSaxs, FileNotFoundError):
                 missing.append(int(r))
                 continue
             xs[int(r)] = _log_ratio(member, "saxs_mid")
