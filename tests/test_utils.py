@@ -263,6 +263,7 @@ def runs(tmp_path, monkeypatch):
             buffer["xgm"], dims="trainId", coords={"trainId": buffer_tids}
         ),
     }
+
     def fake_train_pulse_energy(raw, n_pulses):
         return by_raw[raw]
 
