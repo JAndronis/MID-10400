@@ -23,6 +23,21 @@ import pytest
 _SHM = Path("/dev/shm")
 
 
+def _remove_dead_sessions(root: Path) -> None:
+    """Delete the basetemps that failed sessions left, once their process is gone.
+
+    ``/dev/shm`` is memory, and a failing session keeps its basetemp for
+    debugging, so without this they accumulate until the node reboots.
+    """
+    for path in root.glob("session-*"):
+        try:
+            os.kill(int(path.name.removeprefix("session-")), 0)
+        except ProcessLookupError:
+            shutil.rmtree(path, ignore_errors=True)
+        except (ValueError, PermissionError):
+            continue
+
+
 def pytest_configure(config: pytest.Config) -> None:
     """Choose a per-session basetemp under ``/dev/shm`` when the user gave none."""
     config._default_basetemp = None  # type: ignore[attr-defined]
@@ -32,6 +47,7 @@ def pytest_configure(config: pytest.Config) -> None:
         return
     chosen = _SHM / f"pytest-of-{getpass.getuser()}" / f"session-{os.getpid()}"
     chosen.parent.mkdir(exist_ok=True)
+    _remove_dead_sessions(chosen.parent)
     config.option.basetemp = str(chosen)
     config._default_basetemp = chosen  # type: ignore[attr-defined]
 
