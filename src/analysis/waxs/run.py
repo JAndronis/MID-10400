@@ -45,7 +45,7 @@ from analysis.waxs.config import CELLS_PER_TRAIN, JungfrauWaxsConfig
 from analysis.waxs.integrate import ErrorModel
 from analysis.waxs.operator import WaxsOperator, build_operator
 from analysis.waxs.photons import PhotonCounting
-from analysis.waxs.plan import build_plan, open_detector
+from analysis.waxs.plan import build_plan, open_detector, read_train
 from analysis.waxs.selftest import run_selftest
 from analysis.waxs.writer import JungfrauWaxsWriter, per_cell
 
@@ -374,18 +374,21 @@ def _sample_trains(cfg: JungfrauWaxsConfig, det: Any) -> np.ndarray:
 def _classify_cells(
     cfg: JungfrauWaxsConfig, op: WaxsOperator, det: Any
 ) -> tuple[CellClassification, np.ndarray]:
-    """Measure the lit/dark split and the readout noise over sampled trains."""
-    from extra_data import by_id
+    """Measure the lit/dark split and the readout noise over sampled trains.
 
-    sampled = _sample_trains(cfg, det)
+    :returns: the classification and the sampled trains it read. A train whose
+        entry :func:`read_train` refuses is left out of both.
+    """
     accumulator = CellAccumulator(cfg, op.static_bad)
-    for train_id in sampled.tolist():
-        selected = det.select_trains(by_id[[train_id]])
-        data = np.asarray(selected["data.adc"].ndarray())[0, 0]
-        mask = np.asarray(selected["data.mask"].ndarray())[0, 0]
-        cells = np.asarray(selected["data.memoryCell"].ndarray()).reshape(-1)
-        accumulator.update(data, mask, cells)
-    return accumulator.finalise(), sampled
+    used = []
+    for train_id in _sample_trains(cfg, det).tolist():
+        train = read_train(det, train_id)
+        if train is None:
+            log.warning("train %d: its labels disagree, not sampled", train_id)
+            continue
+        accumulator.update(train.data, train.mask, train.cells)
+        used.append(train_id)
+    return accumulator.finalise(), np.asarray(used, dtype=np.uint64)
 
 
 def _error_model(
@@ -443,8 +446,6 @@ def _run_selftest(
     plan: Any,
 ) -> Any:
     """Gate the NaN path against the per-frame-mask reference on real frames."""
-    from extra_data import by_id
-
     ok_trains = plan.ok_train_ids()
     if ok_trains.size == 0:
         raise ValueError("no OK trains to self-test on")
@@ -453,16 +454,16 @@ def _run_selftest(
     bits = np.uint32(cfg.mask_bits)
     frames: list[tuple[np.ndarray, np.ndarray]] = []
     for train_id in chosen.tolist():
-        selected = det.select_trains(by_id[[int(train_id)]])
-        data = np.asarray(selected["data.adc"].ndarray())[0, 0]
-        mask = np.asarray(selected["data.mask"].ndarray())[0, 0]
-        cells = np.asarray(selected["data.memoryCell"].ndarray()).reshape(-1)
-        positions = {int(c): i for i, c in enumerate(cells.tolist())}
+        train = read_train(det, int(train_id))
+        if train is None:
+            continue
         for cell in classification.lit:
-            if cell not in positions:
+            if cell not in train.positions:
                 continue
-            position = positions[cell]
-            frames.append((data[position], (mask[position].reshape(-1) & bits) != 0))
+            position = train.positions[cell]
+            frames.append(
+                (train.data[position], (train.mask[position].reshape(-1) & bits) != 0)
+            )
             if len(frames) >= cfg.selftest_frames:
                 break
         if len(frames) >= cfg.selftest_frames:

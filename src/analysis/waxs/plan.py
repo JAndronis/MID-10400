@@ -71,7 +71,9 @@ class TrainFrames:
     data: np.ndarray
     #: ``data.mask`` of the same shape.
     mask: np.ndarray
-    #: Memory cell → array position, from ``data.memoryCell``.
+    #: ``data.memoryCell``: the memory cell at each array position.
+    cells: np.ndarray
+    #: Memory cell → array position.
     positions: dict[int, int]
 
 
@@ -116,7 +118,7 @@ def read_train(
     positions = {int(cell): index for index, cell in enumerate(cells.tolist())}
     if len(positions) != cells.size:
         return None
-    return TrainFrames(data[0, 0], mask[0, 0], positions)
+    return TrainFrames(data[0, 0], mask[0, 0], cells, positions)
 
 
 def _open_control(cfg: JungfrauWaxsConfig) -> Any:

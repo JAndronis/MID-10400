@@ -203,6 +203,46 @@ def test_a_train_whose_own_rows_name_another_train_is_a_label_mismatch(
         assert (status[start : start + n] == want).all(), train_id
 
 
+def test_the_cell_classification_reads_no_train_whose_own_rows_name_another(
+    cfg, mock_run_factory, tmp_path
+):
+    """A misfiled entry is left out of the cell sample, not counted as the train."""
+    mock, dc = mock_run_factory(train_ids=(10000, 10001), mislabel_train=10001)
+    path = tmp_path / "mislabel.h5"
+    with pytest.raises(IncompleteRun):
+        run(cfg, mock, dc, output_path=path)
+    with h5py.File(path) as handle:
+        assert handle["cells/sampled_trains"][:].tolist() == [10000]
+
+
+def test_the_selftest_gates_on_no_train_whose_own_rows_name_another(
+    cfg, mock_run_factory, tmp_path, monkeypatch
+):
+    """The self-test's frames all come from a train whose labels hold."""
+    from extra_data import RunDirectory, by_id
+
+    from analysis.waxs import run as run_module
+    from analysis.waxs.plan import open_detector
+
+    mock, dc = mock_run_factory(train_ids=(10000, 10001), mislabel_train=10000)
+    fed = []
+    real = run_module.run_selftest
+
+    def spy(ai, op, counting, frames, **kwargs):
+        fed.extend(frames)
+        return real(ai, op, counting, frames, **kwargs)
+
+    monkeypatch.setattr(run_module, "run_selftest", spy)
+    with pytest.raises(IncompleteRun):
+        run(cfg, mock, dc, output_path=tmp_path / "mislabel.h5")
+
+    det = open_detector(cfg, RunDirectory(str(mock.path)))
+    good = det.select_trains(by_id[[10001]])["data.adc"].ndarray()[0, 0]
+    assert fed
+    for data, _ in fed:
+        assert any(np.array_equal(data, frame) for frame in good)
+
+
 def test_a_broken_pool_marks_everything_unprocessed_and_raises(
     cfg, mock_run_factory, tmp_path
 ):

@@ -201,6 +201,20 @@ new = "        or int(adc_key.train_id_coordinates()[0]) != train_id"
 tests = ["tests/waxs/test_waxs_run.py::test_a_train_whose_own_rows_name_another_train_is_a_label_mismatch"]
 
 [[mutant]]
+name = "waxs_selftest_reads_a_misfiled_train"
+file = "src/analysis/waxs/plan.py"
+old = "        or int(row_labels[0]) != train_id"
+new = "        or int(adc_key.train_id_coordinates()[0]) != train_id"
+tests = ["tests/waxs/test_waxs_run.py::test_the_selftest_gates_on_no_train_whose_own_rows_name_another"]
+
+[[mutant]]
+name = "waxs_cell_sample_counts_a_misfiled_train"
+file = "src/analysis/waxs/run.py"
+old = """            log.warning("train %d: its labels disagree, not sampled", train_id)\n"""
+new = """            used.append(train_id)\n"""
+tests = ["tests/waxs/test_waxs_run.py::test_the_cell_classification_reads_no_train_whose_own_rows_name_another"]
+
+[[mutant]]
 name = "waxs_zero_entry_train_given_rows"
 file = "src/analysis/waxs/plan.py"
 old = "            records.append(TrainRecord(train_id, 0, row, FrameStatus.NO_FRAMES))\n            continue"
