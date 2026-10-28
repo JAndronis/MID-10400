@@ -221,7 +221,7 @@ them are partial overlaps of the beam with the droplet's edge. Those are exactly
 surface scattering and refraction change the pixel pattern, so they belong to neither class.
 
 So, for every diagnostic built on these products — β_sf and the shape checks here, the XPCS SNR
-(`triage.xpcs.measure_run(select=)`), and the SVD, χ² and XGM scatter of
+(`analysis.xpcs.snr.measure_run(select=)`), and the SVD, χ² and XGM scatter of
 `context/diagnostics.md`:
 
 ```
@@ -392,7 +392,7 @@ max-wn072 (EPYC 7402), commit 1f1dd34 plus Q1. Its JSON is
   - The weights come from the 20 windows wholly inside the hits. A hit's pixel pattern
     changes from frame to frame (droplet edge, surface scattering, §5.1), and run-mean weights
     cannot follow it.
-  - The per-run score (`diagnostics.xpcs.xpcs_score`) is unaffected: it uses k̄ and the fixed β,
+  - The per-run score (`analysis.xpcs.snr.xpcs_score`) is unaffected: it uses k̄ and the fixed β,
     not β_sf (§9, decision 3).
 
 **The shape check, measured** (`photon_stats_shape_check`). A pooled histogram is a mixture.

@@ -25,7 +25,7 @@ import numpy as np
 import xarray as xr
 from scipy.optimize import curve_fit
 
-from analysis.triage.xpcs import fixed_beta
+from analysis.xpcs.snr import fixed_beta
 
 __all__ = [
     "AT_BOUND",

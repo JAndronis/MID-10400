@@ -471,7 +471,7 @@ def test_a_results_file_that_does_not_read_back_is_removed_not_finalised(
     pipeline, monkeypatch
 ):
     from analysis.common.readback import UnreadableOutput
-    from analysis.xpcs.result import ResultWriter
+    from analysis.xpcs.results_file import ResultWriter
 
     real = ResultWriter.finalise
 

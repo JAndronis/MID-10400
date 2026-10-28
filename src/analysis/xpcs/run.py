@@ -41,7 +41,7 @@ from analysis.xpcs.config import XpcsConfig
 from analysis.xpcs.hits import HitSet
 from analysis.xpcs.kernel import partners
 from analysis.xpcs.outliers import BLOCK_LIMIT, OutlierMask, OutlierSink
-from analysis.xpcs.result import (
+from analysis.xpcs.results_file import (
     Prelude,
     ResultWriter,
     result_identity,

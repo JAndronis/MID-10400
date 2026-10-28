@@ -85,13 +85,20 @@ old file to `xpcs_hits.prev.h5` and rebuild it: it is derived.
 | File | Owns |
 |---|---|
 | `hits.py` | `HitSet`: sorted unique uint64 ids, `sha256`, `source` (provenance, not hashed). `HitSet.of` validates once; empty is allowed |
-| `config.py` | `XpcsConfig` (nests `AgipdSaxsConfig`; pickles by name; `extract_hash`, `merge_hash`), `Kernel`, `MaskPolicy`, `RINGS_NM`, `ES_RINGS_NM` |
+| `config.py` | `XpcsConfig` (nests `AgipdSaxsConfig`; pickles by name; `extract_hash`, `merge_hash`), `Kernel`, `MaskPolicy`, `RINGS_NM`, `ES_RINGS_NM`, `BRAGG_WINDOWS_NM`, `roi_kinds` |
 | `rings.py` | `pixel_map` (the SAXS pass's `build_operator` and `ring_labels_from`, or a masks file; a file's rings are authoritative, so no static mask is applied on top), `Envelope`, `Rings` |
 | `kernel.py` | pure: `partners` → `Pairing`/`PairStatus`; `train_sums` → `TrainSums` |
 | `store.py` | `TrainPhotons`, `FlagBase`, `RingPhotonStore`, delta coding |
 | `extract.py` | the proc worker: `encode_train` (pure), `process_block` |
 | `merge.py` | the store worker: `process_block` |
-| `result.py` | `ResultWriter`, `result_reasons`, `XpcsHits` (the reader), `read` |
+| `results_file.py` | the layout of `xpcs_hits.h5` (the one module that knows its dataset paths): `ResultWriter`, `result_reasons`, `read_header`, `read_sums` |
+| `reader.py` | `XpcsHits` (the reader: every float), `Averaging`, `Coverage`, `read` |
+| `estimators.py` | pure: `block_jackknife`, `pooled_g2`, the per-train `normalised` maps, `es_g2`, `diagonal_sums` |
+| `snr.py` | the per-run SNR, the reference β (`REFERENCE_BETA`, `beta_for`), `xpcs_score` |
+| `outliers.py` | the pixel-outlier mask applied at the merge |
+| `legacy.py`, `detector.py`, `g2fit.py`, `figures.py` | extra-speckle's data columns, the store's detector view, its exponential fit, and the drawing |
+| `kww.py` | the per-ring KWW fit for comparing droplets |
+| `damnit.py` | the DAMNIT wrappers |
 | `run.py` | `run_xpcs_hits`: locks, completeness, the two `fan_out` stages |
 | `__init__.py` | `xpcs_hits(cfg, hits)` = `run_xpcs_hits` then `XpcsHits` |
 
@@ -190,7 +197,7 @@ Behaviour, each pinned by `tests/xpcs/test_xpcs_run.py` unless noted:
 - `ttcf(Averaging.ES)`: each train normalised on its own with `norm == 0 → 1`, entries under
   `kbar_min = 3e-3` set to NaN (**no source for 3e-3 has been found**; offered only here, `None`
   disables it), the mean over trains, minus the mean baseline.
-  `tests/xpcs/test_xpcs_result.py` compares it with `normalize_ttcf` and `kbar_filter` run on
+  `tests/xpcs/test_xpcs_reader.py` compares it with `normalize_ttcf` and `kbar_filter` run on
   extra-speckle's own sums.
 - `g2(Averaging.ES)` also applies extra-speckle's **noisy-ring rule** (`ES_NAN_THRESH = 0.025`,
   `nan_thresh=None` disables it): `reduce_ttcf(mask_noisy=True)` leaves out a ring when
@@ -202,11 +209,11 @@ Behaviour, each pinned by `tests/xpcs/test_xpcs_run.py` unless noted:
 - `g2()`: lags `1 … P−1−10` (extra-speckle drops the last 10 unless fewer than 20 would remain);
   pooled over each diagonal, so a pair of frames weighs with its photon statistics. `sigma` is
   the jackknife error of `c2` over 50 contiguous blocks of trains (leave-one-block-out of all
-  four sums at once), `sigma_g2` that of `g2`; same estimator as
-  `analysis.triage.xpcs.jackknife_g2`, which a test confirms. Binning (`binned=True`) is
+  four sums at once), `sigma_g2` that of `g2`; `analysis.xpcs.estimators.block_jackknife`, the
+  one jackknife the SNR and the photon-statistics contrast also use. Binning (`binned=True`) is
   extra-speckle's `g2_to_bins(50, 20, 10)` shape but **sums numerators and denominators** before
   dividing, not medians.
-- `diagonals()`: an `analysis.triage.xpcs.TtcfDiagonals` of per-train `raw − off` diagonal
+- `diagonals()`: an `analysis.xpcs.estimators.TtcfDiagonals` of per-train `raw − off` diagonal
   sums and finite counts, for `measure_run`. Only trains with a baseline get a row.
 - `coverage()`: where every hit went (`by_status`, `by_pairing`, usable, with a baseline);
   `accounted` is true when no train dropped silently.
@@ -308,8 +315,10 @@ See §10 for what P4 settled and left open.
   old path on r0493, r0240, r0250 the run SNR is 2 to 10 % lower and the verdict unchanged: N_pix is the
   store's (3.5 to 9 % fewer pixels than the full ring) and a hit without a previous-train baseline has no
   `raw - off`, where extra-speckle paired it. `inventory` is still to move.
-  `analysis.triage.xpcs.ROI_EDGES_A` and `ES_RINGS_NM` are two lists; a test pins them equal. The
-  pass's own rings are `RINGS_NM` since 2026-10-20 (§13).
+  The extra-speckle ROIs are one tuple, `analysis.xpcs.config.ES_RINGS_NM` (`roi_edges_nm()` is it as
+  an array). The pass's own rings are `RINGS_NM` since 2026-10-20 (§13). Since 2026-10-28 the SNR,
+  the score and the reference β live in `analysis.xpcs.snr` (moved from `analysis.triage.xpcs` and
+  `analysis.diagnostics.xpcs`); `analysis.triage.xpcs` keeps the β cross-checks and `crl_state`.
 
 ## 10. P4, node acceptance (2026-10-18)
 
@@ -645,11 +654,11 @@ outlier_mask(store, ok_trains, envelope, static_bad, q_nm, thresholds, q_bins):
 | `q_range` 0.0225 … 0.086 Å⁻¹, seven rings | reproduced (`ES_RINGS_NM`) until 2026-10-20; since then **differently, on purpose**: twelve rings with the Bragg bands left out (§13) |
 | `mask=MASK_PATH` | reproduced (plus ASIC seams, already inside it) |
 | `mask_dynamic=True`: per-frame `image.mask` in the stats, any frame of a train in the TTCF | reproduced (`MaskPolicy.ANY_FRAME`; per frame in the outlier statistic) |
-| `calc_stats=True`: `mean_pixelcell`, `mean_intensity` | `mean_intensity` reproduced on ring pixels (`figures.mean_intensity`); `mean_pixelcell` is computed inside the outlier pass and not kept as a product |
+| `calc_stats=True`: `mean_pixelcell`, `mean_intensity` | `mean_intensity` reproduced on ring pixels (`legacy.mean_intensity`); `mean_pixelcell` is computed inside the outlier pass and not kept as a product |
 | `refine_beamcenter=False` | reproduced (no fit; `figure_beamcenter` is a check) |
 | **`outlier_masking=True`, (0.75, 1.75), whole q range** | **missing → implemented here (§12.2)** |
 | `intensity_masking=False` (`xgm_source` used only by it) | reproduced (no train removed); `figure_intensity_outliers` draws it |
-| `run_saxs_analysis=True` (`SAXS.nc`, per-frame I(q), pyFAI 300 bins) | **differently**: `figures.saxs_curves` bins the store's annulus (plain means, no pixel splitting); the AGIPD SAXS pass is the product |
+| `run_saxs_analysis=True` (`SAXS.nc`, per-frame I(q), pyFAI 300 bins) | **differently**: `detector.q_curves` bins the store's annulus (plain means, no pixel splitting); the AGIPD SAXS pass is the product |
 | `run_xpcs_analysis=True`, `sparsify=True`, `photonize=False`, `extra_filtering=False`, all pulses | reproduced bit for bit by `Kernel.ES` (G1); `Kernel.CLEAN` **differs on purpose** (§4: previous hit within `max_partner_gap`, no chain restart, no own-mask first train) |
 | `kbar_masking=True`, `kbar_threshold=3e-3` | reproduced in `Averaging.ES` only; the pooled view has no k-bar cut, on purpose (no source for 3e-3) |
 | `subtract_TTCF_off=True` | reproduced (`c2 = raw − off`) |
@@ -657,7 +666,7 @@ outlier_mask(store, ok_trains, envelope, static_bad, q_nm, thresholds, q_bins):
 | `mask_TTCF_diagonal_boxes=False` | reproduced (not done) |
 | `bin_g2=True`, `(50, 20, 10)` | reproduced (ES view: medians as extra-speckle; pooled: summed numerators, on purpose) |
 | `rep_rate` from DAMNIT | reproduced, as a check (`RepRateMismatch`) |
-| `fit_result=True` (`xpcs.fit`, `dr=True`) | reproduced (`figures.fit_g2`) |
+| `fit_result=True` (`xpcs.fit`, `dr=True`) | reproduced (`g2fit.fit_g2`) |
 | `run_xsvs_analysis`, `run_xcca_analysis` False | nothing to reproduce |
 | a train with missing modules or a short frame count is dropped by `chunk_trains_agipd` | reproduced as statuses (§5), counted rather than dropped |
 | g2 without error bars | addition: jackknife `sigma` |

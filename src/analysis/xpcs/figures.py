@@ -1,27 +1,21 @@
-"""extra-speckle's ``xpcs_offline`` figures and data columns, made from the hit store.
+"""extra-speckle's ``xpcs_offline`` figures, drawn from the hit-train XPCS products.
 
-Each function reproduces one extra-speckle product from the two files the
-hit-train pass keeps: the results file (:class:`~analysis.xpcs.result.XpcsHits`,
-exact per-train sums) and, for detector pictures, the photon store (raw counts
-over the annulus the rings span). Nothing here reads proc. The default estimator
-is :attr:`~analysis.xpcs.result.Averaging.POOLED` (ratios of summed sums);
-``Averaging.ES`` gives extra-speckle's mean of per-train ratios. Figures are
-built on :class:`matplotlib.figure.Figure` without ``pyplot``, so no backend is
-needed and no figure enters global state; they are returned open for the caller
-to show or save.
+Each function reproduces one extra-speckle figure from what the hit-train pass
+keeps: the results file (:class:`~analysis.xpcs.reader.XpcsHits`) and, for
+detector pictures, the photon store's mean over hit trains
+(:class:`~analysis.xpcs.detector.DetectorMean`). The numbers come from
+`analysis.xpcs.reader`, `analysis.xpcs.legacy`, `analysis.xpcs.detector` and
+`analysis.xpcs.g2fit`; this module only draws. Figures are built on
+:class:`matplotlib.figure.Figure` without ``pyplot``, so no backend is needed
+and no figure enters global state; they are returned open for the caller to
+show or save.
 """
 
 from __future__ import annotations
 
 import itertools
-import json
-import re
 import warnings
-from collections.abc import Callable
-from dataclasses import dataclass
-from typing import Any
 
-import h5py
 import numpy as np
 import xarray as xr
 from matplotlib import colormaps
@@ -31,16 +25,23 @@ from matplotlib.figure import Figure
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 from analysis.saxs.config import SHAPE
-from analysis.xpcs.config import XpcsConfig
-from analysis.xpcs.result import ES_KBAR_MIN, Averaging, XpcsHits
-from analysis.xpcs.rings import sha256_of_array
-from analysis.xpcs.store import RingPhotonStore
+from analysis.xpcs.detector import (
+    N_CONES,
+    OUTLIER_THRESHOLDS,
+    Q_BIN_A,
+    DetectorMean,
+    cone_curves,
+    cone_index,
+    outlier_ratio,
+    q_curves,
+    run_label,
+)
+from analysis.xpcs.estimators import diagonal_means
+from analysis.xpcs.g2fit import fit_g2
+from analysis.xpcs.legacy import mean_intensity, saxs_rings
+from analysis.xpcs.reader import ES_KBAR_MIN, Averaging, XpcsHits
 
 __all__ = [
-    "DetectorMean",
-    "G2Fit",
-    "cone_curves",
-    "detector_mean",
     "figure_beamcenter",
     "figure_correction",
     "figure_g2",
@@ -51,50 +52,17 @@ __all__ = [
     "figure_q_rings",
     "figure_saxs",
     "figure_ttcfs",
-    "fit_g2",
-    "legacy_mean_dataset",
-    "legacy_ttcf",
-    "mean_intensity",
-    "outlier_ratio",
-    "q_curves",
-    "saxs_curves",
-    "saxs_rings",
 ]
 
-#: extra-speckle's outlier thresholds and intensity-outlier fraction, as
-#: ``xpcs_offline`` was called with them.
-OUTLIER_THRESHOLDS = (0.75, 1.75)
+#: extra-speckle's intensity-outlier fraction, as ``xpcs_offline`` was called
+#: with it.
 INTENSITY_OUTLIER_FRACTION = 0.2
-#: Width in Å⁻¹ of extra-speckle's ``saxs.get`` bins, 300 over the detector's
-#: q range.
-Q_BIN_A = 3.24e-4
-N_CONES = 8
-#: ``xpcs.fit_dr``'s constants: kB [J/K], 25 °C, viscosity 1 mPa s in N s Å⁻².
-_KB, _T_K, _ETA = 1.381e-23, 273.15 + 25, 1e-23
 
 _MARKERS = ("o", "v", "^", "<", ">", "H", "D", "*")
 
 
-def _run_label(hits: XpcsHits) -> str:
-    """The run number, from the recorded config, else from ``r####`` in the path."""
-    try:
-        return str(json.loads(hits.attrs["config"])["saxs"]["run"])
-    except (KeyError, TypeError, ValueError):
-        match = re.search(r"r(\d{4})", str(hits.path))
-        return str(int(match.group(1))) if match else "?"
-
-
 def _ring_label(roi: float) -> str:
     return rf"{np.around(roi, 3)} $\AA^{{-1}}$"
-
-
-def _ring_sums(hits: XpcsHits) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """``(rows, s_on (n, R, P), cnt (n, R))`` of the usable trains, as float64."""
-    rows = np.flatnonzero(hits.usable)
-    with h5py.File(hits.path, "r") as f:
-        s_on = f["sums/s_on"][rows.tolist()].astype(np.float64)
-        cnt = f["sums/cnt"][rows.tolist()].astype(np.float64)
-    return rows, s_on, cnt
 
 
 def _jet(i: int, n: int):
@@ -166,352 +134,6 @@ def _g2_panel(
     ax.legend(loc="upper left", bbox_to_anchor=(1, 1), fontsize="small")
     if title is not None:
         ax.set_title(title)
-
-
-def _diagonal_curves(maps: np.ndarray, lags: np.ndarray) -> np.ndarray:
-    """The NaN-mean of each diagonal of every ring's map, as ``reduce_ttcf``."""
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", RuntimeWarning)
-        return np.stack(
-            [[np.nanmean(np.diagonal(ring, int(k))) for k in lags] for ring in maps]
-        )
-
-
-def legacy_ttcf(
-    hits: XpcsHits, trains: np.ndarray | None = None, chunk: int = 128
-) -> xr.DataArray:
-    """The ``XPCS TTCF`` column: each train's own ``TTCF_raw − TTCF_off``.
-
-    Same layout as extra-speckle's per-train files, ``(trainId, roi_q, frame_1,
-    frame_2)`` float32, one row per usable hit train. A train with no baseline
-    (the first of a chain, or after a gap) has a NaN ``TTCF_off`` and so a NaN
-    row, as in extra-speckle's files. It holds 4 P² R bytes a train, so pass
-    ``trains`` to take a part of a long run.
-
-    :param chunk: trains read at a time, so the peak is one float32 copy, not three.
-    """
-    ids = hits.train_ids[hits.usable]
-    if trains is not None:
-        ids = ids[np.isin(ids, np.asarray(trains, dtype=np.uint64))]
-    out = np.empty((ids.size, hits.n_rings, hits.n_frames, hits.n_frames), np.float32)
-    for start in range(0, ids.size, chunk):
-        part = hits.per_train(ids[start : start + chunk])
-        out[start : start + chunk] = part["TTCF_raw"].values - part["TTCF_off"].values
-    frames = np.arange(hits.n_frames)
-    return xr.DataArray(
-        out,
-        dims=("trainId", "roi_q", "frame_1", "frame_2"),
-        coords={
-            "trainId": ids,
-            "roi_q": hits.roi_q,
-            "frame_1": frames,
-            "frame_2": frames,
-        },
-        name="TTCF",
-    )
-
-
-def legacy_mean_dataset(
-    hits: XpcsHits, averaging: Averaging = Averaging.POOLED
-) -> xr.Dataset:
-    """The ``XPCS mean dataset`` column: ``ttcf_mean`` and ``g2``.
-
-    ``ttcf_mean`` is the baseline-subtracted mean map ``(roi_q, frame_1,
-    frame_2)`` and ``g2`` the binned diagonal reduction ``(roi_q, tau)``, both
-    float32 as extra-speckle wrote them. With ``Averaging.POOLED`` they are ``c2`` of
-    :meth:`XpcsHits.ttcf` and :meth:`XpcsHits.g2` and ``g2_sigma`` (the
-    jackknife error) is added; ``Averaging.ES`` gives extra-speckle's own, with
-    its noisy-ring rule, so rings can be missing from ``g2`` and not from
-    ``ttcf_mean``.
-    """
-    maps = hits.ttcf(averaging)["c2"]
-    g2 = hits.g2(averaging)
-    pooled = averaging is Averaging.POOLED
-    data = {
-        "ttcf_mean": maps.astype(np.float32),
-        "g2": g2["c2" if pooled else "g2"].astype(np.float32),
-    }
-    if pooled:
-        data["g2_sigma"] = g2["sigma"].astype(np.float32)
-    out = xr.Dataset(data)
-    out.attrs.update(averaging=averaging.value, **{k: v for k, v in maps.attrs.items()})
-    return out
-
-
-def mean_intensity(hits: XpcsHits) -> xr.DataArray:
-    """Mean photons per ring pixel and frame of each usable train, ``(trainId,)``.
-
-    extra-speckle's was the mean over the whole masked detector; this one is
-    over the ring pixels, because the store holds only the annulus. Both track
-    the droplet's total scattering per train, on different scales.
-    """
-    rows, s_on, cnt = _ring_sums(hits)
-    total_pixels = cnt.sum(1)
-    with np.errstate(invalid="ignore", divide="ignore"):
-        value = s_on.sum(axis=(1, 2)) / (total_pixels * hits.n_frames)
-    return xr.DataArray(
-        value,
-        dims="trainId",
-        coords={"trainId": hits.train_ids[rows]},
-        name="mean_intensity",
-    )
-
-
-def saxs_rings(hits: XpcsHits) -> xr.DataArray:
-    """I per frame and ring, ``(frame, q)`` in photons per pixel, from the results file.
-
-    extra-speckle's ``XPCS SAXS`` column was a 300-point I(q) per pulse. The
-    sums resolve nothing finer than the rings, so this is that curve sampled at
-    the ring centres, pooled over the usable trains. For the full curve use
-    :func:`saxs_curves`.
-    """
-    _, s_on, cnt = _ring_sums(hits)
-    with np.errstate(invalid="ignore", divide="ignore"):
-        value = s_on.sum(0) / cnt.sum(0)[:, None]
-    out = xr.DataArray(
-        value.T,
-        dims=("frame", "q"),
-        coords={"frame": np.arange(hits.n_frames), "q": hits.roi_q},
-        name="saxs",
-    )
-    out.attrs.update(resolution="rings", n_trains=int(cnt.shape[0]))
-    return out
-
-
-@dataclass(frozen=True, slots=True)
-class DetectorMean:
-    """Per-frame mean photons of the ring pixels over some hit trains.
-
-    Built by :func:`detector_mean` from the photon store, so it holds the
-    *annulus* the rings span and nothing else of the detector, and only the
-    ring pixels that survive the static mask (the results file's ring labels).
-    """
-
-    #: ``(P, n_good)`` float32: photons per frame summed over ``n_trains`` trains.
-    total: np.ndarray
-    n_trains: int
-    train_ids: np.ndarray
-    #: flat detector index ``(n_good,)`` into ``(16·512, 128)``.
-    pixel: np.ndarray
-    ring: np.ndarray  # int8 (n_good,)
-    q_A: np.ndarray  # Å⁻¹ at the pixel centre
-    chi_deg: np.ndarray
-    ring_bounds_A: np.ndarray  # (R, 2), (0, 2) for rings from a masks file
-    geometry: Any
-    beam_center: tuple[float, float] | None
-    run: str
-    #: Flagged in some frame of every train read: ``MaskPolicy.ANY_FRAME`` keeps
-    #: such a pixel out of every one of those trains' sums. ``None``: not known.
-    always_flagged: np.ndarray | None = None
-    #: The pass's applied outlier mask and its statistic, per pixel; ``None``
-    #: when the results file has none. ``pixel`` includes the outliers.
-    outlier: np.ndarray | None = None
-    outlier_ratio: np.ndarray | None = None
-    outlier_thresholds: tuple[float, float] | None = None
-    outlier_trains: int = 0
-
-    @property
-    def n_frames(self) -> int:
-        return int(self.total.shape[0])
-
-    @property
-    def mean_image(self) -> np.ndarray:
-        """Mean photons per pixel and frame, ``(n_good,)``."""
-        return self.total.sum(0) / (self.n_trains * self.n_frames)
-
-    def per_frame(self) -> np.ndarray:
-        """``(P, n_good)`` mean photons per pixel and frame over the trains."""
-        return self.total / self.n_trains
-
-
-def detector_mean(
-    hits: XpcsHits,
-    cfg: XpcsConfig,
-    *,
-    max_trains: int | None = 200,
-    geometry: Any = None,
-) -> DetectorMean:
-    """Read the photons of up to ``max_trains`` hit trains from the store.
-
-    The trains are spread evenly over the usable ones. Only the static ring
-    labels apply, not the per-frame ``image.mask`` flags, because pixels flagged
-    in single frames are a small fraction of the ring pixels.
-
-    :param cfg: gives the store path and the geometry (beam centre, distance).
-    :param geometry: an AGIPD geometry object to use instead of
-        ``cfg.saxs.geometry_file``, such as a synthetic one in tests.
-    :raises FileNotFoundError: no photon store for this run.
-    :raises ValueError: the store's envelope is not the one the results used.
-    """
-    from analysis.saxs.operator import build_operator, geometry_from_config
-
-    if not cfg.store_file.exists():
-        raise FileNotFoundError(f"no photon store at {cfg.store_file}")
-    usable = hits.train_ids[hits.usable]
-    if max_trains is not None and usable.size > max_trains:
-        usable = usable[np.linspace(0, usable.size - 1, max_trains).astype(int)]
-    with h5py.File(hits.path, "r") as f:
-        label = f["rings/label"][()].astype(np.int16)
-    applied = hits.outlier()
-    if applied is not None:
-        label = applied[1].astype(np.int16)
-    geom = geometry if geometry is not None else geometry_from_config(cfg.saxs)
-    _, ai = build_operator(geom, cfg.saxs)
-    q_all = np.asarray(ai.array_from_unit(SHAPE, "center", "q_A^-1")).ravel()
-    chi_all = np.asarray(ai.array_from_unit(SHAPE, "center", "chi_deg")).ravel()
-    with RingPhotonStore.open(cfg.store_file) as store:
-        envelope = store.envelope()
-        if sha256_of_array(envelope) != hits.attrs.get("envelope_sha256"):
-            raise ValueError(
-                f"{cfg.store_file} holds another envelope than {hits.path}"
-            )
-        if label.size != envelope.size:
-            raise ValueError("ring labels and store envelope differ in size")
-        good = np.flatnonzero(label >= 0)
-        to_good = np.full(envelope.size, -1, np.int64)
-        to_good[good] = np.arange(good.size)
-        total = np.zeros((hits.n_frames, good.size), np.float32)
-        always_flagged = np.ones(good.size, bool)
-        n_read = 0
-        for train in usable:
-            photons = store.get(int(train))
-            if photons.n_frames != hits.n_frames:
-                continue
-            n_read += 1
-            always_flagged &= photons.flagged_any(envelope.size)[good]
-            frames = photons.frames(envelope.size)
-            rows = np.repeat(np.arange(hits.n_frames), np.diff(frames.indptr))
-            cols = to_good[frames.indices]
-            keep = cols >= 0
-            total[rows[keep], cols[keep]] += frames.data[keep]
-    pixel = envelope[good]
-    centre = (
-        (cfg.saxs.beam_center_px, cfg.saxs.beam_center_py)
-        if cfg.saxs.beam_center_px is not None
-        else None
-    )
-    return DetectorMean(
-        total=total,
-        n_trains=int(usable.size),
-        train_ids=usable,
-        pixel=pixel.astype(np.int64),
-        ring=label[good].astype(np.int8),
-        q_A=q_all[pixel],
-        chi_deg=chi_all[pixel],
-        ring_bounds_A=hits.bounds_nm / 10.0,
-        geometry=geom,
-        beam_center=centre,
-        run=_run_label(hits),
-        always_flagged=always_flagged if n_read else np.zeros(good.size, bool),
-        outlier=None if applied is None else applied[0].mask[good],
-        outlier_ratio=None if applied is None else applied[0].ratio[good],
-        outlier_thresholds=None if applied is None else applied[0].thresholds,
-        outlier_trains=0 if applied is None else applied[0].n_trains,
-    )
-
-
-def q_curves(
-    det: DetectorMean,
-    *,
-    dq_A: float = Q_BIN_A,
-    pixels: np.ndarray | None = None,
-) -> xr.DataArray:
-    """I(q) per frame by binning the ring pixels in q: ``(frame, q)``, photons/px.
-
-    This is extra-speckle's ``saxs.get`` on the annulus, a plain mean of the
-    pixels in each ``dq_A`` bin without the pixel splitting pyFAI does. Bins at
-    the edge of the annulus hold fewer pixels, and a bin with none is NaN.
-
-    :param pixels: boolean ``(n_good,)`` selecting the pixels that count. The
-        default is all but the applied outliers, as extra-speckle made
-        ``SAXS.nc`` after ``mask_outlier``.
-    """
-    if pixels is not None:
-        keep = np.asarray(pixels)
-    elif det.outlier is not None:
-        keep = ~det.outlier
-    else:
-        keep = np.ones(det.pixel.size, bool)
-    edges = _q_edges(det, dq_A)
-    index = np.digitize(det.q_A, edges) - 1
-    keep = keep & (index >= 0) & (index < edges.size - 1)
-    counts = np.bincount(index[keep], minlength=edges.size - 1).astype(np.float64)
-    per_frame = det.per_frame()
-    sums = np.stack(
-        [
-            np.bincount(index[keep], weights=row[keep], minlength=edges.size - 1)
-            for row in per_frame
-        ]
-    )
-    with np.errstate(invalid="ignore", divide="ignore"):
-        value = np.where(counts > 0, sums / counts, np.nan)
-    out = xr.DataArray(
-        value,
-        dims=("frame", "q"),
-        coords={"frame": np.arange(det.n_frames), "q": 0.5 * (edges[:-1] + edges[1:])},
-        name="saxs",
-    )
-    out.attrs.update(resolution="q bins", dq_A=dq_A, n_trains=det.n_trains)
-    return out
-
-
-def _q_edges(det: DetectorMean, dq_A: float) -> np.ndarray:
-    lo, hi = float(det.q_A.min()), float(det.q_A.max())
-    return np.arange(lo, hi + dq_A, dq_A)
-
-
-def saxs_curves(det: DetectorMean, *, dq_A: float = Q_BIN_A) -> xr.DataArray:
-    """The ``XPCS SAXS`` column on the annulus: I(q) per frame, ``(frame, q)``."""
-    return q_curves(det, dq_A=dq_A)
-
-
-def outlier_ratio(
-    det: DetectorMean, *, dq_A: float = Q_BIN_A, thresholds=OUTLIER_THRESHOLDS
-) -> np.ndarray:
-    """extra-speckle's ``mask_outlier`` statistic for every ring pixel.
-
-    ``sqrt(mean over frames of (per-frame mean)²)`` of a pixel, over the median
-    of that quantity in its q bin; a pixel outside ``thresholds`` is an
-    outlier. A pixel outside every q bin gets extra-speckle's fill, the mean of
-    the thresholds, and a bin whose median is zero gives NaN.
-    """
-    per_frame = det.per_frame()
-    rms = np.sqrt(np.mean(per_frame.astype(np.float64) ** 2, axis=0))
-    edges = _q_edges(det, dq_A)
-    index = np.digitize(det.q_A, edges) - 1
-    ratio = np.full(rms.size, float(np.mean(thresholds)))
-    for b in np.unique(index[(index >= 0) & (index < edges.size - 1)]):
-        inside = index == b
-        median = np.median(rms[inside])
-        with np.errstate(invalid="ignore", divide="ignore"):
-            ratio[inside] = rms[inside] / median if median > 0 else np.nan
-    return ratio
-
-
-def cone_curves(
-    det: DetectorMean, q_bounds: tuple[float, float], *, dq_A: float = Q_BIN_A
-) -> xr.DataArray:
-    """I(q) in ``N_CONES`` azimuthal cones, ``(q_slice, q)``, over ``q_bounds`` (Å⁻¹).
-
-    The cones are extra-speckle's ``get_SAXS_var`` ones, equal azimuthal sectors
-    of 360/``N_CONES`` degrees.
-    """
-    cone = (np.floor((det.chi_deg % 360.0) / (360.0 / N_CONES))).astype(int)
-    mean = det.mean_image
-    edges = np.arange(q_bounds[0], q_bounds[1] + dq_A, dq_A)
-    index = np.digitize(det.q_A, edges) - 1
-    inside = (index >= 0) & (index < edges.size - 1)
-    out = np.full((N_CONES, edges.size - 1), np.nan)
-    for c in range(N_CONES):
-        sel = inside & (cone == c)
-        counts = np.bincount(index[sel], minlength=edges.size - 1)
-        sums = np.bincount(index[sel], weights=mean[sel], minlength=edges.size - 1)
-        out[c] = np.where(counts > 0, sums / np.maximum(counts, 1), np.nan)
-    return xr.DataArray(
-        out,
-        dims=("q_slice", "q"),
-        coords={"q_slice": np.arange(N_CONES), "q": 0.5 * (edges[:-1] + edges[1:])},
-    )
 
 
 def _assemble(det: DetectorMean, values: np.ndarray, fill: float = np.nan):
@@ -758,7 +380,7 @@ def figure_beamcenter(det: DetectorMean, *, dq_A: float = Q_BIN_A) -> Figure:
     )
     ax[0].set_title(f"At beam center {centre}")
 
-    cone = np.floor((det.chi_deg % 360.0) / (360.0 / N_CONES)).astype(int)
+    cone = cone_index(det)
     mean = det.mean_image
     for r in range(int(det.ring.max()) + 1):
         in_ring = det.ring == r
@@ -812,7 +434,7 @@ def figure_intensity_outliers(
     intensity = mean_intensity(hits)
     fig = Figure()
     ax = fig.subplots()
-    run = _run_label(hits)
+    run = run_label(hits)
     if xgm is None:
         ax.plot(intensity.values, "o", c="blue", ms=2)
         ax.set_xlabel("train")
@@ -893,7 +515,7 @@ def _correction_data(hits: XpcsHits, averaging: Averaging):
         tau = g2["tau"].values
     else:
         curves = tuple(
-            _diagonal_curves(maps[n].values, lags) for n in ("raw", "off", "c2")
+            diagonal_means(maps[n].values, lags) for n in ("raw", "off", "c2")
         )
         tau = lags * hits.period_s
     return maps, curves, tau
@@ -958,7 +580,7 @@ def figure_ttcfs(
     nrows = int(np.ceil(len(roi) / ncols))
     fig = Figure(figsize=(ncols * 4, nrows * 4))
     ax = np.atleast_1d(fig.subplots(nrows, ncols, squeeze=False)).ravel()
-    run = _run_label(hits)
+    run = run_label(hits)
     for i, q in enumerate(roi):
         _ttcf_panel(
             ax[i],
@@ -1006,119 +628,11 @@ def figure_g2(
         g2["roi_q"].values,
         g2["tau"].values,
         values,
-        title=f"run {_run_label(hits)}",
+        title=f"run {run_label(hits)}",
         errors=sigma if errors else None,
     )
     fig.tight_layout()
     return fig
-
-
-@dataclass(frozen=True, slots=True)
-class G2Fit:
-    """extra-speckle's single-exponential fit and its dispersion relation.
-
-    ``g2(τ) = β exp(−2 Γ τ) + baseline`` per ring, ``β`` free for every ring
-    (``beta='local'``). ``Γ`` in s⁻¹, rings that could not be fitted are NaN.
-    ``dr_a`` is the slope of ``Γ = a q²`` in Å² s⁻¹ and ``rh_A`` the
-    Stokes-Einstein radius in Å at 25 °C and 1 mPa s, as ``fit_dr`` computes it.
-    """
-
-    q: np.ndarray
-    tau: np.ndarray
-    curve: np.ndarray  # (R, T) fitted g2
-    gamma: np.ndarray
-    baseline: np.ndarray
-    beta: np.ndarray
-    err_gamma: np.ndarray
-    err_baseline: np.ndarray
-    err_beta: np.ndarray
-    dr_a: float
-    dr_a_err: float
-    rh_A: float
-    rh_err_A: float
-
-
-def fit_g2(g2: xr.DataArray, *, min_points: int = 4) -> G2Fit:
-    """``extra_speckle.xpcs.fit(g2, model='exp', beta='local', dr=True)``.
-
-    One joint ``scipy.optimize.curve_fit`` over all rings, started at
-    ``Γ = 1 / linspace(max τ / 10, min τ × 10)``, baseline at the global
-    minimum and ``β = 0.1``, as there. The dispersion fit is ``fit_dr``'s
-    ``'weightedaverage'``: ``a = average(Γ/q², weights=err_Γ/q²)`` (the weights
-    are the *errors*, as in extra-speckle, not their inverses) and
-    ``err_a = std(Γ/q²)``, ``R_H = kB T / (6 π η a) × 1e10`` with
-    ``η = 1e-23 N s Å⁻²``.
-
-    One difference is deliberate. extra-speckle fitted every ring it was given,
-    after dropping noisy ones itself; a ring here with fewer than
-    ``min_points`` finite points (no photons, for instance) is left out of the
-    fit and returns NaN, rather than being fitted to nothing.
-
-    :param g2: ``(roi_q, tau)``, e.g. ``hits.g2()["c2"]``.
-    :raises ValueError: no ring can be fitted, or the optimiser fails.
-    """
-    from scipy.optimize import curve_fit
-
-    q_all = g2["roi_q"].values.astype(float)
-    tau = g2["tau"].values.astype(float)
-    data = g2.values.astype(float)
-    fit_rings = np.flatnonzero(np.isfinite(data).sum(axis=1) >= min_points)
-    if fit_rings.size == 0:
-        raise ValueError("no ring has enough finite g2 points to fit")
-    cc = data[fit_rings].T  # (tau, rings), as extra-speckle's ``cc_exp``
-    valid = np.isfinite(cc)
-    n = fit_rings.size
-
-    def model(p):
-        gamma, baseline, beta = np.reshape(p, (3, n))
-        return beta[None, :] * np.exp(np.outer(-2 * tau, gamma)) + baseline[None, :]
-
-    p0 = np.concatenate(
-        [
-            1 / np.linspace(tau.max() / 10, tau.min() * 10, n),
-            np.full(n, np.nanmin(cc)),
-            0.1 * np.ones(n),
-        ]
-    )
-    try:
-        popt, pcov = curve_fit(
-            lambda _, *p: model(p)[valid], np.arange(valid.sum()), cc[valid], p0=p0
-        )
-    except RuntimeError as error:
-        raise ValueError(f"the g2 fit did not converge: {error}") from error
-    gamma, baseline, beta = np.reshape(popt, (3, n))
-    err_gamma, err_baseline, err_beta = np.reshape(np.sqrt(np.diag(pcov)), (3, n))
-
-    q = q_all[fit_rings]
-    try:
-        a = float(np.average(gamma / q / q, weights=err_gamma / q / q))
-    except ZeroDivisionError as error:
-        raise ValueError("the fit has no errors to weight its dispersion") from error
-    err_a = float(np.std(gamma / q / q))
-    radius = _KB * _T_K / 6 / np.pi / _ETA / a * 1e10
-
-    def spread(values):
-        out = np.full(q_all.size, np.nan)
-        out[fit_rings] = values
-        return out
-
-    curve = np.full((q_all.size, tau.size), np.nan)
-    curve[fit_rings] = model(popt).T
-    return G2Fit(
-        q=q_all,
-        tau=tau,
-        curve=curve,
-        gamma=spread(gamma),
-        baseline=spread(baseline),
-        beta=spread(beta),
-        err_gamma=spread(err_gamma),
-        err_baseline=spread(err_baseline),
-        err_beta=spread(err_beta),
-        dr_a=a,
-        dr_a_err=err_a,
-        rh_A=float(radius),
-        rh_err_A=float(radius * err_a / a),
-    )
 
 
 def figure_g2_fit(
@@ -1154,7 +668,7 @@ def figure_g2_fit(
         fit.q,
         fit.tau,
         values,
-        title=f"(fitted) run {_run_label(hits)}",
+        title=f"(fitted) run {run_label(hits)}",
         fit=fit.curve,
     )
     ax[1].errorbar(
@@ -1192,11 +706,12 @@ def figure_saxs(
 
     The ring bounds are shaded as extra-speckle's ROIs and the k̄ threshold is a
     dashed line, titled ``I(q) per pulseId``. With ``det`` (the photon store's
-    annulus) the curves are :func:`saxs_curves`, q-binned but covering only the
-    annulus, not the whole detector; without it they are the ring means of
-    :func:`saxs_rings`, all the results file can give. The title says which.
+    annulus) the curves are :func:`~analysis.xpcs.detector.q_curves`, q-binned
+    but covering only the annulus, not the whole detector; without it they are
+    the ring means of :func:`~analysis.xpcs.legacy.saxs_rings`, all the results
+    file can give. The title says which.
     """
-    saxs = saxs_rings(hits) if det is None else saxs_curves(det)
+    saxs = saxs_rings(hits) if det is None else q_curves(det)
     fig = Figure()
     ax = fig.subplots()
     _saxs_axes(
@@ -1208,18 +723,3 @@ def figure_saxs(
     )
     fig.tight_layout()
     return fig
-
-
-#: The figure of each extra-speckle column, for callers that loop over them.
-FIGURES: dict[str, Callable[..., Figure]] = {
-    "q_rings": figure_q_rings,
-    "beamcenter": figure_beamcenter,
-    "outliers": figure_outliers,
-    "intensity_outliers": figure_intensity_outliers,
-    "kbar": figure_kbar,
-    "correction": figure_correction,
-    "ttcfs": figure_ttcfs,
-    "g2": figure_g2,
-    "g2_fit": figure_g2_fit,
-    "saxs": figure_saxs,
-}

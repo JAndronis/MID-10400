@@ -20,7 +20,7 @@ it gathers under a lock.
 
 Each ring's baseline-subtracted c2 is fitted with `analysis.xpcs.kww.fit_rings`: a KWW
 ``β exp(−2(Γτ)^α) + b`` with β fixed at the ring's reference contrast
-(`analysis.triage.xpcs.REFERENCE_BETA`) and Γ, α, b free. Every fitted ring is drawn
+(`analysis.xpcs.snr.REFERENCE_BETA`) and Γ, α, b free. Every fitted ring is drawn
 as (c2 − b)/β_ref; a ring is "resolved" when no parameter sits at a bound, 1/Γ lies
 inside the lags and σ_Γ < Γ, and only resolved rings enter n, D and the mean α.
 
@@ -186,7 +186,7 @@ def pooled_ttc(paths, run_of_train, chosen, n_frames):
     n_frames), NaN where nothing is behind it."""
     import numpy as np
 
-    from analysis.xpcs.result import XpcsHits
+    from analysis.xpcs.reader import XpcsHits
 
     names = ("pair_num", "pair_den", "off_num", "off_den")
     total = None

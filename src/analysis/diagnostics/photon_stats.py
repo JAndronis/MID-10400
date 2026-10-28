@@ -30,6 +30,7 @@ import h5py
 import numpy as np
 
 from analysis.common.status import FrameStatus
+from analysis.xpcs.estimators import N_BLOCKS, block_jackknife
 
 __all__ = [
     "N_BLOCKS",
@@ -42,9 +43,6 @@ __all__ = [
     "summarise",
     "summary_of",
 ]
-
-#: Jackknife blocks of contiguous trains (as triage.xpcs: σ good to ~10 %).
-N_BLOCKS = 50
 
 
 def read_photon_stats(path: str | Path, trains=None):
@@ -180,7 +178,7 @@ def run_weights(
 
 def roi_groups(ds) -> dict[float, list[int]]:
     """The rings of each plain XPCS ROI, keyed by its centre [Å⁻¹] (as in DAMNIT)."""
-    from analysis.triage.xpcs import roi_edges_nm, roi_kinds
+    from analysis.xpcs.config import roi_edges_nm, roi_kinds
 
     edges = roi_edges_nm()
     centre = 0.5 * (ds.ring_lo.values + ds.ring_hi.values)
@@ -235,18 +233,15 @@ def contrast(ds, weights=None, groups: dict | None = None, n_blocks: int = N_BLO
     for i, members in enumerate(blocks):
         train_block[members] = i
     block_id = train_block[np.searchsorted(uniq, trains)]
-    b = len(blocks)
-    num_b = np.stack([num[block_id == i].sum(axis=0) for i in range(b)])
-    den_b = np.stack([den[block_id == i].sum(axis=0) for i in range(b)])
+    frames_of = [np.flatnonzero(block_id == i) for i in range(len(blocks))]
     with np.errstate(invalid="ignore", divide="ignore"):
-        beta = num.sum(axis=0) / den.sum(axis=0) - 1.0
-        loo = (num_b.sum(0) - num_b) / (den_b.sum(0) - den_b) - 1.0
+        beta, sigma, _ = block_jackknife(
+            lambda s2_sum, expected_sum: s2_sum / expected_sum - 1.0,
+            num,
+            den,
+            blocks=frames_of,
+        )
         kbar = k1.sum(axis=0) / nv.sum(axis=0)
-    sigma = (
-        np.sqrt((b - 1) / b * ((loo - loo.mean(axis=0)) ** 2).sum(axis=0))
-        if b > 1
-        else np.full(len(labels), np.nan)
-    )
     return xr.Dataset(
         {
             "beta": ("group", beta),
@@ -255,7 +250,7 @@ def contrast(ds, weights=None, groups: dict | None = None, n_blocks: int = N_BLO
             "n_frames": ("group", np.full(len(labels), trains.size)),
         },
         coords={"group": labels},
-        attrs={"weighted": weights is not None, "n_blocks": b},
+        attrs={"weighted": weights is not None, "n_blocks": len(blocks)},
     )
 
 
@@ -321,7 +316,7 @@ def summary_of(ds, weights=None, n_blocks: int = N_BLOCKS):
     """`summarise` on frames already read (`read_photon_stats`)."""
     import xarray as xr
 
-    from analysis.triage.xpcs import ES_REFERENCE_BETA
+    from analysis.xpcs.snr import ES_REFERENCE_BETA
 
     groups = roi_groups(ds)
     rings = contrast(ds, weights, n_blocks=n_blocks)

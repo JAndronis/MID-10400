@@ -78,8 +78,7 @@ PHOTON_STATS_VERSION = 1
 
 def default_rings(width: float = RING_WIDTH_NM) -> tuple[tuple[float, float], ...]:
     """Rings of about ``width`` tiling each plain XPCS ROI, clear of Bragg windows."""
-    from analysis.triage.xpcs import roi_edges_nm, roi_kinds
-    from analysis.xpcs.config import touches_bragg
+    from analysis.xpcs.config import roi_edges_nm, roi_kinds, touches_bragg
 
     edges = roi_edges_nm()
     rings = []

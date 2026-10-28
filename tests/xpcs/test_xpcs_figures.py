@@ -29,8 +29,11 @@ pytest.importorskip("damnit")
 from damnit.context import Skip  # noqa: E402
 
 from analysis.xpcs import damnit as xd  # noqa: E402
+from analysis.xpcs import detector as D  # noqa: E402
 from analysis.xpcs import figures as F  # noqa: E402
-from analysis.xpcs.result import Averaging, RepRateMismatch, XpcsHits  # noqa: E402
+from analysis.xpcs import g2fit as G  # noqa: E402
+from analysis.xpcs import legacy as L  # noqa: E402
+from analysis.xpcs.reader import Averaging, RepRateMismatch, XpcsHits  # noqa: E402
 from analysis.xpcs.store import RingPhotonStore  # noqa: E402
 
 IDS = (100, 101, 104, 140, 141, 145)
@@ -71,7 +74,7 @@ def curves(ax, n: int | None = None) -> np.ndarray:
 
 # ── data products ───────────────────────────────────────────────────────────────
 def test_the_legacy_ttcf_is_raw_minus_off_per_train(hits):
-    out = F.legacy_ttcf(hits)
+    out = L.legacy_ttcf(hits)
     assert out.dims == ("trainId", "roi_q", "frame_1", "frame_2")
     assert out["trainId"].values.tolist() == list(IDS)
     own = hits.per_train()
@@ -79,12 +82,12 @@ def test_the_legacy_ttcf_is_raw_minus_off_per_train(hits):
     np.testing.assert_array_equal(out.values, expected.astype(np.float32))
     has_baseline = np.isfinite(out.values).any(axis=(1, 2, 3))
     assert has_baseline.tolist() == hits.has_off.tolist()
-    part = F.legacy_ttcf(hits, trains=np.array([104, 140]), chunk=1)
+    part = L.legacy_ttcf(hits, trains=np.array([104, 140]), chunk=1)
     np.testing.assert_array_equal(part.values, out.sel(trainId=[104, 140]).values)
 
 
 def test_the_legacy_mean_dataset_holds_the_corrected_map_and_g2(hits):
-    out = F.legacy_mean_dataset(hits)
+    out = L.legacy_mean_dataset(hits)
     maps, g2 = hits.ttcf(Averaging.POOLED), hits.g2(Averaging.POOLED)
     np.testing.assert_allclose(
         out["ttcf_mean"].values, maps["c2"].values.astype(np.float32)
@@ -93,7 +96,7 @@ def test_the_legacy_mean_dataset_holds_the_corrected_map_and_g2(hits):
     np.testing.assert_allclose(
         out["g2_sigma"].values, g2["sigma"].values.astype(np.float32)
     )
-    es = F.legacy_mean_dataset(hits, Averaging.ES)
+    es = L.legacy_mean_dataset(hits, Averaging.ES)
     np.testing.assert_allclose(
         es["g2"].values,
         hits.g2(Averaging.ES)["g2"].values.astype(np.float32),
@@ -109,7 +112,7 @@ def test_the_mean_intensity_is_photons_per_good_ring_pixel_and_frame(world, hits
     for d, f in zip(dense, flags, strict=True):
         good = (label >= 0) & ~any_flagged(f, N_ENV)
         expected.append(d[:, good].sum() / (good.sum() * P))
-    out = F.mean_intensity(hits)
+    out = L.mean_intensity(hits)
     assert out["trainId"].values.tolist() == list(IDS)
     np.testing.assert_allclose(out.values, expected, rtol=1e-12)
 
@@ -117,7 +120,7 @@ def test_the_mean_intensity_is_photons_per_good_ring_pixel_and_frame(world, hits
 def test_the_ring_saxs_pools_the_trains_per_frame(world, hits):
     rings, dense, flags, _ = world
     label = np.asarray(rings.label)
-    out = F.saxs_rings(hits)
+    out = L.saxs_rings(hits)
     for r in range(R):
         num = np.zeros(P)
         den = 0
@@ -140,7 +143,7 @@ def exponentials(q, diffusion=1e8, beta=0.04, baseline=0.002, noise=0.0):
 
 def test_the_fit_recovers_an_exponential_and_its_dispersion_relation():
     q = np.array([0.03, 0.04, 0.05, 0.06])
-    fit = F.fit_g2(exponentials(q, noise=1e-5))
+    fit = G.fit_g2(exponentials(q, noise=1e-5))
     np.testing.assert_allclose(fit.gamma, 1e8 * q**2, rtol=3e-3)
     np.testing.assert_allclose(fit.beta, 0.04, rtol=3e-3)
     np.testing.assert_allclose(fit.baseline, 0.002, atol=2e-5)
@@ -156,19 +159,19 @@ def test_a_ring_without_data_is_left_out_of_the_fit_and_nan():
     q = np.array([0.03, 0.04, 0.05, 0.06])
     g2 = exponentials(q, noise=1e-5)
     g2.values[2] = np.nan
-    fit = F.fit_g2(g2)
+    fit = G.fit_g2(g2)
     assert np.isnan(fit.gamma[2]) and np.isnan(fit.curve[2]).all()
     np.testing.assert_allclose(fit.gamma[[0, 1, 3]], 1e8 * q[[0, 1, 3]] ** 2, rtol=3e-3)
     g2.values[:] = np.nan
     with pytest.raises(ValueError, match="enough finite"):
-        F.fit_g2(g2)
+        G.fit_g2(g2)
 
 
 def test_the_dispersion_weights_each_ring_by_its_error_as_extra_speckle_does():
     """``fit_dr``'s ``weightedaverage`` weights by the errors, not their inverses."""
     q = np.array([0.03, 0.04, 0.05, 0.06])
     diffusion = np.array([1e8, 3e8, 6e8, 2e8])
-    fit = F.fit_g2(exponentials(q, diffusion, noise=1e-4))
+    fit = G.fit_g2(exponentials(q, diffusion, noise=1e-4))
     weights = fit.err_gamma / q**2
     np.testing.assert_allclose(
         fit.dr_a, np.average(diffusion, weights=weights), rtol=1e-2
@@ -241,7 +244,7 @@ def test_each_results_wrapper_draws_the_view_it_names(written):
 
 
 def test_the_intensity_figure_marks_a_train_off_the_xgm_median_as_removed(hits):
-    intensity = F.mean_intensity(hits)
+    intensity = L.mean_intensity(hits)
     (ax,) = F.figure_intensity_outliers(hits).axes
     np.testing.assert_allclose(ax.lines[0].get_ydata(), intensity.values)
     xgm = xr.DataArray(
@@ -259,7 +262,7 @@ def test_the_intensity_figure_marks_a_train_off_the_xgm_median_as_removed(hits):
 
 def test_without_a_store_the_saxs_column_shows_the_ring_means(hits, written):
     (ax, _colourbar) = xd.saxs_figure(10400, 423, **written).axes
-    rings = F.saxs_rings(hits)
+    rings = L.saxs_rings(hits)
     np.testing.assert_allclose(curves(ax, P), rings.values)
     for name in ("q_rings_figure", "beamcenter_figure", "outliers_figure"):
         with pytest.raises(Skip, match="photon store"):
@@ -271,7 +274,7 @@ def synthetic_detector(rng, n=400, frames=3):
     """A detector mean with pixels on a q ramp."""
     q = np.linspace(0.02, 0.09, n)
     total = rng.poisson(400.0, (frames, n)).astype(np.float32)
-    return F.DetectorMean(
+    return D.DetectorMean(
         total=total,
         n_trains=4,
         train_ids=np.arange(4),
@@ -288,7 +291,7 @@ def synthetic_detector(rng, n=400, frames=3):
 
 def test_the_q_curve_is_the_mean_of_the_pixels_in_each_bin():
     det = synthetic_detector(np.random.default_rng(0))
-    out = F.q_curves(det, dq_A=0.01)
+    out = D.q_curves(det, dq_A=0.01)
     edges = np.arange(det.q_A.min(), det.q_A.max() + 0.01, 0.01)
     index = np.digitize(det.q_A, edges) - 1
     per_frame = det.per_frame()
@@ -299,7 +302,7 @@ def test_the_q_curve_is_the_mean_of_the_pixels_in_each_bin():
         )
     removed = np.zeros(det.pixel.size, bool)
     removed[index == 2] = True
-    assert np.isnan(F.q_curves(det, dq_A=0.01, pixels=~removed).values[:, 2]).all()
+    assert np.isnan(D.q_curves(det, dq_A=0.01, pixels=~removed).values[:, 2]).all()
 
 
 def test_the_outlier_figure_leaves_out_the_pixels_flagged_in_every_train():
@@ -309,7 +312,7 @@ def test_the_outlier_figure_leaves_out_the_pixels_flagged_in_every_train():
     always = np.zeros(det.pixel.size, bool)
     always[700] = True
     fig = F.figure_outliers(replace(det, always_flagged=always), dq_A=0.005)
-    without = F.q_curves(det, dq_A=0.005, pixels=~always).values
+    without = D.q_curves(det, dq_A=0.005, pixels=~always).values
     np.testing.assert_allclose(curves(fig.axes[0], 3), without, equal_nan=True)
     assert "1 flagged in every train not shown" in fig.get_suptitle()
 
@@ -329,14 +332,14 @@ def test_an_empty_q_bin_is_drawn_although_its_ratio_is_nan():
     )
     fig = F.figure_outliers(applied, dq_A=0.005)
     np.testing.assert_allclose(
-        curves(fig.axes[1], 3), F.q_curves(det, dq_A=0.005).values, equal_nan=True
+        curves(fig.axes[1], 3), D.q_curves(det, dq_A=0.005).values, equal_nan=True
     )
 
 
 def test_the_cone_curves_split_the_detector_into_equal_azimuthal_sectors():
     det = synthetic_detector(np.random.default_rng(2), n=3200)
-    cones = F.cone_curves(det, (0.02, 0.09), dq_A=0.02)
-    assert cones.sizes["q_slice"] == F.N_CONES
+    cones = D.cone_curves(det, (0.02, 0.09), dq_A=0.02)
+    assert cones.sizes["q_slice"] == D.N_CONES
     mean = det.mean_image
     chi = det.chi_deg % 360.0
     first = (chi >= 0) & (chi < 45) & (det.q_A < 0.04)
@@ -348,7 +351,7 @@ def dipole_detector(epsilon, n_chi=720, n_q=40):
     chi = np.tile((np.arange(n_chi) + 0.5) * 360 / n_chi - 180, n_q)
     q = np.repeat(np.linspace(0.021, 0.059, n_q), n_chi)
     mean = 400 * (1 + epsilon * np.cos(np.radians(chi)))
-    return F.DetectorMean(
+    return D.DetectorMean(
         total=np.tile(mean.astype(np.float32), (3, 1)) * 4,
         n_trains=4,
         train_ids=np.arange(4),
@@ -366,7 +369,7 @@ def dipole_detector(epsilon, n_chi=720, n_q=40):
 @pytest.mark.parametrize("epsilon", [0.0, 0.05, 0.1])
 def test_the_beamcenter_figure_shows_each_cones_deviation_and_the_merit(epsilon):
     fig = F.figure_beamcenter(dipole_detector(epsilon))
-    lo = np.radians(45 * np.arange(F.N_CONES))
+    lo = np.radians(45 * np.arange(D.N_CONES))
     cos_in_cone = (np.sin(lo + np.radians(45)) - np.sin(lo)) / np.radians(45)
     for line in fig.axes[1].lines[:2]:
         np.testing.assert_allclose(line.get_ydata(), epsilon * cos_in_cone, atol=1e-6)
@@ -380,7 +383,7 @@ def test_the_ring_image_without_an_applied_mask_blanks_the_recomputed_outliers(g
     total = np.full((3, n), 40.0, np.float32)
     total[:, 100] *= 30  # hot
     total[:, 1500] = 0  # dead
-    det = F.DetectorMean(
+    det = D.DetectorMean(
         total=total,
         n_trains=4,
         train_ids=np.arange(4),
@@ -408,7 +411,7 @@ def stored(pipeline):
 
 def test_the_detector_mean_is_the_photons_of_the_ring_pixels_of_the_store(stored):
     hits, cfg, pipe = stored
-    det = F.detector_mean(hits, cfg, geometry=pipe.geom)
+    det = D.detector_mean(hits, cfg, geometry=pipe.geom)
     assert det.n_trains == len(GOOD) and det.n_frames == hits.n_frames
     with h5py.File(hits.path, "r") as f:
         label = f["rings/label"][()]
@@ -426,7 +429,7 @@ def test_the_detector_mean_is_the_photons_of_the_ring_pixels_of_the_store(stored
     assert (det.ring >= 0).all() and det.pixel.size == good.size
     np.testing.assert_array_equal(det.always_flagged, every)
 
-    three = F.detector_mean(hits, cfg, max_trains=3, geometry=pipe.geom)
+    three = D.detector_mean(hits, cfg, max_trains=3, geometry=pipe.geom)
     assert three.train_ids.tolist() == [GOOD[0], GOOD[3], GOOD[-1]]
 
     image = image_axes(F.figure_q_rings(det, remove_outliers=False))[0]
@@ -436,10 +439,10 @@ def test_the_detector_mean_is_the_photons_of_the_ring_pixels_of_the_store(stored
 def test_a_missing_store_or_one_of_another_envelope_is_refused(stored, tmp_path):
     hits, cfg, pipe = stored
     with pytest.raises(FileNotFoundError, match="photon store"):
-        F.detector_mean(hits, replace(cfg, output_root=str(tmp_path / "empty")))
+        D.detector_mean(hits, replace(cfg, output_root=str(tmp_path / "empty")))
     hits.attrs["envelope_sha256"] = "0" * 64
     with pytest.raises(ValueError, match="another envelope"):
-        F.detector_mean(hits, cfg, geometry=pipe.geom)
+        D.detector_mean(hits, cfg, geometry=pipe.geom)
 
 
 def test_the_detector_columns_draw_from_the_store(stored, monkeypatch):

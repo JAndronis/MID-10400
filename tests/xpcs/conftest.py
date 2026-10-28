@@ -18,6 +18,8 @@ pytest.importorskip("extra_geom", reason="the XPCS pass needs EXtra-geom")
 pytest.importorskip("pyFAI", reason="the XPCS pass needs pyFAI")
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "saxs"))
+# The SNR tests share the triage's synthetic results files (`triage_fakes`).
+sys.path.append(str(Path(__file__).parents[1] / "triage"))
 
 from extra_geom import AGIPD_1MGeometry  # noqa: E402
 from xpcs_fakes import EMPTY, FRAMES, GOOD, SHORT, TRAIN_IDS, InlinePool  # noqa: E402

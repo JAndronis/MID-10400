@@ -20,15 +20,15 @@ from xpcs_fakes import (
 
 from analysis.common.status import FrameStatus
 from analysis.xpcs.config import Kernel
+from analysis.xpcs.estimators import _lag_bins
 from analysis.xpcs.kernel import train_sums
-from analysis.xpcs.result import (
+from analysis.xpcs.reader import (
     BASE_CLOCK_HZ,
     CHUNK,
     Averaging,
     NonUniformPattern,
     RepRateMismatch,
     XpcsHits,
-    _lag_bins,
 )
 
 N_ENV, P, R = 300, 14, 3
@@ -305,16 +305,16 @@ def test_the_nan_threshold_is_a_share_of_the_whole_map_not_a_count(world, tmp_pa
     assert below.sizes["roi_q"] == R - 1
 
 
-def test_the_jackknife_error_is_the_triage_estimator_on_the_same_pooled_sums(
+def test_the_jackknife_error_is_the_block_jackknife_of_the_brute_force_lag_sums(
     world, results
 ):
-    from analysis.triage.xpcs import jackknife_g2
+    from analysis.xpcs.estimators import block_jackknife, safe_divide
 
     sums = sums_of(world)
     lags = results.lags()
     on, den_on, off, den_off = reference_lag_terms(sums, lags)
     g2 = results.g2(binned=False, n_blocks=3)
-    value, sigma, _ = jackknife_g2(on, den_on, 3)
+    value, sigma, _ = block_jackknife(safe_divide, on, den_on, n_blocks=3)
     np.testing.assert_allclose(g2.g2.values, value, rtol=1e-12)
     np.testing.assert_allclose(g2.sigma_g2.values, sigma, rtol=1e-9)
     assert (g2.sigma_g2.values > 0).all()
@@ -562,7 +562,7 @@ def test_sums_made_against_another_partner_are_refused_and_the_row_left_open(
     from analysis.common.plan import Block
     from analysis.xpcs.hits import HitSet
     from analysis.xpcs.kernel import partners
-    from analysis.xpcs.result import Prelude, ResultWriter
+    from analysis.xpcs.results_file import Prelude, ResultWriter
 
     rings, _, _, photons = world
     hits = HitSet.of(IDS)

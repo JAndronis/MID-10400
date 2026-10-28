@@ -6,8 +6,13 @@ import numpy as np
 import pytest
 
 from analysis.saxs.config import NPIX
-from analysis.triage.xpcs import roi_kinds
-from analysis.xpcs.config import BRAGG_WINDOWS_NM, ES_RINGS_NM, RINGS_NM
+from analysis.xpcs.config import (
+    BRAGG_WINDOWS_NM,
+    ES_RINGS_NM,
+    RINGS_NM,
+    roi_edges_nm,
+    roi_kinds,
+)
 from analysis.xpcs.rings import build_envelope, build_rings, pixel_map, static_bad_for
 
 #: The fcc 111 and 200 windows [nm⁻¹], as the user set them.
@@ -37,7 +42,7 @@ def test_the_rings_keep_extra_speckles_envelope():
 
 
 def test_reference_beta_holds_one_value_per_ring_and_none_besides():
-    from analysis.triage.xpcs import ES_REFERENCE_BETA, REFERENCE_BETA, ROI_MATCH_A
+    from analysis.xpcs.snr import ES_REFERENCE_BETA, REFERENCE_BETA, ROI_MATCH_A
 
     centres_A = [(lo + hi) / 20 for lo, hi in RINGS_NM]
     own = [q for q in REFERENCE_BETA if q not in ES_REFERENCE_BETA]
@@ -187,3 +192,17 @@ def test_the_static_mask_is_the_saxs_passs_unless_the_rings_are_a_files(
     path = tmp_path / "qmsk.npy"
     np.save(path, np.zeros((1, 16, 512, 128), dtype=bool))
     assert not static_bad_for(with_config(ring_masks_file=str(path))).any()
+
+
+def test_rois_split_into_plain_and_bragg():
+    edges = roi_edges_nm()
+    np.testing.assert_allclose(edges[0], [0.225, 0.35])
+    assert roi_kinds(edges) == [
+        "plain",
+        "plain",
+        "plain",
+        "bragg",
+        "bragg",
+        "bragg",
+        "plain",
+    ]

@@ -19,6 +19,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from analysis.common.config import restore_by_name, state_by_name
 from analysis.common.cpu import physical_cores
 from analysis.saxs.config import N_MODULES, AgipdSaxsConfig
@@ -34,6 +36,8 @@ __all__ = [
     "Kernel",
     "MaskPolicy",
     "XpcsConfig",
+    "roi_edges_nm",
+    "roi_kinds",
     "touches_bragg",
 ]
 
@@ -62,6 +66,16 @@ BRAGG_WINDOWS_NM: tuple[tuple[float, float], ...] = ((0.57, 0.65), (0.68, 0.74))
 def touches_bragg(lo: float, hi: float) -> bool:
     """Whether the interval ``(lo, hi)`` [nm⁻¹] overlaps a Bragg window."""
     return any(lo < w_hi and hi > w_lo for w_lo, w_hi in BRAGG_WINDOWS_NM)
+
+
+def roi_kinds(edges_nm: np.ndarray) -> list[str]:
+    """``"bragg"`` for a ROI that overlaps a Bragg window, else ``"plain"``."""
+    return ["bragg" if touches_bragg(lo, hi) else "plain" for lo, hi in edges_nm]
+
+
+def roi_edges_nm() -> np.ndarray:
+    """``ES_RINGS_NM`` as an ``(R, 2)`` array [nm⁻¹]."""
+    return np.asarray(ES_RINGS_NM, dtype=np.float64)
 
 
 #: The XPCS rings [nm⁻¹], 0.045 wide, clear of ``BRAGG_WINDOWS_NM``. The gap

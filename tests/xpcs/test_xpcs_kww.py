@@ -4,8 +4,8 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from analysis.triage.xpcs import REFERENCE_BETA
 from analysis.xpcs.kww import GAMMA_BOUNDS, fit_rings
+from analysis.xpcs.snr import REFERENCE_BETA
 
 RINGS_A = np.array([0.02475, 0.03375, 0.04275, 0.05175])
 TAU = 4.44e-7 * np.arange(1, 301)

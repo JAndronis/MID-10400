@@ -30,7 +30,7 @@ from analysis.common.writer import IncompleteRun  # noqa: E402
 from analysis.diagnostics.damnit import COLORS  # noqa: E402
 from analysis.xpcs import damnit as xd  # noqa: E402
 from analysis.xpcs.hits import HitSet  # noqa: E402
-from analysis.xpcs.result import RepRateMismatch  # noqa: E402
+from analysis.xpcs.reader import RepRateMismatch  # noqa: E402
 
 IDS = (100, 101, 104, 140, 141, 145)
 N_ENV, P, R = 300, 14, 3

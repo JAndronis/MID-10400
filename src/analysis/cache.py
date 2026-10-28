@@ -338,7 +338,7 @@ def pool_g2(
     """Pooled g2 of a selection of hit trains from an `xpcs_run` dataset.
 
     Gives `XpcsHits.g2(trains=...)` exactly for the same trains (same function,
-    `analysis.xpcs.result.pooled_g2`): the lag terms of the usable selected trains
+    `analysis.xpcs.estimators.pooled_g2`): the lag terms of the usable selected trains
     are summed and divided, with the jackknife over ``n_blocks`` contiguous blocks
     of them in trainId order. ``trains=None`` takes every usable hit train, which is
     the dataset's own ``g2``, ``sigma_g2``, ``g2_paired``, ``baseline``, ``c2``,
@@ -354,7 +354,7 @@ def pool_g2(
         an older one without them), or a trainId is not a hit train.
     """
     from analysis.common.status import FrameStatus
-    from analysis.xpcs.result import (
+    from analysis.xpcs.estimators import (
         N_BLOCKS,
         SKIP_LAST_LAGS,
         lag_frames,
@@ -430,7 +430,7 @@ def xpcs_run(
 ) -> xr.Dataset:
     """XPCS g2 and two-time maps of one run's hit trains with their scaling, cached.
 
-    Reads the hit-train results file (`analysis.xpcs.result.XpcsHits`), whose pooled
+    Reads the hit-train results file (`analysis.xpcs.reader.XpcsHits`), whose pooled
     two-time maps need every hit's ``(rings, P, P)`` cube, so a notebook loads this
     instead. Three families of variables share the ``roi_q`` axis:
 
@@ -471,7 +471,7 @@ def xpcs_run(
     from analysis.common.status import UNFINISHED
     from analysis.common.writer import IncompleteRun
     from analysis.xpcs.damnit import result_file
-    from analysis.xpcs.result import Averaging, XpcsHits
+    from analysis.xpcs.reader import Averaging, XpcsHits
 
     if averaging not in XPCS_AVERAGINGS:
         raise ValueError(

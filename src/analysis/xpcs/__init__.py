@@ -10,7 +10,7 @@ from __future__ import annotations
 from analysis.xpcs.config import Kernel, MaskPolicy, XpcsConfig
 from analysis.xpcs.hits import HitSet
 from analysis.xpcs.kernel import PairStatus
-from analysis.xpcs.result import Averaging, Coverage, XpcsHits, read
+from analysis.xpcs.reader import Averaging, Coverage, XpcsHits, read
 from analysis.xpcs.run import run_xpcs_hits
 
 __all__ = [

@@ -36,7 +36,7 @@ from analysis import cache, utils  # noqa: E402
 from analysis.common.status import FrameStatus  # noqa: E402
 from analysis.common.writer import IncompleteRun  # noqa: E402
 from analysis.utils import deff_sq_to_volume  # noqa: E402
-from analysis.xpcs.result import Averaging, XpcsHits  # noqa: E402
+from analysis.xpcs.reader import Averaging, XpcsHits  # noqa: E402
 
 FIRST_TRAIN = 2637862276
 

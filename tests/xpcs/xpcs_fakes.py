@@ -156,7 +156,8 @@ def build_results(
     from analysis.xpcs.config import Kernel, MaskPolicy
     from analysis.xpcs.hits import HitSet
     from analysis.xpcs.kernel import partners, train_sums
-    from analysis.xpcs.result import Prelude, ResultWriter, XpcsHits
+    from analysis.xpcs.reader import XpcsHits
+    from analysis.xpcs.results_file import Prelude, ResultWriter
 
     kernel = kernel or Kernel.CLEAN
     policy = policy or MaskPolicy.ANY_FRAME

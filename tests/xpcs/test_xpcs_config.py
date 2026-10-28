@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 
 from analysis.xpcs.config import (
-    ES_RINGS_NM,
     XPCS_OPERATIONAL_FIELDS,
     Kernel,
     MaskPolicy,
@@ -13,12 +12,6 @@ from analysis.xpcs.config import (
 )
 
 ENVELOPE, RINGS = "e" * 64, "r" * 64
-
-
-def test_the_es_rings_are_the_triage_rois():
-    from analysis.triage.xpcs import roi_edges_nm
-
-    assert [list(ring) for ring in ES_RINGS_NM] == roi_edges_nm().tolist()
 
 
 def test_an_unpickled_config_is_validated(cfg):

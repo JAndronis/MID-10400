@@ -9,36 +9,36 @@ tests = ["tests/xpcs/test_xpcs_partners.py"]
 
 [[mutant]]
 name = "xpcs_last_lag_bin_open"
-file = "src/analysis/xpcs/result.py"
+file = "src/analysis/xpcs/estimators.py"
 old = "inside = (lags >= lo) & ((lags < hi) | (b == BIN_COUNT - 1))"
 new = "inside = (lags >= lo) & (lags < hi)"
-tests = ["tests/xpcs/test_xpcs_result.py"]
+tests = ["tests/xpcs/test_xpcs_reader.py"]
 
 [[mutant]]
 name = "xpcs_c2_jackknife_factor"
-file = "src/analysis/xpcs/result.py"
+file = "src/analysis/xpcs/estimators.py"
 old = "(count - 1) / count * np.nansum((loo - np.nanmean(loo, 0)) ** 2, 0)"
 new = "1 / count * np.nansum((loo - np.nanmean(loo, 0)) ** 2, 0)"
-tests = ["tests/xpcs/test_xpcs_result.py"]
+tests = ["tests/xpcs/test_xpcs_reader.py"]
 
 [[mutant]]
 name = "xpcs_es_baseline_not_symmetrised"
-file = "src/analysis/xpcs/result.py"
-old = """            off = 0.5 * (off + off.swapaxes(-1, -2))
-        off[~self.has_off[rows]] = np.nan"""
-new = """        off[~self.has_off[rows]] = np.nan"""
-tests = ["tests/xpcs/test_xpcs_result.py"]
+file = "src/analysis/xpcs/estimators.py"
+old = """        off = 0.5 * (off + off.swapaxes(-1, -2))
+    off[~has_off] = np.nan"""
+new = """    off[~has_off] = np.nan"""
+tests = ["tests/xpcs/test_xpcs_reader.py"]
 
 [[mutant]]
 name = "xpcs_es_zero_norm_nan"
-file = "src/analysis/xpcs/result.py"
-old = "            norm[norm == 0] = 1.0"
-new = "            norm[norm == 0] = np.nan"
-tests = ["tests/xpcs/test_xpcs_result.py"]
+file = "src/analysis/xpcs/reader.py"
+old = "            raw, off, kbar = normalised(c, self.has_off[part], zero_norm=1.0)"
+new = "            raw, off, kbar = normalised(c, self.has_off[part], zero_norm=np.nan)"
+tests = ["tests/xpcs/test_xpcs_reader.py"]
 
 [[mutant]]
 name = "xpcs_mean_intensity_per_train"
-file = "src/analysis/xpcs/figures.py"
+file = "src/analysis/xpcs/legacy.py"
 old = "value = s_on.sum(axis=(1, 2)) / (total_pixels * hits.n_frames)"
 new = "value = s_on.sum(axis=(1, 2)) / total_pixels"
 tests = ["tests/xpcs/test_xpcs_figures.py"]
@@ -73,7 +73,7 @@ tests = ["tests/xpcs/test_xpcs_figures.py", "tests/xpcs/test_xpcs_damnit.py"]
 
 [[mutant]]
 name = "xpcs_dispersion_weights_inverted"
-file = "src/analysis/xpcs/figures.py"
+file = "src/analysis/xpcs/g2fit.py"
 old = "a = float(np.average(gamma / q / q, weights=err_gamma / q / q))"
 new = "a = float(np.average(gamma / q / q, weights=q * q / err_gamma))"
 tests = ["tests/xpcs/test_xpcs_figures.py"]
@@ -83,11 +83,11 @@ name = "xpcs_prelude_ignores_pulse_ids"
 file = "src/analysis/xpcs/run.py"
 old = "elif not np.array_equal(own, pattern):"
 new = "elif False:"
-tests = ["tests/xpcs/test_xpcs_run.py", "tests/xpcs/test_xpcs_result.py"]
+tests = ["tests/xpcs/test_xpcs_run.py", "tests/xpcs/test_xpcs_reader.py"]
 
 [[mutant]]
 name = "xpcs_writer_partner_guard_removed"
-file = "src/analysis/xpcs/result.py"
+file = "src/analysis/xpcs/results_file.py"
 old = "if int(f[\"hits/partner\"][row]) != sums.partner_id:"
 new = "if False:"
 tests = ["tests/xpcs"]
@@ -97,7 +97,7 @@ tests = ["tests/xpcs"]
 
 [[mutant]]
 name = "xpcs_legacy_ttcf_adds_the_baseline"
-file = "src/analysis/xpcs/figures.py"
+file = "src/analysis/xpcs/legacy.py"
 old = 'out[start : start + chunk] = part["TTCF_raw"].values - part["TTCF_off"].values'
 new = 'out[start : start + chunk] = part["TTCF_raw"].values + part["TTCF_off"].values'
 tests = ["tests/xpcs/test_xpcs_figures.py"]
@@ -118,21 +118,21 @@ tests = ["tests/xpcs/test_xpcs_figures.py"]
 
 [[mutant]]
 name = "xpcs_detector_mean_first_trains"
-file = "src/analysis/xpcs/figures.py"
+file = "src/analysis/xpcs/detector.py"
 old = "usable = usable[np.linspace(0, usable.size - 1, max_trains).astype(int)]"
 new = "usable = usable[:max_trains]"
 tests = ["tests/xpcs/test_xpcs_figures.py"]
 
 [[mutant]]
 name = "xpcs_detector_mean_flagged_in_any_train"
-file = "src/analysis/xpcs/figures.py"
+file = "src/analysis/xpcs/detector.py"
 old = "always_flagged &= photons.flagged_any(envelope.size)[good]"
 new = "always_flagged |= photons.flagged_any(envelope.size)[good]"
 tests = ["tests/xpcs/test_xpcs_figures.py"]
 
 [[mutant]]
 name = "xpcs_detector_mean_any_envelope"
-file = "src/analysis/xpcs/figures.py"
+file = "src/analysis/xpcs/detector.py"
 old = 'if sha256_of_array(envelope) != hits.attrs.get("envelope_sha256"):'
 new = "if False:"
 tests = ["tests/xpcs/test_xpcs_figures.py"]
@@ -147,7 +147,7 @@ tests = ["tests/xpcs/test_xpcs_figures.py"]
 [[mutant]]
 name = "xpcs_saxs_figure_ignores_the_store"
 file = "src/analysis/xpcs/figures.py"
-old = "saxs = saxs_rings(hits) if det is None else saxs_curves(det)"
+old = "saxs = saxs_rings(hits) if det is None else q_curves(det)"
 new = "saxs = saxs_rings(hits)"
 tests = ["tests/xpcs/test_xpcs_figures.py"]
 
@@ -337,3 +337,98 @@ file = "src/analysis/xpcs/extract.py"
 old = "or not np.all(row_labels == train_id)"
 new = "or not np.all(train_ids == train_id)"
 tests = ["tests/xpcs/test_xpcs_run.py"]
+
+# The SNR and score (analysis.xpcs.snr), moved from the triage and diagnostics.
+
+[[mutant]]
+name = "off_subtraction_sqrt3"
+file = "src/analysis/xpcs/snr.py"
+old = "OFF_SUBTRACTION = float(np.sqrt(2.0))"
+new = "OFF_SUBTRACTION = float(np.sqrt(3.0))"
+tests = ["tests/xpcs/test_xpcs_snr.py", "tests/xpcs/test_xpcs_score.py"]
+
+[[mutant]]
+name = "npix_mean_not_median"
+file = "src/analysis/xpcs/snr.py"
+old = "npix = np.median(pixels, axis=0) if pixels.size"
+new = "npix = np.mean(pixels, axis=0) if pixels.size"
+tests = ["tests/xpcs/test_xpcs_snr.py"]
+
+[[mutant]]
+name = "g2_jackknife_factor_one_over_b"
+file = "src/analysis/xpcs/estimators.py"
+old = "(count - 1) / count * np.nansum((loo - np.nanmean(loo, 0)) ** 2, 0)"
+new = "1 / count * np.nansum((loo - np.nanmean(loo, 0)) ** 2, 0)"
+tests = ["tests/xpcs/test_xpcs_snr.py", "tests/xpcs/test_xpcs_estimators.py"]
+
+[[mutant]]
+name = "g2_jackknife_factor_one"
+file = "src/analysis/xpcs/estimators.py"
+old = "(count - 1) / count * np.nansum((loo - np.nanmean(loo, 0)) ** 2, 0)"
+new = "1 * np.nansum((loo - np.nanmean(loo, 0)) ** 2, 0)"
+tests = ["tests/xpcs/test_xpcs_snr.py", "tests/xpcs/test_xpcs_estimators.py", "tests/xpcs/test_xpcs_score.py"]
+expect = "survived"  # sigma moves by 1 % at 50 blocks, inside any test's tolerance
+
+[[mutant]]
+name = "beta_exact_centre_match"
+file = "src/analysis/xpcs/snr.py"
+old = "hit = [b for key, b in table.items() if abs(key - q) < ROI_MATCH_A]"
+new = "hit = [b for key, b in table.items() if key == q]"
+tests = ["tests/xpcs/test_xpcs_snr.py", "tests/xpcs/test_xpcs_score.py"]
+
+[[mutant]]
+name = "slice_tail_not_absorbed"
+file = "src/analysis/xpcs/snr.py"
+old = "if tail and tail < min_trains and n_full >= 1:"
+new = "if False:"
+tests = ["tests/xpcs/test_xpcs_snr.py"]
+
+[[mutant]]
+name = "verdict_counts_bragg_rois"
+file = "src/analysis/xpcs/snr.py"
+old = 'plain = [r for r, k in enumerate(m.kinds) if k == "plain"]'
+new = "plain = list(range(len(m.kinds)))"
+tests = ["tests/xpcs/test_xpcs_snr.py"]
+
+[[mutant]]
+name = "time_needed_linear_in_snr"
+file = "src/analysis/xpcs/snr.py"
+old = "SLICE_TRAINS / 10.0 * (snr_min / best_snr) ** 2"
+new = "SLICE_TRAINS / 10.0 * (snr_min / best_snr)"
+tests = ["tests/xpcs/test_xpcs_snr.py"]
+
+[[mutant]]
+name = "unknown_snr_is_not_extractable"
+file = "src/analysis/xpcs/snr.py"
+old = '"extractable": bool(n_ext >= 1) if finite else None,'
+new = '"extractable": bool(n_ext >= 1),'
+tests = ["tests/xpcs/test_xpcs_snr.py", "tests/xpcs/test_xpcs_score.py"]
+
+[[mutant]]
+name = "beta_source_always_reference"
+file = "src/analysis/xpcs/snr.py"
+old = 'summary["beta_source"] = "REFERENCE_BETA" if beta is None else "given"'
+new = 'summary["beta_source"] = "REFERENCE_BETA"'
+tests = ["tests/xpcs/test_xpcs_score.py"]
+
+[[mutant]]
+name = "given_beta_ignored"
+file = "src/analysis/xpcs/snr.py"
+old = "b = beta_for(m.roi_q_A, REFERENCE if beta is None else beta)"
+new = "b = beta_for(m.roi_q_A, REFERENCE)"
+tests = ["tests/xpcs/test_xpcs_score.py"]
+
+[[mutant]]
+name = "kbar_rois_plain_count_includes_bragg"
+file = "src/analysis/xpcs/snr.py"
+old = 'n_plain_above=int((table.above & (table.kind == "plain")).sum()),'
+new = "n_plain_above=int(table.above.sum()),"
+tests = ["tests/xpcs/test_xpcs_score.py"]
+
+[[mutant]]
+name = "kbar_rois_ignores_given_trains"
+file = "src/analysis/xpcs/snr.py"
+old = "da = opened.kbar(None if trains is None else np.asarray(trains, dtype=np.uint64))"
+new = "da = opened.kbar(None)"
+tests = ["tests/xpcs/test_xpcs_score.py"]
+
