@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from analysis.xpcs.estimators import diagonal_sums
-from analysis.xpcs.snr import jackknife_g2
+from analysis.xpcs.estimators import block_jackknife, diagonal_sums, safe_divide
 
 
 def test_diagonal_sums_skip_non_finite_entries():
@@ -19,5 +18,6 @@ def test_diagonal_sums_skip_non_finite_entries():
 def test_jackknife_finds_iid_noise():
     rng = np.random.default_rng(0)
     sums = rng.normal(0.0, 1.0, (500, 1, 3))
-    g2, sigma, _ = jackknife_g2(sums, np.ones_like(sums, dtype=np.int32), 50)
+    counts = np.ones_like(sums, dtype=np.int32)
+    g2, sigma, _ = block_jackknife(safe_divide, sums, counts, n_blocks=50)
     np.testing.assert_allclose(sigma, 1 / np.sqrt(500), rtol=0.25)

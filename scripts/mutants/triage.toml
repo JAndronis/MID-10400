@@ -4,9 +4,9 @@
 
 [[mutant]]
 name = "contrast_jackknife_factor_one_over_b"
-file = "src/analysis/diagnostics/photon_stats.py"
-old = "np.sqrt((b - 1) / b * ((loo - loo.mean(axis=0)) ** 2).sum(axis=0))"
-new = "np.sqrt(1 / b * ((loo - loo.mean(axis=0)) ** 2).sum(axis=0))"
+file = "src/analysis/xpcs/estimators.py"
+old = "(count - 1) / count * np.nansum((loo - np.nanmean(loo, 0)) ** 2, 0)"
+new = "1 / count * np.nansum((loo - np.nanmean(loo, 0)) ** 2, 0)"
 tests = ["tests/diagnostics/test_diagnostics_photon_stats.py"]
 
 [[mutant]]

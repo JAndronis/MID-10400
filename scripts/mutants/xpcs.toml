@@ -356,16 +356,16 @@ tests = ["tests/xpcs/test_xpcs_snr.py"]
 
 [[mutant]]
 name = "g2_jackknife_factor_one_over_b"
-file = "src/analysis/xpcs/snr.py"
-old = "(b - 1) / b * np.nansum"
-new = "1 / b * np.nansum"
+file = "src/analysis/xpcs/estimators.py"
+old = "(count - 1) / count * np.nansum((loo - np.nanmean(loo, 0)) ** 2, 0)"
+new = "1 / count * np.nansum((loo - np.nanmean(loo, 0)) ** 2, 0)"
 tests = ["tests/xpcs/test_xpcs_snr.py", "tests/xpcs/test_xpcs_estimators.py"]
 
 [[mutant]]
 name = "g2_jackknife_factor_one"
-file = "src/analysis/xpcs/snr.py"
-old = "(b - 1) / b * np.nansum"
-new = "1 * np.nansum"
+file = "src/analysis/xpcs/estimators.py"
+old = "(count - 1) / count * np.nansum((loo - np.nanmean(loo, 0)) ** 2, 0)"
+new = "1 * np.nansum((loo - np.nanmean(loo, 0)) ** 2, 0)"
 tests = ["tests/xpcs/test_xpcs_snr.py", "tests/xpcs/test_xpcs_estimators.py", "tests/xpcs/test_xpcs_score.py"]
 expect = "survived"  # sigma moves by 1 % at 50 blocks, inside any test's tolerance
 

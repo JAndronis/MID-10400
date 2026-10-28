@@ -41,7 +41,7 @@ import numpy as np
 from scipy.optimize import curve_fit
 
 from analysis.xpcs.config import DEFAULT_XPCS_ROOT, roi_kinds
-from analysis.xpcs.estimators import N_BLOCKS
+from analysis.xpcs.estimators import N_BLOCKS, block_jackknife, safe_divide
 from analysis.xpcs.reader import ES_KBAR_MIN, XpcsHits, read
 
 __all__ = [
@@ -62,7 +62,6 @@ __all__ = [
     "beta_for",
     "fit_decay",
     "fixed_beta",
-    "jackknife_g2",
     "kbar_rois",
     "load_beta",
     "measure_run",
@@ -122,30 +121,6 @@ REFERENCE_BETA: dict[float, tuple[float, float, float]] = {
 }
 #: Two ROI centres within this [Å⁻¹] are the same ROI (DAMNIT stores float centres).
 ROI_MATCH_A = 1e-6
-
-
-def jackknife_g2(
-    sums: np.ndarray, counts: np.ndarray, n_blocks: int = N_BLOCKS
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """``(g2, σ_g2, leave-one-out g2)`` over contiguous blocks of the given trains.
-
-    g2(k) pools every finite entry at lag k, Σ sum / Σ count. Blocks are contiguous so
-    a slow drift inflates σ rather than hiding in it.
-    """
-    n = sums.shape[0]
-    blocks = np.array_split(np.arange(n), min(n_blocks, n))
-    s_b = np.stack([sums[b].sum(axis=0) for b in blocks])
-    c_b = np.stack([counts[b].sum(axis=0) for b in blocks]).astype(np.float64)
-    s, c = s_b.sum(axis=0), c_b.sum(axis=0)
-    with np.errstate(invalid="ignore", divide="ignore"):
-        g2 = s / c
-        loo = (s - s_b) / (c - c_b)
-    b = len(blocks)
-    sigma = np.sqrt(
-        (b - 1) / b * np.nansum((loo - np.nanmean(loo, axis=0)) ** 2, axis=0)
-    )
-    sigma[~np.isfinite(g2)] = np.nan
-    return g2, sigma, loo
 
 
 @dataclass(frozen=True)
@@ -277,8 +252,8 @@ def _reduce(
         # fit come back NaN, which is the answer, not a warning per ROI and block.
         with warnings.catch_warnings(), np.errstate(invalid="ignore", divide="ignore"):
             warnings.simplefilter("ignore", RuntimeWarning)
-            g2, sigma, loo = jackknife_g2(
-                sums[:, :, :k_max], counts[:, :, :k_max], n_blocks
+            g2, sigma, loo = block_jackknife(
+                safe_divide, sums[:, :, :k_max], counts[:, :, :k_max], n_blocks=n_blocks
             )
             fits = [fit_decay(tau, g2[r], sigma[r], loo[:, r]) for r in range(n_roi)]
             analytic = OFF_SUBTRACTION / (
