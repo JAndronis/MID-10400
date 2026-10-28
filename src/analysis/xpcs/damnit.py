@@ -25,7 +25,7 @@ import numpy as np
 
 from analysis.diagnostics.damnit import COLORS, FAILED
 from analysis.saxs.damnit import config_for as saxs_config_for
-from analysis.xpcs import figures
+from analysis.xpcs import detector, figures, legacy
 from analysis.xpcs.config import XpcsConfig
 from analysis.xpcs.hits import HitSet
 from analysis.xpcs.reader import Averaging, XpcsHits
@@ -315,7 +315,8 @@ def overview_figure(g2: Any, ttcf: Any) -> Any:
 
 
 # ── extra-speckle's figure and data columns, from the hit store ──────────────────
-# One wrapper per DAMNIT variable, each a thin call into ``analysis.xpcs.figures``.
+# One wrapper per DAMNIT variable, each a thin call into ``analysis.xpcs.figures``,
+# ``analysis.xpcs.legacy`` or ``analysis.xpcs.detector``.
 # They read the results file through ``_open``, so a run without a file or
 # without a usable hit is a ``Skip`` and an unfinished one an ``IncompleteRun``,
 # as for ``xpcs.g2``.
@@ -323,13 +324,13 @@ def overview_figure(g2: Any, ttcf: Any) -> Any:
 
 def _detector_mean(
     proposal: int, run_no: int, hits: XpcsHits, max_trains: int | None, overrides: dict
-) -> figures.DetectorMean:
+) -> detector.DetectorMean:
     """The photon store's mean over some hit trains; ``Skip`` when it is gone."""
     from damnit.context import Skip
 
     cfg = config_for(proposal, run_no, **overrides)
     try:
-        return figures.detector_mean(hits, cfg, max_trains=max_trains)
+        return detector.detector_mean(hits, cfg, max_trains=max_trains)
     except FileNotFoundError as error:
         raise Skip(f"{error}: the figure needs the photon store") from error
 
@@ -419,14 +420,14 @@ def saxs_figure(
 
 def legacy_ttcf(proposal: int, run_no: int, **overrides: Any) -> Any:
     """The ``XPCS TTCF per train`` column: ``TTCF_raw - TTCF_off`` per hit train."""
-    return figures.legacy_ttcf(_open(proposal, run_no, None, overrides))
+    return legacy.legacy_ttcf(_open(proposal, run_no, None, overrides))
 
 
 def legacy_mean_dataset(
     proposal: int, run_no: int, rep_rate_mhz: float | None = None, **overrides: Any
 ) -> Any:
     """The ``XPCS mean dataset`` column: ``ttcf_mean`` and ``g2``."""
-    return figures.legacy_mean_dataset(_open(proposal, run_no, rep_rate_mhz, overrides))
+    return legacy.legacy_mean_dataset(_open(proposal, run_no, rep_rate_mhz, overrides))
 
 
 def legacy_saxs(
@@ -434,6 +435,6 @@ def legacy_saxs(
 ) -> Any:
     """The ``XPCS SAXS`` column: I(q) per frame on the annulus, ``(frame, q)``."""
     hits = _open(proposal, run_no, None, overrides)
-    return figures.saxs_curves(
+    return detector.q_curves(
         _detector_mean(proposal, run_no, hits, max_trains, overrides)
     )

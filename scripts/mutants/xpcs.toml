@@ -38,7 +38,7 @@ tests = ["tests/xpcs/test_xpcs_reader.py"]
 
 [[mutant]]
 name = "xpcs_mean_intensity_per_train"
-file = "src/analysis/xpcs/figures.py"
+file = "src/analysis/xpcs/legacy.py"
 old = "value = s_on.sum(axis=(1, 2)) / (total_pixels * hits.n_frames)"
 new = "value = s_on.sum(axis=(1, 2)) / total_pixels"
 tests = ["tests/xpcs/test_xpcs_figures.py"]
@@ -73,7 +73,7 @@ tests = ["tests/xpcs/test_xpcs_figures.py", "tests/xpcs/test_xpcs_damnit.py"]
 
 [[mutant]]
 name = "xpcs_dispersion_weights_inverted"
-file = "src/analysis/xpcs/figures.py"
+file = "src/analysis/xpcs/g2fit.py"
 old = "a = float(np.average(gamma / q / q, weights=err_gamma / q / q))"
 new = "a = float(np.average(gamma / q / q, weights=q * q / err_gamma))"
 tests = ["tests/xpcs/test_xpcs_figures.py"]
@@ -97,7 +97,7 @@ tests = ["tests/xpcs"]
 
 [[mutant]]
 name = "xpcs_legacy_ttcf_adds_the_baseline"
-file = "src/analysis/xpcs/figures.py"
+file = "src/analysis/xpcs/legacy.py"
 old = 'out[start : start + chunk] = part["TTCF_raw"].values - part["TTCF_off"].values'
 new = 'out[start : start + chunk] = part["TTCF_raw"].values + part["TTCF_off"].values'
 tests = ["tests/xpcs/test_xpcs_figures.py"]
@@ -118,21 +118,21 @@ tests = ["tests/xpcs/test_xpcs_figures.py"]
 
 [[mutant]]
 name = "xpcs_detector_mean_first_trains"
-file = "src/analysis/xpcs/figures.py"
+file = "src/analysis/xpcs/detector.py"
 old = "usable = usable[np.linspace(0, usable.size - 1, max_trains).astype(int)]"
 new = "usable = usable[:max_trains]"
 tests = ["tests/xpcs/test_xpcs_figures.py"]
 
 [[mutant]]
 name = "xpcs_detector_mean_flagged_in_any_train"
-file = "src/analysis/xpcs/figures.py"
+file = "src/analysis/xpcs/detector.py"
 old = "always_flagged &= photons.flagged_any(envelope.size)[good]"
 new = "always_flagged |= photons.flagged_any(envelope.size)[good]"
 tests = ["tests/xpcs/test_xpcs_figures.py"]
 
 [[mutant]]
 name = "xpcs_detector_mean_any_envelope"
-file = "src/analysis/xpcs/figures.py"
+file = "src/analysis/xpcs/detector.py"
 old = 'if sha256_of_array(envelope) != hits.attrs.get("envelope_sha256"):'
 new = "if False:"
 tests = ["tests/xpcs/test_xpcs_figures.py"]
@@ -147,7 +147,7 @@ tests = ["tests/xpcs/test_xpcs_figures.py"]
 [[mutant]]
 name = "xpcs_saxs_figure_ignores_the_store"
 file = "src/analysis/xpcs/figures.py"
-old = "saxs = saxs_rings(hits) if det is None else saxs_curves(det)"
+old = "saxs = saxs_rings(hits) if det is None else q_curves(det)"
 new = "saxs = saxs_rings(hits)"
 tests = ["tests/xpcs/test_xpcs_figures.py"]
 

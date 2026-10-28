@@ -8,6 +8,7 @@ are here too, for the ``Averaging.ES`` view.
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -19,6 +20,7 @@ __all__ = [
     "N_BLOCKS",
     "SKIP_LAST_LAGS",
     "block_jackknife",
+    "diagonal_means",
     "es_g2",
     "lag_frames",
     "normalised",
@@ -218,6 +220,19 @@ def normalised(c: dict[str, Any], has_off: np.ndarray, zero_norm: float):
     return raw, off, kbar
 
 
+def diagonal_means(maps: np.ndarray, lags: np.ndarray) -> np.ndarray:
+    """The NaN-mean of each ``lags`` diagonal of every ring's map, ``(R, K)``.
+
+    As extra-speckle's ``reduce_ttcf``; a diagonal with no finite entry is NaN.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        return np.stack(
+            [np.nanmean(np.diagonal(maps, k, -2, -1), axis=-1) for k in lags],
+            axis=-1,
+        )
+
+
 def es_g2(
     mean: np.ndarray,
     roi_q: np.ndarray,
@@ -235,10 +250,7 @@ def es_g2(
     if nan_thresh is not None:
         noisy = np.isnan(mean).sum(axis=(1, 2)) > nan_thresh * mean[0].size
         mean, roi_q = mean[~noisy], roi_q[~noisy]
-    diag = np.stack(
-        [np.nanmean(np.diagonal(mean, k, -2, -1), axis=-1) for k in lags],
-        axis=-1,
-    )
+    diag = diagonal_means(mean, lags)
     tau = lags * period
     if binned and lags.size > BIN_THRESHOLD:
         edges = np.logspace(np.log10(tau[BIN_SKIP]), np.log10(tau[-1]), BIN_COUNT + 1)
