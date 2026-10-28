@@ -95,7 +95,7 @@ tests = ["tests/saxs/test_integrity.py", "tests/saxs/test_photon_stats.py", "tes
 [[mutant]]
 name = "saxs_fused_histograms_non_count_frames"
 file = "src/analysis/saxs/worker.py"
-old = "                    if photon is not None:\n                        photon.status[row] = FrameStatus.DATA_CHECK_FAILED\n"
-new = "                    if photon is not None:\n                        histogram_frame(photon, row, counts, bad, spec.labels, *state.rings, spec.k_max)\n"
+old = "                for table in tables:\n                    table.status[row] = status\n                timings[frame_stage] += time.perf_counter() - started\n                continue\n"
+new = "                for table in tables[:1]:\n                    table.status[row] = status\n"
 tests = ["tests/saxs/test_photon_stats.py"]
 expect = "killed"
