@@ -72,18 +72,16 @@ from analysis.triage.inventory import (  # noqa: E402
     read_run_table,
 )
 from analysis.triage.series import load_droplet, segment  # noqa: E402
-from analysis.triage.xpcs import (  # noqa: E402
+from analysis.triage.xpcs import crl_state, measure_beta, reference_beta  # noqa: E402
+from analysis.xpcs.config import DEFAULT_XPCS_ROOT  # noqa: E402
+from analysis.xpcs.snr import (  # noqa: E402
     N_BLOCKS,
     REFERENCE_BETA_RUNS,
     SNR_MIN,
-    crl_state,
     fixed_beta,
-    measure_beta,
     measure_run,
-    reference_beta,
     summarise,
 )
-from analysis.xpcs.config import DEFAULT_XPCS_ROOT  # noqa: E402
 
 #: Droplet series established by hand, as run lists; the inventory must find each.
 KNOWN_SERIES: dict[str, list[int]] = {

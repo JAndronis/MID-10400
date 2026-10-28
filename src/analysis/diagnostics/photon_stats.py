@@ -180,7 +180,7 @@ def run_weights(
 
 def roi_groups(ds) -> dict[float, list[int]]:
     """The rings of each plain XPCS ROI, keyed by its centre [Å⁻¹] (as in DAMNIT)."""
-    from analysis.triage.xpcs import roi_edges_nm, roi_kinds
+    from analysis.xpcs.config import roi_edges_nm, roi_kinds
 
     edges = roi_edges_nm()
     centre = 0.5 * (ds.ring_lo.values + ds.ring_hi.values)
@@ -321,7 +321,7 @@ def summary_of(ds, weights=None, n_blocks: int = N_BLOCKS):
     """`summarise` on frames already read (`read_photon_stats`)."""
     import xarray as xr
 
-    from analysis.triage.xpcs import ES_REFERENCE_BETA
+    from analysis.xpcs.snr import ES_REFERENCE_BETA
 
     groups = roi_groups(ds)
     rings = contrast(ds, weights, n_blocks=n_blocks)

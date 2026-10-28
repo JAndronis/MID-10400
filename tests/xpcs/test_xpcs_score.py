@@ -10,20 +10,18 @@ import pytest
 from triage_fakes import FIRST_TRAIN, write_hit_results
 
 from analysis.common.status import FrameStatus
-from analysis.diagnostics.xpcs import (
+from analysis.xpcs.reader import read
+from analysis.xpcs.snr import (
+    ES_REFERENCE_BETA,
     KBAR_MIN,
-    beta_by_roi,
+    REFERENCE_BETA_RUNS,
+    beta_for,
     kbar_rois,
     load_beta,
+    measure_run,
     xpcs_score,
     xpcs_snr,
 )
-from analysis.triage.xpcs import (
-    ES_REFERENCE_BETA,
-    REFERENCE_BETA_RUNS,
-    measure_run,
-)
-from analysis.xpcs.reader import read
 
 RUN = 423
 FAILED = {FIRST_TRAIN + 7: int(FrameStatus.NO_FRAMES)}
@@ -81,7 +79,7 @@ def test_beta_matches_rois_by_centre_and_reads_json_nulls():
         }
     }  # fmt: skip
     beta = load_beta(report)
-    by_index = beta_by_roi(np.array([0.04, 0.02875, 0.0805]), beta)
+    by_index = beta_for(np.array([0.04, 0.02875, 0.0805]), beta)
     assert np.isnan(by_index[0].value)
     assert by_index[1].value == 0.03 and by_index[1].runs == (400, 450)
     assert np.isnan(by_index[2].value) and by_index[2].n_eligible == 0

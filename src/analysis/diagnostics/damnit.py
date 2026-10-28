@@ -245,8 +245,8 @@ def photon_statistics_overview(stats) -> Any:
     """
     import matplotlib.pyplot as plt
 
-    from analysis.diagnostics.xpcs import KBAR_MIN
-    from analysis.triage.xpcs import roi_edges_nm
+    from analysis.xpcs.config import roi_edges_nm
+    from analysis.xpcs.snr import KBAR_MIN
 
     fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(14, 4.2))
     q = 0.5 * (stats.ring_lo.values + stats.ring_hi.values)
@@ -320,7 +320,7 @@ def photon_statistics_overview(stats) -> Any:
 def xpcs_score_cell(proposal: int, run_no: int) -> Any:
     """The ``xpcs_score`` cell: hits, ROIs at k̄ ≥ 3e-3, best 30 s SNR.
 
-    Reads the run's hit-train results file (``diagnostics.xpcs.xpcs_score``), so it
+    Reads the run's hit-train results file (``analysis.xpcs.snr.xpcs_score``), so it
     shows the run as of its last processing; refresh with
     ``damnit reprocess --match "XPCS score"``. The run is scored only when every
     plain ROI of its results file meets the k̄ threshold (the SNR is taken over
@@ -332,7 +332,7 @@ def xpcs_score_cell(proposal: int, run_no: int) -> Any:
     """
     from damnit.context import Cell, Skip
 
-    from analysis.diagnostics.xpcs import xpcs_score
+    from analysis.xpcs.snr import xpcs_score
 
     try:
         score = xpcs_score(run_no, proposal=proposal)

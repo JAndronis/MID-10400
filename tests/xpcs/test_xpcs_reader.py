@@ -308,7 +308,7 @@ def test_the_nan_threshold_is_a_share_of_the_whole_map_not_a_count(world, tmp_pa
 def test_the_jackknife_error_is_the_triage_estimator_on_the_same_pooled_sums(
     world, results
 ):
-    from analysis.triage.xpcs import jackknife_g2
+    from analysis.xpcs.snr import jackknife_g2
 
     sums = sums_of(world)
     lags = results.lags()

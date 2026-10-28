@@ -337,3 +337,98 @@ file = "src/analysis/xpcs/extract.py"
 old = "or not np.all(row_labels == train_id)"
 new = "or not np.all(train_ids == train_id)"
 tests = ["tests/xpcs/test_xpcs_run.py"]
+
+# The SNR and score (analysis.xpcs.snr), moved from the triage and diagnostics.
+
+[[mutant]]
+name = "off_subtraction_sqrt3"
+file = "src/analysis/xpcs/snr.py"
+old = "OFF_SUBTRACTION = float(np.sqrt(2.0))"
+new = "OFF_SUBTRACTION = float(np.sqrt(3.0))"
+tests = ["tests/xpcs/test_xpcs_snr.py", "tests/xpcs/test_xpcs_score.py"]
+
+[[mutant]]
+name = "npix_mean_not_median"
+file = "src/analysis/xpcs/snr.py"
+old = "npix = np.median(pixels, axis=0) if pixels.size"
+new = "npix = np.mean(pixels, axis=0) if pixels.size"
+tests = ["tests/xpcs/test_xpcs_snr.py"]
+
+[[mutant]]
+name = "g2_jackknife_factor_one_over_b"
+file = "src/analysis/xpcs/snr.py"
+old = "(b - 1) / b * np.nansum"
+new = "1 / b * np.nansum"
+tests = ["tests/xpcs/test_xpcs_snr.py", "tests/xpcs/test_xpcs_estimators.py"]
+
+[[mutant]]
+name = "g2_jackknife_factor_one"
+file = "src/analysis/xpcs/snr.py"
+old = "(b - 1) / b * np.nansum"
+new = "1 * np.nansum"
+tests = ["tests/xpcs/test_xpcs_snr.py", "tests/xpcs/test_xpcs_estimators.py", "tests/xpcs/test_xpcs_score.py"]
+expect = "survived"  # sigma moves by 1 % at 50 blocks, inside any test's tolerance
+
+[[mutant]]
+name = "beta_exact_centre_match"
+file = "src/analysis/xpcs/snr.py"
+old = "hit = [b for key, b in table.items() if abs(key - q) < ROI_MATCH_A]"
+new = "hit = [b for key, b in table.items() if key == q]"
+tests = ["tests/xpcs/test_xpcs_snr.py", "tests/xpcs/test_xpcs_score.py"]
+
+[[mutant]]
+name = "slice_tail_not_absorbed"
+file = "src/analysis/xpcs/snr.py"
+old = "if tail and tail < min_trains and n_full >= 1:"
+new = "if False:"
+tests = ["tests/xpcs/test_xpcs_snr.py"]
+
+[[mutant]]
+name = "verdict_counts_bragg_rois"
+file = "src/analysis/xpcs/snr.py"
+old = 'plain = [r for r, k in enumerate(m.kinds) if k == "plain"]'
+new = "plain = list(range(len(m.kinds)))"
+tests = ["tests/xpcs/test_xpcs_snr.py"]
+
+[[mutant]]
+name = "time_needed_linear_in_snr"
+file = "src/analysis/xpcs/snr.py"
+old = "SLICE_TRAINS / 10.0 * (snr_min / best_snr) ** 2"
+new = "SLICE_TRAINS / 10.0 * (snr_min / best_snr)"
+tests = ["tests/xpcs/test_xpcs_snr.py"]
+
+[[mutant]]
+name = "unknown_snr_is_not_extractable"
+file = "src/analysis/xpcs/snr.py"
+old = '"extractable": bool(n_ext >= 1) if finite else None,'
+new = '"extractable": bool(n_ext >= 1),'
+tests = ["tests/xpcs/test_xpcs_snr.py", "tests/xpcs/test_xpcs_score.py"]
+
+[[mutant]]
+name = "beta_source_always_reference"
+file = "src/analysis/xpcs/snr.py"
+old = 'summary["beta_source"] = "REFERENCE_BETA" if beta is None else "given"'
+new = 'summary["beta_source"] = "REFERENCE_BETA"'
+tests = ["tests/xpcs/test_xpcs_score.py"]
+
+[[mutant]]
+name = "given_beta_ignored"
+file = "src/analysis/xpcs/snr.py"
+old = "b = beta_for(m.roi_q_A, REFERENCE if beta is None else beta)"
+new = "b = beta_for(m.roi_q_A, REFERENCE)"
+tests = ["tests/xpcs/test_xpcs_score.py"]
+
+[[mutant]]
+name = "kbar_rois_plain_count_includes_bragg"
+file = "src/analysis/xpcs/snr.py"
+old = 'n_plain_above=int((table.above & (table.kind == "plain")).sum()),'
+new = "n_plain_above=int(table.above.sum()),"
+tests = ["tests/xpcs/test_xpcs_score.py"]
+
+[[mutant]]
+name = "kbar_rois_ignores_given_trains"
+file = "src/analysis/xpcs/snr.py"
+old = "da = opened.kbar(None if trains is None else np.asarray(trains, dtype=np.uint64))"
+new = "da = opened.kbar(None)"
+tests = ["tests/xpcs/test_xpcs_score.py"]
+

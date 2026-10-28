@@ -187,9 +187,7 @@ def test_the_xpcs_score_cell(monkeypatch, rois, ok, plain, extractable, best, ex
     from analysis.diagnostics.damnit import xpcs_score_cell
 
     score = score_of(rois, ok, plain, extractable, best)
-    monkeypatch.setattr(
-        "analysis.diagnostics.xpcs.xpcs_score", lambda run, proposal: score
-    )
+    monkeypatch.setattr("analysis.xpcs.snr.xpcs_score", lambda run, proposal: score)
     assert colour(xpcs_score_cell(10400, 318)) == COLORS[expected]
 
 
@@ -199,7 +197,7 @@ def test_the_xpcs_score_cell_text(monkeypatch):
     scores = iter([score_of((12, 9), 11, 9, True, 10.04),
                    score_of((12, 9), None, None, None, float("nan"))])  # fmt: skip
     monkeypatch.setattr(
-        "analysis.diagnostics.xpcs.xpcs_score", lambda run, proposal: next(scores)
+        "analysis.xpcs.snr.xpcs_score", lambda run, proposal: next(scores)
     )
     text = xpcs_score_cell(10400, 318).summary_value
     assert text == "259 hits · k̄ ok 11/12 (9/9 plain) · SNR 10.0"
@@ -212,6 +210,6 @@ def test_the_xpcs_score_skips_a_run_without_results(monkeypatch):
     def missing(run, proposal):
         raise LookupError("r5: no XPCS results file under /x")
 
-    monkeypatch.setattr("analysis.diagnostics.xpcs.xpcs_score", missing)
+    monkeypatch.setattr("analysis.xpcs.snr.xpcs_score", missing)
     with pytest.raises(Skip, match="no XPCS results file"):
         xpcs_score_cell(10400, 5)

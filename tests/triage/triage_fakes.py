@@ -130,7 +130,7 @@ def write_hit_results(
     from xpcs_fakes import build_results, make_flags, make_train
 
     from analysis.common.status import FrameStatus
-    from analysis.triage.xpcs import roi_edges_nm
+    from analysis.xpcs.config import roi_edges_nm
     from analysis.xpcs.rings import Rings
 
     rng = np.random.default_rng(seed)
@@ -275,3 +275,19 @@ def write_mesh_store(root: Path, seed: int = 6) -> Path:
     ]
     write_sqlite(root / "runs.sqlite", rows + [run_row(423)])
     return root
+
+
+def hand_run(run=1, fits=(), beta_roi_kinds=("plain", "bragg")):
+    """A `RunMeasurement` of two ROIs whose plain SNR is √2 for β = 0.02."""
+    from analysis.xpcs.snr import RunMeasurement
+
+    two = np.array([2000.0, 2000.0])
+    half, kbar = np.array([0.5, 0.5]), np.array([0.05, 0.05])
+    return RunMeasurement(
+        run=run, roi_q_A=np.array([0.02875, 0.0605]),
+        edges_nm=np.array([[0.225, 0.35], [0.56, 0.65]]), kinds=list(beta_roi_kinds),
+        n_frames=101, rep_rate_hz=1.0, npix=two, n_usable=40, kbar=kbar, phi=half,
+        tau=np.arange(1.0, 101.0), g2=np.zeros((2, 100)), sigma_g2=np.zeros((2, 100)),
+        fits=list(fits), rho=two,
+        slices=[{"slice": 0, "n_usable": 40, "kbar": kbar, "phi": half}],
+    )  # fmt: skip
