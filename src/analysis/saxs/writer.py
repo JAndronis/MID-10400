@@ -42,15 +42,6 @@ class AgipdSaxsWriter(FrameTableWriter):
         "n_frame_specific": np.uint32,
         "max_count": np.uint16,
     }
-    FRAME_VECTOR_SOURCES = {
-        "reader_pulseId": "pulse_id",
-        "cellId": "cell_id",
-        "status": "status",
-        "photons_valid": "photons_valid",
-        "n_bad_pixels": "n_bad_pixels",
-        "n_frame_specific": "n_frame_specific",
-        "max_count": "max_count",
-    }
     EXTRA_GROUPS = ("masks", "operator")
 
     # ── finishing ────────────────────────────────────────────────────────────

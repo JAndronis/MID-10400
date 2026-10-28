@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from types import SimpleNamespace
 
 import numpy as np
 
@@ -51,12 +50,10 @@ class TinyConfig:
 
 class TinyWriter(FrameTableWriter):
     FRAME_VECTORS = {"trainId": np.uint64, "status": np.uint8, "pulse": np.uint16}
-    FRAME_VECTOR_SOURCES = {"status": "status", "pulse": "pulse"}
 
 
 class WiderWriter(TinyWriter):
     FRAME_VECTORS = {**TinyWriter.FRAME_VECTORS, "extra": np.float32}
-    FRAME_VECTOR_SOURCES = {**TinyWriter.FRAME_VECTOR_SOURCES, "extra": "pulse"}
 
 
 def make_plan() -> RunPlan:
@@ -81,16 +78,20 @@ def signal_of(row: int) -> np.ndarray:
     return np.array([row + 1.0, 10 * (row + 1.0), 100 * (row + 1.0)])
 
 
-def result_for(block, *, status=None):
+def result_for(block, *, status=None, writer=TinyWriter):
     """What a worker returns for ``block``: its labels and per-row sums."""
     rows = block.rows()
     n = rows.size
-    return SimpleNamespace(
-        n_frames=n,
-        status=np.full(n, OK, np.uint8) if status is None else np.asarray(status),
-        train_id=np.array([ROW_TRAIN[r] for r in rows], np.uint64),
-        pulse=np.array([ROW_PULSE[r] for r in rows], np.uint16),
-        signal=np.stack([signal_of(r) for r in rows]).astype(np.float32),
-        normalization=np.full((n, NPT), 2.0, np.float32),
-        variance=np.full((n, NPT), 4.0, np.float32),
+    result = writer.empty_rows(n, NPT)
+    result.put(
+        slice(None),
+        {
+            "status": np.full(n, OK, np.uint8) if status is None else status,
+            "trainId": [ROW_TRAIN[r] for r in rows],
+            "pulse": [ROW_PULSE[r] for r in rows],
+            "signal": np.stack([signal_of(r) for r in rows]) if n else 0,
+            "normalization": 2.0,
+            "variance": 4.0,
+        },
     )
+    return result

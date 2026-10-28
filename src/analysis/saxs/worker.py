@@ -28,17 +28,14 @@ from analysis.common.cpu import set_thread_env
 from analysis.common.masks import frame_bad
 from analysis.common.plan import Block
 from analysis.common.status import DataCheckFailed, FrameStatus
+from analysis.common.writer import FrameRows
 from analysis.saxs.config import AgipdSaxsConfig
 from analysis.saxs.masks import BaseMasks, load_masks
 from analysis.saxs.operator import SparseOperator, load_operator
-from analysis.saxs.photon_stats import (
-    PhotonBlockResult,
-    PhotonSpec,
-    empty_result,
-    histogram_frame,
-)
+from analysis.saxs.photon_stats import PhotonSpec, PhotonStatsWriter, histogram_frame
 from analysis.saxs.pixel_sums import BlockSums, WindowSpec
 from analysis.saxs.sparse import frame_data_status, integrate_frame
+from analysis.saxs.writer import AgipdSaxsWriter
 
 __all__ = [
     "BlockResult",
@@ -152,20 +149,10 @@ def init_from_detector(
 
 @dataclass(slots=True)
 class BlockResult:
-    """One block's frames, addressed by label rather than by position."""
+    """One block's results for each product, rows addressed by label."""
 
-    block_index: int
-    train_id: np.ndarray  # (n,) uint64
-    pulse_id: np.ndarray  # (n,) uint64
-    cell_id: np.ndarray  # (n,) uint16
-    status: np.ndarray  # (n,) uint8
-    signal: np.ndarray  # (n, npt) float32
-    normalization: np.ndarray  # (n, npt) float32
-    variance: np.ndarray  # (n, npt) float32
-    photons_valid: np.ndarray  # (n,) float32
-    n_bad_pixels: np.ndarray  # (n,) uint32
-    n_frame_specific: np.ndarray  # (n,) uint32
-    max_count: np.ndarray  # (n,) uint16
+    #: The frame-table rows, in ``AgipdSaxsWriter``'s schema.
+    frames: FrameRows
     bits_present: int = 0
     unseen_cells: int = 0
     timings: dict[str, float] = field(default_factory=dict)
@@ -177,29 +164,7 @@ class BlockResult:
     #: Train id → the ``FrameStatus`` that kept it out of the window sums.
     pixel_excluded: dict[int, int] = field(default_factory=dict)
     #: The block's photon statistics, when the parent asked for them.
-    photon: PhotonBlockResult | None = None
-
-    @property
-    def n_frames(self) -> int:
-        return int(self.train_id.size)
-
-
-def _empty_result(block: Block, npt: int) -> BlockResult:
-    n = block.n_frames
-    return BlockResult(
-        block_index=block.index,
-        train_id=np.zeros(n, dtype=np.uint64),
-        pulse_id=np.zeros(n, dtype=np.uint64),
-        cell_id=np.zeros(n, dtype=np.uint16),
-        status=np.full(n, FrameStatus.NOT_PROCESSED, dtype=np.uint8),
-        signal=np.zeros((n, npt), dtype=np.float32),
-        normalization=np.zeros((n, npt), dtype=np.float32),
-        variance=np.zeros((n, npt), dtype=np.float32),
-        photons_valid=np.zeros(n, dtype=np.float32),
-        n_bad_pixels=np.zeros(n, dtype=np.uint32),
-        n_frame_specific=np.zeros(n, dtype=np.uint32),
-        max_count=np.zeros(n, dtype=np.uint16),
-    )
+    photon: FrameRows | None = None
 
 
 def process_block(block: Block) -> BlockResult:
@@ -226,16 +191,15 @@ def process_block(block: Block) -> BlockResult:
     sums = BlockSums(state.windows) if state.windows is not None else None
     spec = state.photon
     photon = (
-        empty_result(block, spec.n_rings, spec.k_max + 2)
+        PhotonStatsWriter.photon_rows(block.n_frames, spec.n_rings, spec.k_max + 2)
         if spec is not None and block.index in spec.blocks
         else None
     )
 
     from extra_data import by_id
 
-    result = _empty_result(block, op.npt if op is not None else 0)
-    result.integrated = integrate
-    result.photon = photon
+    frames = AgipdSaxsWriter.empty_rows(block.n_frames, op.npt if op is not None else 0)
+    result = BlockResult(frames, integrated=integrate, photon=photon)
     timings = {"read_data": 0.0, "read_mask": 0.0}
     if integrate:
         timings["integrate"] = 0.0
@@ -277,21 +241,18 @@ def process_block(block: Block) -> BlockResult:
             or mask.shape[1] != expected
             or not np.all(row_labels == train_id)
         ):
-            result.status[rows] = FrameStatus.LABEL_MISMATCH
+            frames.status[rows] = FrameStatus.LABEL_MISMATCH
             if sums is not None:
                 sums.exclude(train_id, FrameStatus.LABEL_MISMATCH)
             if photon is not None:
                 photon.status[rows] = FrameStatus.LABEL_MISMATCH
             continue
 
-        result.train_id[rows] = train_ids
-        result.pulse_id[rows] = pulse_ids
-        result.cell_id[rows] = cell_ids
+        labels = {"trainId": train_ids, "reader_pulseId": pulse_ids, "cellId": cell_ids}
+        frames.put(rows, labels)
         bits_present |= int(np.bitwise_or.reduce(mask, axis=None))
         if photon is not None:
-            photon.train_id[rows] = train_ids
-            photon.pulse_id[rows] = pulse_ids
-            photon.cell_id[rows] = cell_ids
+            photon.put(rows, labels)
 
         if sums is not None:
             started = time.perf_counter()
@@ -318,19 +279,13 @@ def process_block(block: Block) -> BlockResult:
                         op, counts, bad, base_bad, base_denominator
                     )
                 except DataCheckFailed:
-                    result.status[row] = FrameStatus.DATA_CHECK_FAILED
+                    frames.status[row] = FrameStatus.DATA_CHECK_FAILED
                     if photon is not None:
                         photon.status[row] = FrameStatus.DATA_CHECK_FAILED
                     timings["integrate"] += time.perf_counter() - started
                     continue
-                result.signal[row] = frame_result.signal
-                result.normalization[row] = frame_result.normalization
-                result.variance[row] = frame_result.variance
-                result.photons_valid[row] = frame_result.photons_valid
-                result.n_bad_pixels[row] = frame_result.n_bad_pixels
-                result.n_frame_specific[row] = frame_result.n_frame_specific
-                result.max_count[row] = frame_result.max_count
-                result.status[row] = FrameStatus.OK
+                frames.put(row, frame_result.as_row())
+                frames.status[row] = FrameStatus.OK
                 timings["integrate"] += time.perf_counter() - started
                 started = time.perf_counter()
             elif frame_data_status(counts) != FrameStatus.OK:

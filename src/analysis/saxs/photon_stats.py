@@ -36,10 +36,9 @@ import numpy as np
 
 from analysis.common.config import restore_by_name, state_by_name
 from analysis.common.cpu import file_sha256
-from analysis.common.plan import Block
 from analysis.common.run import base_provenance
 from analysis.common.status import FrameStatus
-from analysis.common.writer import FrameTableWriter
+from analysis.common.writer import FrameRows, FrameTableWriter
 from analysis.saxs.config import (
     DEFAULT_PHOTON_STATS_ROOT,
     NPIX,
@@ -51,12 +50,10 @@ __all__ = [
     "DEFAULT_OUTPUT_ROOT",
     "FILE_NAME",
     "K_MAX",
-    "PhotonBlockResult",
     "PhotonSpec",
     "PhotonStatsConfig",
     "PhotonStatsWriter",
     "default_rings",
-    "empty_result",
     "frame_stats",
     "histogram_frame",
     "photon_stats_reasons",
@@ -249,21 +246,21 @@ class PhotonStatsWriter(FrameTableWriter):
         "cellId": np.uint16,
         "status": np.uint8,
     }
-    FRAME_VECTOR_SOURCES = {
-        "reader_pulseId": "pulse_id",
-        "cellId": "cell_id",
-        "status": "status",
-    }
     FRAME_MATRICES: tuple[str, ...] = ()
     EXTRA_GROUPS = ("rings",)
 
     @classmethod
-    def _missing_columns(cls, handle) -> list[str]:
-        missing = super()._missing_columns(handle)
-        frames = handle.get("frames")
-        return missing + sorted(
-            name for name in RING_ARRAYS if frames is None or name not in frames
-        )
+    def columns(cls) -> tuple[str, ...]:
+        return (*super().columns(), *RING_ARRAYS)
+
+    @classmethod
+    def photon_rows(cls, n: int, n_rings: int, k: int) -> FrameRows:
+        """``n`` rows of zeros, every one ``NOT_PROCESSED``, with ``k`` count bins."""
+        rows = cls.empty_rows(n, 0)
+        for name, (dtype, with_k) in RING_ARRAYS.items():
+            shape = (n, n_rings, k) if with_k else (n, n_rings)
+            rows.columns[name] = np.zeros(shape, dtype=dtype)
+        return rows
 
     @classmethod
     def _create_layout(cls, handle, cfg, plan, config_hash) -> None:
@@ -294,17 +291,6 @@ class PhotonStatsWriter(FrameTableWriter):
         group.attrs["k_max"] = cfg.k_max
         self._f.flush()
 
-    def write_block(self, block: Block, result: Any) -> None:
-        super().write_block(block, result)
-        rows = block.rows()
-        if rows.size == 0:
-            return
-        start, stop = int(rows[0]), int(rows[-1]) + 1
-        frames = self._f["frames"]
-        for name in RING_ARRAYS:
-            frames[name][start:stop] = getattr(result, name)
-        self._f.flush()
-
     def finalise(self, provenance: dict[str, Any]) -> None:
         """As the frame table, but the operator's sha256 lives in ``/rings``.
 
@@ -318,25 +304,6 @@ class PhotonStatsWriter(FrameTableWriter):
 
 
 # ── workers ───────────────────────────────────────────────────────────────────
-
-
-@dataclass(slots=True)
-class PhotonBlockResult:
-    train_id: np.ndarray
-    pulse_id: np.ndarray
-    cell_id: np.ndarray
-    status: np.ndarray
-    n_valid: np.ndarray
-    hist: np.ndarray
-    s1: np.ndarray
-    s2: np.ndarray
-    max_k: np.ndarray
-    bits_present: int = 0
-    timings: dict[str, float] = field(default_factory=dict)
-
-    @property
-    def n_frames(self) -> int:
-        return int(self.status.size)
 
 
 @dataclass(frozen=True)
@@ -365,24 +332,8 @@ class PhotonSpec:
         return ring_n, in_ring
 
 
-def empty_result(block: Block, n_rings: int, k: int) -> PhotonBlockResult:
-    """A block's records, every frame ``NOT_PROCESSED`` until histogrammed."""
-    n = block.n_frames
-    return PhotonBlockResult(
-        train_id=np.zeros(n, np.uint64),
-        pulse_id=np.zeros(n, np.uint64),
-        cell_id=np.zeros(n, np.uint16),
-        status=np.full(n, FrameStatus.NOT_PROCESSED, np.uint8),
-        n_valid=np.zeros((n, n_rings), np.uint32),
-        hist=np.zeros((n, n_rings, k), np.uint32),
-        s1=np.zeros((n, n_rings), np.uint32),
-        s2=np.zeros((n, n_rings), np.uint32),
-        max_k=np.zeros((n, n_rings), np.uint16),
-    )
-
-
 def histogram_frame(
-    result: PhotonBlockResult,
+    result: FrameRows,
     row: int,
     counts: np.ndarray,
     bad: np.ndarray,
@@ -395,12 +346,17 @@ def histogram_frame(
     n_valid, hist, s1, s2, max_k = frame_stats(
         counts, bad, labels, ring_n, in_ring, k_max
     )
-    result.n_valid[row] = n_valid
-    result.hist[row] = hist
-    result.s1[row] = s1
-    result.s2[row] = s2
-    result.max_k[row] = np.minimum(max_k, np.iinfo(np.uint16).max)
-    result.status[row] = FrameStatus.OK
+    result.put(
+        row,
+        {
+            "n_valid": n_valid,
+            "hist": hist,
+            "s1": s1,
+            "s2": s2,
+            "max_k": np.minimum(max_k, np.iinfo(np.uint16).max),
+            "status": FrameStatus.OK,
+        },
+    )
 
 
 # ── completeness ──────────────────────────────────────────────────────────────

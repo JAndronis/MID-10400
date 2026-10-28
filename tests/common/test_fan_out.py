@@ -10,6 +10,7 @@ import json
 import logging
 import re
 from concurrent.futures import BrokenExecutor, Future
+from dataclasses import dataclass
 from types import SimpleNamespace
 
 import h5py
@@ -19,6 +20,7 @@ from tiny_table import OK, PLAN, TinyConfig, TinyWriter, result_for
 from analysis.common.plan import Block
 from analysis.common.run import fan_out
 from analysis.common.status import FrameStatus
+from analysis.common.writer import FrameRows
 
 
 class InlinePool:
@@ -62,11 +64,19 @@ class DyingPool(InlinePool):
 def process(block, *, fail=()):
     if block.index in fail:
         raise RuntimeError(f"block {block.index} could not be read")
-    result = result_for(block)
-    result.bits_present = 1 << block.index
-    result.timings = {"read": 1.0, "integrate": 0.5}
-    result.n_extreme = block.index + 1
-    return result
+    return CountedRows(
+        result_for(block).columns,
+        bits_present=1 << block.index,
+        timings={"read": 1.0, "integrate": 0.5},
+        n_extreme=block.index + 1,
+    )
+
+
+@dataclass(slots=True)
+class CountedRows(FrameRows):
+    """A block's rows plus one extra counter for ``accumulate`` to sum."""
+
+    n_extreme: int = 0
 
 
 def run(cfg, todo, *, fail=(), pool=InlinePool, **kwargs):

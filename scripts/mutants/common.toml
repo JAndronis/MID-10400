@@ -175,13 +175,13 @@ tests = ["tests/test_cache.py::test_the_grouped_grid_is_read_not_a_stale_flat_on
 name = "writer_trusts_the_worker_s_train_id"
 file = "src/analysis/common/writer.py"
 old = 'frames["trainId"][start:stop] = expected_trains'
-new = 'frames["trainId"][start:stop] = result.train_id'
+new = 'frames["trainId"][start:stop] = result["trainId"]'
 tests = ["tests/common/test_common_writer.py"]
 
 [[mutant]]
 name = "writer_skips_the_label_check"
 file = "src/analysis/common/writer.py"
-old = "mislabelled = integrated & (result.train_id != expected_trains)"
+old = 'mislabelled = integrated & (result["trainId"] != expected_trains)'
 new = "mislabelled = integrated & False"
 tests = ["tests/common/test_common_writer.py"]
 

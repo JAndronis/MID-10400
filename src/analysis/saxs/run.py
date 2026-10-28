@@ -613,7 +613,7 @@ class _Outputs:
                 f"{result.photon is not None}, the parent asked for {wanted}"
             )
         if self.frames is not None and integrated:
-            self.frames.write_block(block, result)
+            self.frames.write_block(block, result.frames)
         if self.sums is not None:
             self.sums.write_block(block, result)
         if wanted:

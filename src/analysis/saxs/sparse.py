@@ -10,7 +10,8 @@ array of ``NPIX`` entries, and accumulates in float64.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
+from typing import Any
 
 import numpy as np
 
@@ -109,6 +110,10 @@ class FrameResult:
     n_bad_pixels: int
     n_frame_specific: int
     max_count: int
+
+    def as_row(self) -> dict[str, Any]:
+        """The frame-table columns this frame fills, by dataset name."""
+        return {f.name: getattr(self, f.name) for f in fields(self)}
 
 
 def integrate_frame(

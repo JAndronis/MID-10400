@@ -44,8 +44,8 @@ tests = ["tests/waxs/test_waxs_damnit.py::test_a_refused_frame_is_tolerated_ever
 [[mutant]]
 name = "waxs_dead_frame_stored_as_ok"
 file = "src/analysis/waxs/worker.py"
-old = "                result.status[row] = FrameStatus.DATA_CHECK_FAILED"
-new = "                result.status[row] = FrameStatus.OK"
+old = '"status": FrameStatus.DATA_CHECK_FAILED,'
+new = '"status": FrameStatus.OK,'
 tests = ["tests/waxs/test_waxs_run.py::test_a_fully_masked_frame_is_refused_counted_and_tolerated"]
 
 [[mutant]]

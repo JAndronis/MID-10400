@@ -69,14 +69,16 @@ def test_each_row_holds_the_real_frame_its_memory_cell_labels(real):
     counting = PhotonCounting.from_config(cfg)
     bits = np.uint32(cfg.mask_bits)
     position = {int(cell): index for index, cell in enumerate(cells)}
-    assert list(result.cell_id) == list(lit)
+    assert list(result["cellId"]) == list(lit)
     for row, cell in enumerate(lit):
         at = position[cell]
         dynamic = (mask[at].reshape(-1) & bits) != 0
         alone = integrate_frame(
             ai, op, counting, data[at], dynamic, max_abs_kev=cfg.max_abs_kev
         )
-        assert np.array_equal(result.signal[row], alone.signal.astype(np.float32)), cell
+        assert np.array_equal(result["signal"][row], alone.signal.astype(np.float32)), (
+            cell
+        )
 
 
 def test_the_nan_path_equals_the_reference_on_real_frames(real):

@@ -21,7 +21,7 @@ from analysis.saxs.writer import AgipdSaxsWriter  # noqa: E402
 def test_worker_labels_come_from_the_reader(worker_ready):
     """Identity is read, never inferred from position, which a dropped train shifts."""
     for block in worker_ready.plan.blocks:
-        result = worker.process_block(block)
+        result = worker.process_block(block).frames
         expected = np.concatenate(
             [
                 np.full(count, train_id, dtype=np.uint64)
@@ -30,13 +30,13 @@ def test_worker_labels_come_from_the_reader(worker_ready):
                 )
             ]
         )
-        assert np.array_equal(result.train_id, expected)
+        assert np.array_equal(result["trainId"], expected)
         # cellIds cycle within a train rather than counting up across it
         for train_id in block.train_ids:
             _, count = block.frames_for(train_id)
-            offset = int(np.flatnonzero(result.train_id == train_id)[0])
+            offset = int(np.flatnonzero(result["trainId"] == train_id)[0])
             assert np.array_equal(
-                result.cell_id[offset : offset + count], np.arange(count)
+                result["cellId"][offset : offset + count], np.arange(count)
             )
 
 
@@ -47,7 +47,7 @@ def test_the_frame_table_has_its_columns_and_no_nan(worker_ready, tmp_path):
         worker_ready.cfg, worker_ready.plan, path
     ) as out:
         for block in worker_ready.plan.blocks:
-            out.write_block(block, worker.process_block(block))
+            out.write_block(block, worker.process_block(block).frames)
 
     n, npt = worker_ready.plan.n_frames, worker_ready.cfg.npt
     with h5py.File(path) as f:

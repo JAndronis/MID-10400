@@ -17,7 +17,8 @@ from __future__ import annotations
 
 import hashlib
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
+from typing import Any
 
 import numpy as np
 
@@ -125,6 +126,10 @@ class FrameResult:
     n_level_missing: int
     #: The energy the counts were taken at, as stored.
     count_energy_kev: float
+
+    def as_row(self) -> dict[str, Any]:
+        """The frame-table columns this frame fills, by dataset name."""
+        return {f.name: getattr(self, f.name) for f in fields(self)}
 
 
 def frame_maxima(
