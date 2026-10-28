@@ -13,17 +13,21 @@ DAMNIT.
 from __future__ import annotations
 
 import logging
+import time
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 
-from analysis.common.plan import RunPlan, TrainRecord, build_blocks
+from analysis.common.plan import FROM_DC, RunPlan, TrainRecord, build_blocks, open_proc
 from analysis.common.status import FrameStatus
-from analysis.waxs.config import JungfrauWaxsConfig
+from analysis.waxs.config import CELLS_PER_TRAIN, MODULE_SHAPE, JungfrauWaxsConfig
 
 __all__ = [
+    "TrainFrames",
     "build_plan",
     "open_detector",
+    "read_train",
     "run_checks",
 ]
 
@@ -59,30 +63,69 @@ def open_detector(cfg: JungfrauWaxsConfig, dc: Any) -> Any:
     return det
 
 
-def _open_control(cfg: JungfrauWaxsConfig) -> Any:
-    """Open the raw location, which is where the control sources live.
+@dataclass(frozen=True, slots=True)
+class TrainFrames:
+    """One train's entry, its frames addressed by memory cell."""
 
-    Proc holds only the corrected detector files. The plan itself stays on proc,
-    so trains existing only in raw do not enter the ledger.
+    #: ``(16, 512, 1024)`` keV, by array position.
+    data: np.ndarray
+    #: ``data.mask`` of the same shape.
+    mask: np.ndarray
+    #: ``data.memoryCell``: the memory cell at each array position.
+    cells: np.ndarray
+    #: Memory cell → array position.
+    positions: dict[int, int]
+
+
+def read_train(
+    det: Any, train_id: int, timings: dict[str, float] | None = None
+) -> TrainFrames | None:
+    """Read one train's entry, or ``None`` when its labels cannot be trusted.
+
+    The reader's train coordinate is the INDEX's, which filed the entry under
+    ``train_id`` by construction, so only the entry's own ``data.trainId`` row
+    can say it belongs to another train. ``None`` also means an entry of the
+    wrong shape, or repeated memory cells: filling rows by array position could
+    then put a frame on the wrong cell.
+
+    :param timings: ``read_data`` and ``read_mask`` seconds are added to it.
     """
-    from extra_data import open_run
+    from extra_data import by_id
 
-    return open_run(cfg.proposal, cfg.run, data="raw")
+    selected = det.select_trains(by_id[[int(train_id)]])
+    adc_key = selected["data.adc"]
+    started = time.perf_counter()
+    data = adc_key.ndarray()
+    read_data = time.perf_counter() - started
+    started = time.perf_counter()
+    mask = selected["data.mask"].ndarray()
+    read_mask = time.perf_counter() - started
+    if timings is not None:
+        timings["read_data"] += read_data
+        timings["read_mask"] += read_mask
 
-
-def _control_or_none(cfg: JungfrauWaxsConfig) -> Any:
-    try:
-        return _open_control(cfg)
-    except Exception as error:  # noqa: BLE001 - recorded by run_checks
-        log.warning("no raw location for the run checks: %r", error)
+    row_labels = np.asarray(selected["data.trainId"].ndarray()).reshape(-1)
+    cells = np.asarray(selected["data.memoryCell"].ndarray()).reshape(-1)
+    if (
+        row_labels.size != 1
+        or int(row_labels[0]) != train_id
+        or data.shape[:2] != (1, 1)
+        or mask.shape != data.shape
+        or data.shape[2] != CELLS_PER_TRAIN
+        or data.shape[3:] != MODULE_SHAPE
+    ):
         return None
+    positions = {int(cell): index for index, cell in enumerate(cells.tolist())}
+    if len(positions) != cells.size:
+        return None
+    return TrainFrames(data[0, 0], mask[0, 0], cells, positions)
 
 
 def build_plan(
     cfg: JungfrauWaxsConfig,
     lit_cells: tuple[int, ...],
     dc: Any = None,
-    control_dc: Any = None,
+    control_dc: Any = FROM_DC,
     det: Any = None,
 ) -> RunPlan:
     """Build the run plan.
@@ -95,18 +138,17 @@ def build_plan(
     :param dc: an open ``DataCollection``. When ``None``, the proc run named by
         ``cfg`` is opened.
     :param control_dc: where :func:`run_checks` looks for the timeserver and
-        the XGM. Defaults to the raw location when this function opened the run
-        itself, and to ``dc`` otherwise, which lets a mock run carry both.
+        the XGM (:data:`analysis.common.plan.FROM_DC`). Defaulting to ``dc``
+        lets a mock run carry both.
     :param det: an already-open ``JUNGFRAU``. ``None`` opens one.
 
     :raises InconsistentEntries: a train holds other than one detector entry.
     """
-    opened_here = dc is None
-    if opened_here:
-        from extra_data import open_run
-
-        dc = open_run(cfg.proposal, cfg.run, data="proc")
-
+    if dc is None:
+        dc, raw = open_proc(cfg)
+        control_dc = raw if control_dc is FROM_DC else control_dc
+    elif control_dc is FROM_DC:
+        control_dc = dc
     if det is None:
         det = open_detector(cfg, dc)
     counts = det.frame_counts  # entries per train, not frames
@@ -136,9 +178,6 @@ def build_plan(
             continue
         records.append(TrainRecord(train_id, rows_per_train, row, FrameStatus.OK))
         row += rows_per_train
-
-    if control_dc is None:
-        control_dc = _control_or_none(cfg) if opened_here else dc
 
     blocks = build_blocks(records, cfg.trains_per_block)
     log.info(

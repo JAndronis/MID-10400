@@ -30,9 +30,9 @@ from analysis.common.cpu import (
     phase,
     set_thread_env,
 )
-from analysis.common.lock import OutputLock, lock_path, output_lock
-from analysis.common.plan import evenly_spaced
-from analysis.common.run import base_provenance, fan_out
+from analysis.common.lock import OutputLock
+from analysis.common.plan import evenly_spaced, open_proc
+from analysis.common.run import base_provenance, fan_out, guarded_pass, reducer
 from analysis.common.writer import IncompleteRun, status_counts
 from analysis.waxs import worker as worker_module
 from analysis.waxs.cells import (
@@ -45,16 +45,16 @@ from analysis.waxs.config import CELLS_PER_TRAIN, JungfrauWaxsConfig
 from analysis.waxs.integrate import ErrorModel
 from analysis.waxs.operator import WaxsOperator, build_operator
 from analysis.waxs.photons import PhotonCounting
-from analysis.waxs.plan import build_plan, open_detector
+from analysis.waxs.plan import build_plan, open_detector, read_train
 from analysis.waxs.selftest import run_selftest
 from analysis.waxs.writer import JungfrauWaxsWriter, per_cell
 
 __all__ = ["REDUCERS", "run_jungfrau_waxs"]
 
-#: What ``run_jungfrau_waxs`` may return. ``per_cell`` is the (trainId, cellId,
-#: q) grid the DAMNIT variable stores; ``none`` skips the reduction for a caller
-#: that only wants the file written.
-REDUCERS = ("per_cell", "none")
+#: What ``run_jungfrau_waxs`` may return, read from the file. ``per_cell`` is
+#: the (trainId, cellId, q) grid the DAMNIT variable stores; ``none`` skips the
+#: reduction for a caller that only wants the file written.
+REDUCERS = {"per_cell": per_cell, "none": None}
 
 log = logging.getLogger(__name__)
 
@@ -128,8 +128,7 @@ def run_jungfrau_waxs(
     is answered from with nothing written, unless ``cfg.overwrite``. It raises
     on the same terms as a full pass.
     """
-    if reduce not in REDUCERS:
-        raise ValueError(f"reduce must be one of {REDUCERS}, got {reduce!r}")
+    reduction = reducer(REDUCERS, reduce)
 
     # Before any pool exists, so spawned children inherit it.
     set_thread_env()
@@ -143,17 +142,7 @@ def run_jungfrau_waxs(
     with phase(setup, "operator"):
         op, ai = build_operator(cfg, poni_file)
 
-    # Skipped while a lock exists, since the file may be mid-write; the check
-    # under the lock below then decides.
-    if not cfg.overwrite and not lock_path(output_path).exists():
-        if is_complete(output_path, cfg, operator=op):
-            return _from_file(cfg, output_path, reduce)
-    with output_lock(output_path) as lock:
-        if not cfg.overwrite:
-            verdict = is_complete(output_path, cfg, operator=op)
-            if verdict:
-                return _from_file(cfg, output_path, reduce)
-            log.info("%s", verdict)
+    def integrate(locks: dict[Path, OutputLock]) -> Any:
         # Before the cells and the self-test, so a file that can only be
         # reprocessed is refused at once.
         JungfrauWaxsWriter.check_resumable(
@@ -167,15 +156,25 @@ def run_jungfrau_waxs(
             run_dir=run_dir,
             output_path=output_path,
             pool_factory=pool_factory,
-            reduce=reduce,
+            reduction=reduction,
             setup=setup,
             started_at=started_at,
             started=started,
-            lock=lock,
+            lock=locks[output_path],
         )
 
+    return guarded_pass(
+        [output_path],
+        check=not cfg.overwrite,
+        complete=lambda: is_complete(output_path, cfg, operator=op),
+        answer=lambda: _from_file(cfg, output_path, reduction),
+        integrate=integrate,
+    )
 
-def _from_file(cfg: JungfrauWaxsConfig, path: Path, reduce: str) -> Any:
+
+def _from_file(
+    cfg: JungfrauWaxsConfig, path: Path, reduction: Callable[[Any], Any] | None
+) -> Any:
     """Answer a complete file exactly as the pass would have, read-only.
 
     The pinned lit-cell set and the blocking statuses are checked on the same
@@ -186,7 +185,7 @@ def _from_file(cfg: JungfrauWaxsConfig, path: Path, reduce: str) -> Any:
         summary = status_counts(handle["frames/status"][:], nonzero_only=True)
         lit = tuple(int(cell) for cell in handle["cells/lit"][:])
         data_check = json.loads(handle["provenance"].attrs.get("data_check", "{}"))
-        reduced = per_cell(handle) if reduce == "per_cell" else None
+        reduced = reduction(handle) if reduction else None
     if cfg.expected_lit_cells is not None and lit != tuple(cfg.expected_lit_cells):
         raise UnexpectedLitCells(
             f"{path} holds cells {list(lit)}, the config expects "
@@ -222,18 +221,16 @@ def _integrate(
     run_dir: Path | None,
     output_path: Path,
     pool_factory: Callable[..., Any] | None,
-    reduce: str,
+    reduction: Callable[[Any], Any] | None,
     setup: dict[str, float],
     started_at: float,
     started: float,
     lock: OutputLock,
 ) -> Any:
     """The pass itself, run under the lock :func:`run_jungfrau_waxs` holds."""
-    opened_here = dc is None
-    if opened_here:
-        from extra_data import open_run
-
-        dc = open_run(cfg.proposal, cfg.run, data="proc")
+    control = dc
+    if dc is None:
+        dc, control = open_proc(cfg)
 
     with phase(setup, "detector"):
         det = open_detector(cfg, dc)
@@ -251,7 +248,7 @@ def _integrate(
             cfg,
             classification.lit,
             dc=dc,
-            control_dc=None if opened_here else dc,
+            control_dc=control,
             det=det,
         )
     with phase(setup, "selftest"):
@@ -335,7 +332,7 @@ def _integrate(
         summary = out.status_summary()
         data_check = out.data_check_summary()
         blocking = _blocking(cfg, summary)
-        reduced = out.per_cell() if reduce == "per_cell" else None
+        reduced = reduction(out.handle) if reduction else None
 
     if data_check:
         # Logged whether or not it raises, because a tolerated loss of pixels
@@ -374,18 +371,21 @@ def _sample_trains(cfg: JungfrauWaxsConfig, det: Any) -> np.ndarray:
 def _classify_cells(
     cfg: JungfrauWaxsConfig, op: WaxsOperator, det: Any
 ) -> tuple[CellClassification, np.ndarray]:
-    """Measure the lit/dark split and the readout noise over sampled trains."""
-    from extra_data import by_id
+    """Measure the lit/dark split and the readout noise over sampled trains.
 
-    sampled = _sample_trains(cfg, det)
+    :returns: the classification and the sampled trains it read. A train whose
+        entry :func:`read_train` refuses is left out of both.
+    """
     accumulator = CellAccumulator(cfg, op.static_bad)
-    for train_id in sampled.tolist():
-        selected = det.select_trains(by_id[[train_id]])
-        data = np.asarray(selected["data.adc"].ndarray())[0, 0]
-        mask = np.asarray(selected["data.mask"].ndarray())[0, 0]
-        cells = np.asarray(selected["data.memoryCell"].ndarray()).reshape(-1)
-        accumulator.update(data, mask, cells)
-    return accumulator.finalise(), sampled
+    used = []
+    for train_id in _sample_trains(cfg, det).tolist():
+        train = read_train(det, train_id)
+        if train is None:
+            log.warning("train %d: its labels disagree, not sampled", train_id)
+            continue
+        accumulator.update(train.data, train.mask, train.cells)
+        used.append(train_id)
+    return accumulator.finalise(), np.asarray(used, dtype=np.uint64)
 
 
 def _error_model(
@@ -443,8 +443,6 @@ def _run_selftest(
     plan: Any,
 ) -> Any:
     """Gate the NaN path against the per-frame-mask reference on real frames."""
-    from extra_data import by_id
-
     ok_trains = plan.ok_train_ids()
     if ok_trains.size == 0:
         raise ValueError("no OK trains to self-test on")
@@ -453,16 +451,16 @@ def _run_selftest(
     bits = np.uint32(cfg.mask_bits)
     frames: list[tuple[np.ndarray, np.ndarray]] = []
     for train_id in chosen.tolist():
-        selected = det.select_trains(by_id[[int(train_id)]])
-        data = np.asarray(selected["data.adc"].ndarray())[0, 0]
-        mask = np.asarray(selected["data.mask"].ndarray())[0, 0]
-        cells = np.asarray(selected["data.memoryCell"].ndarray()).reshape(-1)
-        positions = {int(c): i for i, c in enumerate(cells.tolist())}
+        train = read_train(det, int(train_id))
+        if train is None:
+            continue
         for cell in classification.lit:
-            if cell not in positions:
+            if cell not in train.positions:
                 continue
-            position = positions[cell]
-            frames.append((data[position], (mask[position].reshape(-1) & bits) != 0))
+            position = train.positions[cell]
+            frames.append(
+                (train.data[position], (train.mask[position].reshape(-1) & bits) != 0)
+            )
             if len(frames) >= cfg.selftest_frames:
                 break
         if len(frames) >= cfg.selftest_frames:

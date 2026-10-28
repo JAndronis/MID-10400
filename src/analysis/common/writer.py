@@ -20,9 +20,9 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import contextmanager
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
@@ -36,6 +36,7 @@ from analysis.common.status import UNFINISHED, FrameStatus
 __all__ = [
     "GATING_PACKAGES",
     "ConfigHashMismatch",
+    "FrameRows",
     "FrameTableWriter",
     "IncompleteRun",
     "OperatorMismatch",
@@ -138,24 +139,51 @@ def config_payload(cfg: Any) -> dict[str, Any]:
     return payload
 
 
+@dataclass(slots=True)
+class FrameRows:
+    """One block's rows of a frame table, keyed by the file's dataset names.
+
+    A worker fills it and the parent's writer stores it. The ``trainId``
+    column holds the labels the worker read; the writer checks them against
+    the plan and stores the plan's.
+    """
+
+    columns: dict[str, np.ndarray]
+    bits_present: int = 0
+    timings: dict[str, float] = field(default_factory=dict)
+
+    @property
+    def n_frames(self) -> int:
+        return int(self.columns["status"].size)
+
+    @property
+    def status(self) -> np.ndarray:
+        return self.columns["status"]
+
+    def __getitem__(self, name: str) -> np.ndarray:
+        return self.columns[name]
+
+    def put(self, row: int | slice, values: Mapping[str, Any]) -> None:
+        """Store ``values`` into ``row`` of the named columns."""
+        for name, value in values.items():
+            self.columns[name][row] = value
+
+
 class FrameTableWriter:
     """The single writer for one run's output file.
 
     Subclasses declare the schema and add whatever ``store_*`` methods their
-    pass needs for its operator and masks.
+    pass needs for its operator and masks. The schema is the only copy:
+    :meth:`empty_rows` allocates a worker's rows from it.
     """
 
     #: Per-frame ``(n,)`` columns, dataset name to dtype. ``trainId`` is
     #: required: it is the label every row is addressed by.
     FRAME_VECTORS: dict[str, Any] = {}
-    #: Where each ``FRAME_VECTORS`` column comes from on a block result. Every
-    #: column except ``trainId`` needs an entry; ``trainId`` is filled from the
-    #: plan, not from the worker, which is what makes the label check bite.
-    FRAME_VECTOR_SOURCES: dict[str, str] = {}
-    #: The ``(n, npt)`` sufficient statistics, read off the result by name.
+    #: The ``(n, npt)`` float32 sufficient statistics.
     FRAME_MATRICES: tuple[str, ...] = ("signal", "normalization", "variance")
-    #: Per-frame ``(n, k)`` columns, dataset name to ``(k, dtype)``, read off the
-    #: result by name. Zero-filled for frames never written, like every column.
+    #: Per-frame ``(n, k)`` columns, dataset name to ``(k, dtype)``.
+    #: Zero-filled for frames never written, like every column.
     FRAME_ARRAYS: dict[str, tuple[int, Any]] = {}
     #: Groups created empty at layout time for the pass to fill later.
     EXTRA_GROUPS: tuple[str, ...] = ()
@@ -166,22 +194,26 @@ class FrameTableWriter:
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
-        if not cls.FRAME_VECTORS:
-            return
-        if "trainId" not in cls.FRAME_VECTORS:
+        if cls.FRAME_VECTORS and "trainId" not in cls.FRAME_VECTORS:
             raise TypeError(f"{cls.__name__}.FRAME_VECTORS has no 'trainId' column")
-        missing = set(cls.FRAME_VECTORS) - set(cls.FRAME_VECTOR_SOURCES) - {"trainId"}
-        if missing:
-            raise TypeError(
-                f"{cls.__name__} declares columns with no source on the block "
-                f"result: {sorted(missing)}"
-            )
-        unknown = set(cls.FRAME_VECTOR_SOURCES) - set(cls.FRAME_VECTORS)
-        if unknown:
-            raise TypeError(
-                f"{cls.__name__} maps sources for columns it does not create: "
-                f"{sorted(unknown)}"
-            )
+
+    @classmethod
+    def columns(cls) -> tuple[str, ...]:
+        """Every per-frame dataset this writer stores."""
+        return (*cls.FRAME_VECTORS, *cls.FRAME_MATRICES, *cls.FRAME_ARRAYS)
+
+    @classmethod
+    def empty_rows(cls, n: int, npt: int) -> FrameRows:
+        """``n`` rows of zeros in this schema, every one ``NOT_PROCESSED``."""
+        columns = {
+            name: np.zeros(n, dtype=dtype) for name, dtype in cls.FRAME_VECTORS.items()
+        }
+        columns["status"] = np.full(n, FrameStatus.NOT_PROCESSED, dtype=np.uint8)
+        for name in cls.FRAME_MATRICES:
+            columns[name] = np.zeros((n, npt), dtype=np.float32)
+        for name, (width, dtype) in cls.FRAME_ARRAYS.items():
+            columns[name] = np.zeros((n, width), dtype=dtype)
+        return FrameRows(columns)
 
     def __init__(self, handle: h5py.File, cfg: PassConfig, plan: RunPlan) -> None:
         self._f = handle
@@ -279,7 +311,7 @@ class FrameTableWriter:
     def _missing_columns(cls, handle: h5py.File) -> list[str]:
         """Frame-table datasets this writer stores that ``handle`` does not have."""
         frames = handle.get("frames")
-        wanted = (*cls.FRAME_VECTORS, *cls.FRAME_MATRICES, *cls.FRAME_ARRAYS)
+        wanted = cls.columns()
         if frames is None:
             return sorted(wanted)
         return sorted(name for name in wanted if name not in frames)
@@ -361,6 +393,11 @@ class FrameTableWriter:
             handle.create_group(name)
         handle.flush()
 
+    @property
+    def handle(self) -> h5py.File:
+        """The open file, for a reducer to read the rows written so far."""
+        return self._f
+
     def close(self) -> None:
         self._f.close()
 
@@ -383,7 +420,7 @@ class FrameTableWriter:
         status = self._f["frames/status"][rows[0] : rows[-1] + 1]
         return not bool(np.isin(status, [int(code) for code in UNFINISHED]).any())
 
-    def write_block(self, block: Block, result: Any) -> None:
+    def write_block(self, block: Block, result: FrameRows) -> None:
         """Validate the block's labels, then store its rows.
 
         :raises ValueError: the result's shape does not match the block, which
@@ -410,7 +447,7 @@ class FrameTableWriter:
             if rows.size
             else np.zeros(0, dtype=np.uint64)
         )
-        mislabelled = integrated & (result.train_id != expected_trains)
+        mislabelled = integrated & (result["trainId"] != expected_trains)
         if mislabelled.any():
             log.error(
                 "block %d: %d frames carry a trainId the plan does not expect",
@@ -422,12 +459,9 @@ class FrameTableWriter:
         start, stop = int(rows[0]), int(rows[-1]) + 1
         frames = self._f["frames"]
         frames["trainId"][start:stop] = expected_trains
-        for name, attribute in self.FRAME_VECTOR_SOURCES.items():
-            frames[name][start:stop] = getattr(result, attribute)
-        for name in self.FRAME_MATRICES:
-            frames[name][start:stop] = getattr(result, name)
-        for name in self.FRAME_ARRAYS:
-            frames[name][start:stop] = getattr(result, name)
+        for name in self.columns():
+            if name != "trainId":
+                frames[name][start:stop] = result[name]
         self._resolve_block_error(block)
         self._f.flush()
 
@@ -492,13 +526,6 @@ class FrameTableWriter:
             for code in FrameStatus
             if (status == code).any()
         }
-
-    def any_not_ok(self) -> bool:
-        return bool((self._f["frames/status"][:] != FrameStatus.OK).any())
-
-    def pooled_per_train(self) -> Any:
-        """Per-train pooled ``I(q)``, as :func:`pooled_per_train` computes it."""
-        return pooled_per_train(self._f)
 
 
 def version_changes(stored: str | None) -> list[str]:

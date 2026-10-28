@@ -64,19 +64,6 @@ class JungfrauWaxsWriter(FrameTableWriter):
         "n_level_missing": np.uint8,
         "count_energy_kev": np.float32,
     }
-    FRAME_VECTOR_SOURCES = {
-        "cellId": "cell_id",
-        "status": "status",
-        "energy_valid": "energy_valid",
-        "n_photons": "n_photons",
-        "n_bad_pixels": "n_bad_pixels",
-        "n_negative_variance_bins": "n_negative_variance_bins",
-        "max_kev": "max_kev",
-        "max_kev_static": "max_kev_static",
-        "n_extreme_pixels": "n_extreme_pixels",
-        "n_level_missing": "n_level_missing",
-        "count_energy_kev": "count_energy_kev",
-    }
     #: The zero level of each ASIC in keV, as counted with. NaN for an ASIC that
     #: had none in an integrated frame, because 0.0 is a valid measured level.
     #: 0 in rows never integrated.
@@ -207,10 +194,6 @@ class JungfrauWaxsWriter(FrameTableWriter):
                 "an affected bin quantitatively"
             ),
         }
-
-    def per_cell(self) -> Any:
-        """Per-frame ``I(q)`` on a (train, cell) grid (:func:`per_cell`)."""
-        return per_cell(self._f)
 
 
 def per_cell(source: Any, *, dtype: Any = np.float32) -> Any:

@@ -67,9 +67,9 @@ def test_rows_are_written_by_label_in_any_order(cfg, order):
 def test_a_frame_whose_label_disagrees_with_the_plan_is_never_stored_as_ok(cfg):
     block = PLAN.blocks[1]  # rows 3..7: trains 10002 and 10003
     result = result_for(block)
-    result.train_id[1] = 10003  # row 4 claims the next train
+    result["trainId"][1] = 10003  # row 4 claims the next train
     result.status[2] = FrameStatus.DATA_CHECK_FAILED
-    result.train_id[2] = 99  # a failed frame carries no trustworthy label
+    result["trainId"][2] = 99  # a failed frame carries no trustworthy label
 
     with open_writer(cfg) as out:
         out.write_block(block, result)
@@ -90,7 +90,7 @@ def test_a_frame_whose_label_disagrees_with_the_plan_is_never_stored_as_ok(cfg):
 def test_a_result_of_the_wrong_length_is_refused_and_nothing_is_written(cfg):
     block = PLAN.blocks[1]
     short = result_for(block)
-    short.n_frames -= 1
+    short.columns = {name: column[:-1] for name, column in short.columns.items()}
     with open_writer(cfg) as out, pytest.raises(ValueError):
         out.write_block(block, short)
     assert (status_column(cfg) == FrameStatus.NOT_PROCESSED).all()
@@ -197,7 +197,7 @@ def test_pooling_sums_the_ok_frames_of_each_train(cfg):
         )
         out.write_block(middle, result_for(middle))
         variance = result_for(last)
-        variance.variance[0, 2] = -1.0  # an unbiased estimate can dip below zero
+        variance["variance"][0, 2] = -1.0  # an unbiased estimate can dip below zero
         out.write_block(last, variance)
 
     pooled = pooled_per_train(cfg.output_file)

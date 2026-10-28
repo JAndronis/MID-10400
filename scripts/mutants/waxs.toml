@@ -6,7 +6,7 @@
 [[mutant]]
 name = "waxs_position_is_cell_id"
 file = "src/analysis/waxs/worker.py"
-old = "            position = positions[cell]"
+old = "            position = train.positions[cell]"
 new = "            position = cell"
 tests = [
     "tests/waxs/test_waxs_run.py::test_each_row_holds_the_frame_its_memory_cell_labels",
@@ -44,8 +44,8 @@ tests = ["tests/waxs/test_waxs_damnit.py::test_a_refused_frame_is_tolerated_ever
 [[mutant]]
 name = "waxs_dead_frame_stored_as_ok"
 file = "src/analysis/waxs/worker.py"
-old = "                result.status[row] = FrameStatus.DATA_CHECK_FAILED"
-new = "                result.status[row] = FrameStatus.OK"
+old = '"status": FrameStatus.DATA_CHECK_FAILED,'
+new = '"status": FrameStatus.OK,'
 tests = ["tests/waxs/test_waxs_run.py::test_a_fully_masked_frame_is_refused_counted_and_tolerated"]
 
 [[mutant]]
@@ -195,10 +195,24 @@ tests = ["tests/waxs/test_waxs_photons.py"]
 
 [[mutant]]
 name = "waxs_train_label_from_index"
-file = "src/analysis/waxs/worker.py"
-old = "            or int(row_labels[0]) != train_id"
-new = "            or int(adc_key.train_id_coordinates()[0]) != train_id"
+file = "src/analysis/waxs/plan.py"
+old = "        or int(row_labels[0]) != train_id"
+new = "        or int(adc_key.train_id_coordinates()[0]) != train_id"
 tests = ["tests/waxs/test_waxs_run.py::test_a_train_whose_own_rows_name_another_train_is_a_label_mismatch"]
+
+[[mutant]]
+name = "waxs_selftest_reads_a_misfiled_train"
+file = "src/analysis/waxs/plan.py"
+old = "        or int(row_labels[0]) != train_id"
+new = "        or int(adc_key.train_id_coordinates()[0]) != train_id"
+tests = ["tests/waxs/test_waxs_run.py::test_the_selftest_gates_on_no_train_whose_own_rows_name_another"]
+
+[[mutant]]
+name = "waxs_cell_sample_counts_a_misfiled_train"
+file = "src/analysis/waxs/run.py"
+old = """            log.warning("train %d: its labels disagree, not sampled", train_id)\n"""
+new = """            used.append(train_id)\n"""
+tests = ["tests/waxs/test_waxs_run.py::test_the_cell_classification_reads_no_train_whose_own_rows_name_another"]
 
 [[mutant]]
 name = "waxs_zero_entry_train_given_rows"
@@ -234,3 +248,10 @@ file = "src/analysis/waxs/combine.py"
 old = "        error = np.sqrt((sigma[present] ** 2).sum(axis=0)) / count"
 new = "        error = np.sqrt((sigma[present] ** 2).sum(axis=0)) / np.sqrt(count)"
 tests = ["tests/waxs/test_waxs_combine.py"]
+
+[[mutant]]
+name = "waxs_run_checks_read_proc"
+file = "src/analysis/waxs/run.py"
+old = "            control_dc=control,\n"
+new = "            control_dc=dc,\n"
+tests = ["tests/waxs/test_waxs_run.py::test_a_pass_that_opens_the_run_reads_its_run_checks_from_raw"]

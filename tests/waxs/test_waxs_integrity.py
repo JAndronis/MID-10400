@@ -20,6 +20,7 @@ import xarray as xr  # noqa: E402
 from waxs_harness import FailingPool, run  # noqa: E402
 
 from analysis.common import lock as lock_module  # noqa: E402
+from analysis.common import run as common_run  # noqa: E402
 from analysis.common.lock import OutputBusy, lock_path  # noqa: E402
 from analysis.common.status import FrameStatus  # noqa: E402
 from analysis.common.writer import IncompleteRun, OperatorMismatch  # noqa: E402
@@ -41,7 +42,7 @@ def forbid_writing(monkeypatch):
     def forbidden(*args, **kwargs):
         raise AssertionError("a complete run must write nothing")
 
-    monkeypatch.setattr(run_module, "output_lock", forbidden)
+    monkeypatch.setattr(common_run, "output_lock", forbidden)
     monkeypatch.setattr(run_module, "open_detector", forbidden)
     monkeypatch.setattr(JungfrauWaxsWriter, "open_or_create", forbidden)
     monkeypatch.setattr(worker, "process_block", forbidden)

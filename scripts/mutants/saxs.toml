@@ -45,16 +45,16 @@ tests = ["tests/saxs/test_sparse.py", "tests/saxs/test_selftest.py"]
 
 [[mutant]]
 name = "saxs_omega_compared_with_and"
-file = "src/analysis/saxs/complete.py"
-old = "if omega.shape != op.omega.shape or not np.allclose("
-new = "if omega.shape != op.omega.shape and not np.allclose("
+file = "src/analysis/common/complete.py"
+old = "if stored.shape != built.shape or not np.allclose("
+new = "if stored.shape != built.shape and not np.allclose("
 tests = ["tests/saxs/test_integrity.py"]
 
 [[mutant]]
 name = "saxs_photon_stats_file_unlocked"
 file = "src/analysis/saxs/run.py"
-old = "        guarded.append(photon_stats_path)\n"
-new = "        pass\n"
+old = "        [product.path for product in products],\n"
+new = "        [product.path for product in products if product.key != 'photon_stats'],\n"
 tests = ["tests/saxs/test_integrity.py::test_a_live_writer_s_lock_refuses_the_run_before_anything_is_written"]
 
 [[mutant]]
@@ -73,29 +73,29 @@ tests = ["tests/saxs/test_run.py"]
 
 [[mutant]]
 name = "saxs_from_file_ignores_photon_failures"
-file = "src/analysis/saxs/run.py"
-old = "        incomplete |= any(name != FrameStatus.OK.name for name in photon)\n"
-new = "\n"
+file = "src/analysis/saxs/products.py"
+old = "        return photon_stats_reasons(self.path, self.photon_cfg, self.labels)\n"
+new = "        return photon_stats_reasons(self.path, self.photon_cfg, self.labels)\n\n    def failures(self, counts):\n        return {}\n"
 tests = ["tests/saxs/test_integrity.py", "tests/saxs/test_photon_stats.py", "tests/saxs/test_damnit.py"]
 
 [[mutant]]
 name = "saxs_from_file_ignores_failed_sum_trains"
-file = "src/analysis/saxs/run.py"
-old = "        incomplete |= bool(np.isin(trains, [int(code) for code in FAILED]).any())\n"
-new = "\n"
+file = "src/analysis/saxs/products.py"
+old = 'failed = {code.name for code in FAILED} | {"unreadable"}'
+new = 'failed = {"unreadable"}'
 tests = ["tests/saxs/test_integrity.py", "tests/saxs/test_pixel_sums.py", "tests/saxs/test_damnit.py"]
 
 [[mutant]]
 name = "saxs_window_sums_need_not_cover_the_frame_table"
-file = "src/analysis/saxs/complete.py"
-old = "            if frame_train_ids is not None and not np.array_equal("
-new = "            if False and not np.array_equal("
+file = "src/analysis/saxs/products.py"
+old = "                if frame_train_ids is not None and not np.array_equal("
+new = "                if False and not np.array_equal("
 tests = ["tests/saxs/test_integrity.py", "tests/saxs/test_photon_stats.py", "tests/saxs/test_pixel_sums.py"]
 
 [[mutant]]
 name = "saxs_fused_histograms_non_count_frames"
 file = "src/analysis/saxs/worker.py"
-old = "                    if photon is not None:\n                        photon.status[row] = FrameStatus.DATA_CHECK_FAILED\n"
-new = "                    if photon is not None:\n                        histogram_frame(photon, row, counts, bad, spec.labels, *state.rings, spec.k_max)\n"
+old = "                for table in tables:\n                    table.status[row] = status\n                timings[frame_stage] += time.perf_counter() - started\n                continue\n"
+new = "                for table in tables[:1]:\n                    table.status[row] = status\n"
 tests = ["tests/saxs/test_photon_stats.py"]
 expect = "killed"

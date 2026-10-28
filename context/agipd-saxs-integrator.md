@@ -110,7 +110,7 @@ Modules under `src/<pkg>/saxs/`:
 |---|---|
 | `config.py` | Frozen config dataclass and hash |
 | `plan.py` | Trains, frame counts, rows, blocks, run checks |
-| `operator.py` | Sparse operator build/save/load |
+| `operator.py` | Sparse operator build/save/load; the stored-operator comparison (`operator_differences`, `expected_operator`) |
 | `masks.py` | Static and per-cell base masks, denominators |
 | `sparse.py` | Gather + bincount kernels; the pure per-frame integration (§6.4) |
 | `worker.py` | Per-block read and frame loop; calls `sparse.integrate_frame` |
@@ -118,7 +118,9 @@ Modules under `src/<pkg>/saxs/`:
 | `selftest.py` | Sparse vs pyFAI gate |
 | `status.py` | Frame status codes (§8) and the data-check exception |
 | `pixel_sums.py` | Per-pixel window sums: window spec, per-train kernel, writer, reader (§15) |
-| `run.py` | Orchestration |
+| `products.py` | The three output files as `Product`s: path, completeness reasons, failing codes, blocks to do, writing and provenance (§15) |
+| `complete.py` | `is_complete`: the products' reasons, one loop |
+| `run.py` | Orchestration: one loop over the products, inside `analysis.common.run.guarded_pass` |
 | `cli.py` | Standalone entry point |
 
 The reader layer (`plan.py`, reads in `worker.py`) must not import DAMNIT, so it can back a
@@ -717,7 +719,7 @@ properties of the data and stay final. Writing a window updates only its own row
 | Call | Does |
 |---|---|
 | `run_agipd_saxs(cfg)` | the pass; writes the window sums too unless `pixel_sum_trains is None` |
-| `run_pixel_sums(cfg)` | sums only: plan, read, sum. Never opens `agipd_saxs.h5` and builds no operator, masks or self-test, so it is independent of that file's hash. For backfilling runs whose 1D file exists |
+| `run_pixel_sums(cfg)` | the same pass with the window-sums product alone: plan, read, sum. Never opens `agipd_saxs.h5` and builds no operator, masks or self-test, so it is independent of that file's hash. For backfilling runs whose 1D file exists |
 | `pixel_sums.window_table(path)` | one row per window: range start, trains, frames, written |
 | `pixel_sums.window_sums(path, windows)` | the sum over those windows |
 | `pixel_sums.detector_sums(run, train_ids=None, *, windows=None)` | the same Dataset `analysis.cache.detector_sums` returns. `train_ids` must be exactly a union of whole windows; otherwise it raises and names the windows that cover them, rather than summing more trains than asked |

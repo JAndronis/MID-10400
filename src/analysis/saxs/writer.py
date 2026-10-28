@@ -42,15 +42,6 @@ class AgipdSaxsWriter(FrameTableWriter):
         "n_frame_specific": np.uint32,
         "max_count": np.uint16,
     }
-    FRAME_VECTOR_SOURCES = {
-        "reader_pulseId": "pulse_id",
-        "cellId": "cell_id",
-        "status": "status",
-        "photons_valid": "photons_valid",
-        "n_bad_pixels": "n_bad_pixels",
-        "n_frame_specific": "n_frame_specific",
-        "max_count": "max_count",
-    }
     EXTRA_GROUPS = ("masks", "operator")
 
     # ── finishing ────────────────────────────────────────────────────────────
@@ -88,10 +79,6 @@ class AgipdSaxsWriter(FrameTableWriter):
         group.attrs["operator_sha256"] = masks.operator_sha256
         group.attrs["bits_present"] = int(masks.bits_present)
         group.attrs["unexpected_bits"] = int(masks.unexpected_bits)
-
-    def per_pulse(self) -> Any:
-        """Per-frame ``I(q)`` on a (train, pulse) grid, as :func:`per_pulse`."""
-        return per_pulse(self._f)
 
 
 def per_pulse(source: Any, *, dtype: Any = np.float32, chunk_rows: int = 20_000) -> Any:
