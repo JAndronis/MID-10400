@@ -39,7 +39,13 @@ from analysis.common.cpu import file_sha256, package_versions, phase, set_thread
 from analysis.common.lock import OutputLock, lock_path, output_lock
 from analysis.common.masks import frame_bad
 from analysis.common.plan import Block, RunPlan, evenly_spaced
-from analysis.common.run import FanOutTotals, base_provenance, fan_out
+from analysis.common.run import (
+    FanOutTotals,
+    base_provenance,
+    fan_out,
+    guarded_pass,
+    reducer,
+)
 from analysis.common.status import FrameStatus
 from analysis.common.writer import IncompleteRun, pooled_per_train, status_counts
 from analysis.saxs import masks as masks_module
@@ -72,11 +78,11 @@ __all__ = [
     "run_pixel_sums",
 ]
 
-#: What ``run_agipd_saxs`` may return. ``pooled`` is the pooled per-train I(q);
-#: ``per_pulse`` is the (trainId, pulseId, q) grid, which is what the DAMNIT
-#: variable stores; ``none`` skips the reduction for a caller that only wants
-#: the file written.
-REDUCERS = ("pooled", "per_pulse", "none")
+#: What ``run_agipd_saxs`` may return, read from the frame table. ``pooled``
+#: is the pooled per-train I(q); ``per_pulse`` is the (trainId, pulseId, q)
+#: grid, which is what the DAMNIT variable stores; ``none`` skips the reduction
+#: for a caller that only wants the files written.
+REDUCERS = {"pooled": pooled_per_train, "per_pulse": per_pulse, "none": None}
 
 log = logging.getLogger(__name__)
 
@@ -134,10 +140,7 @@ def run_agipd_saxs(
     :raises analysis.common.writer.OperatorMismatch: the frame table was
         integrated by another operator or pyFAI, so it cannot be resumed.
     """
-    # Checked before any work, so a typo costs nothing rather than surfacing
-    # after the whole run has been integrated.
-    if reduce not in REDUCERS:
-        raise ValueError(f"reduce must be one of {REDUCERS}, got {reduce!r}")
+    reduction = reducer(REDUCERS, reduce)
 
     # Before any pool exists, so spawned children inherit it.
     set_thread_env()
@@ -187,22 +190,7 @@ def run_agipd_saxs(
             ring_labels=labels,
         )
 
-    # Skipped while a lock exists, since the file may be mid-write; the check
-    # under the lock below then decides.
-    if not cfg.overwrite and not any(lock_path(p).exists() for p in guarded):
-        if complete():
-            return _from_file(
-                cfg, output_path, pixel_sums_path, reduce, photon_stats_path
-            )
-    with ExitStack() as held:
-        locks = {p: held.enter_context(output_lock(p)) for p in guarded}
-        if not cfg.overwrite:
-            verdict = complete()
-            if verdict:
-                return _from_file(
-                    cfg, output_path, pixel_sums_path, reduce, photon_stats_path
-                )
-            log.info("%s", verdict)
+    def integrate(locks: dict[Path, OutputLock]) -> Any:
         # Before the plan, the masks and the self-test, so a file that can only
         # be reprocessed is refused in a second rather than after a minute.
         AgipdSaxsWriter.check_resumable(
@@ -215,7 +203,7 @@ def run_agipd_saxs(
             output_path=output_path,
             work_dir=work_dir,
             pool_factory=pool_factory,
-            reduce=reduce,
+            reduction=reduction,
             pixel_sums_path=Path(pixel_sums_path),
             photon_stats_path=photon_stats_path,
             op=op,
@@ -227,12 +215,22 @@ def run_agipd_saxs(
             locks=locks,
         )
 
+    return guarded_pass(
+        guarded,
+        check=not cfg.overwrite,
+        complete=complete,
+        answer=lambda: _from_file(
+            cfg, output_path, pixel_sums_path, reduction, photon_stats_path
+        ),
+        integrate=integrate,
+    )
+
 
 def _from_file(
     cfg: AgipdSaxsConfig,
     output_path: Path,
     pixel_sums_path: Path,
-    reduce: str,
+    reduction: Callable[[Any], Any] | None,
     photon_stats_path: Path | None = None,
 ) -> Any:
     """Answer a complete run from its files, exactly as the pass would have.
@@ -246,11 +244,7 @@ def _from_file(
             handle["frames/status"][:], nonzero_only=True
         )
         incomplete = any(name != FrameStatus.OK.name for name in summary)
-        reduced = None
-        if reduce == "pooled":
-            reduced = pooled_per_train(handle)
-        elif reduce == "per_pulse":
-            reduced = per_pulse(handle)
+        reduced = reduction(handle) if reduction else None
     if cfg.pixel_sum_trains is not None:
         with h5py.File(pixel_sums_path, "r") as handle:
             trains = handle["trains/status"][:]
@@ -284,7 +278,7 @@ def _integrate(
     output_path: Path,
     work_dir: Path,
     pool_factory: Callable[..., Any] | None,
-    reduce: str,
+    reduction: Callable[[Any], Any] | None,
     pixel_sums_path: Path,
     photon_stats_path: Path,
     op: Any,
@@ -470,7 +464,7 @@ def _integrate(
             )
 
     # Every product read back as it now stands, written by this pass or not.
-    return _from_file(cfg, output_path, pixel_sums_path, reduce, photon_stats_path)
+    return _from_file(cfg, output_path, pixel_sums_path, reduction, photon_stats_path)
 
 
 def run_pixel_sums(

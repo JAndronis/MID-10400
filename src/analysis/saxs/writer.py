@@ -80,10 +80,6 @@ class AgipdSaxsWriter(FrameTableWriter):
         group.attrs["bits_present"] = int(masks.bits_present)
         group.attrs["unexpected_bits"] = int(masks.unexpected_bits)
 
-    def per_pulse(self) -> Any:
-        """Per-frame ``I(q)`` on a (train, pulse) grid, as :func:`per_pulse`."""
-        return per_pulse(self._f)
-
 
 def per_pulse(source: Any, *, dtype: Any = np.float32, chunk_rows: int = 20_000) -> Any:
     """Per-frame ``I(q)`` as a ``(trainId, pulseId, q)`` DataArray.

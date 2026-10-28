@@ -195,10 +195,6 @@ class JungfrauWaxsWriter(FrameTableWriter):
             ),
         }
 
-    def per_cell(self) -> Any:
-        """Per-frame ``I(q)`` on a (train, cell) grid (:func:`per_cell`)."""
-        return per_cell(self._f)
-
 
 def per_cell(source: Any, *, dtype: Any = np.float32) -> Any:
     """Per-frame ``I(q)`` as a ``(trainId, cellId, q)`` DataArray.

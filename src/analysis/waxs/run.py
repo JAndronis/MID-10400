@@ -30,9 +30,9 @@ from analysis.common.cpu import (
     phase,
     set_thread_env,
 )
-from analysis.common.lock import OutputLock, lock_path, output_lock
+from analysis.common.lock import OutputLock
 from analysis.common.plan import evenly_spaced
-from analysis.common.run import base_provenance, fan_out
+from analysis.common.run import base_provenance, fan_out, guarded_pass, reducer
 from analysis.common.writer import IncompleteRun, status_counts
 from analysis.waxs import worker as worker_module
 from analysis.waxs.cells import (
@@ -51,10 +51,10 @@ from analysis.waxs.writer import JungfrauWaxsWriter, per_cell
 
 __all__ = ["REDUCERS", "run_jungfrau_waxs"]
 
-#: What ``run_jungfrau_waxs`` may return. ``per_cell`` is the (trainId, cellId,
-#: q) grid the DAMNIT variable stores; ``none`` skips the reduction for a caller
-#: that only wants the file written.
-REDUCERS = ("per_cell", "none")
+#: What ``run_jungfrau_waxs`` may return, read from the file. ``per_cell`` is
+#: the (trainId, cellId, q) grid the DAMNIT variable stores; ``none`` skips the
+#: reduction for a caller that only wants the file written.
+REDUCERS = {"per_cell": per_cell, "none": None}
 
 log = logging.getLogger(__name__)
 
@@ -128,8 +128,7 @@ def run_jungfrau_waxs(
     is answered from with nothing written, unless ``cfg.overwrite``. It raises
     on the same terms as a full pass.
     """
-    if reduce not in REDUCERS:
-        raise ValueError(f"reduce must be one of {REDUCERS}, got {reduce!r}")
+    reduction = reducer(REDUCERS, reduce)
 
     # Before any pool exists, so spawned children inherit it.
     set_thread_env()
@@ -143,17 +142,7 @@ def run_jungfrau_waxs(
     with phase(setup, "operator"):
         op, ai = build_operator(cfg, poni_file)
 
-    # Skipped while a lock exists, since the file may be mid-write; the check
-    # under the lock below then decides.
-    if not cfg.overwrite and not lock_path(output_path).exists():
-        if is_complete(output_path, cfg, operator=op):
-            return _from_file(cfg, output_path, reduce)
-    with output_lock(output_path) as lock:
-        if not cfg.overwrite:
-            verdict = is_complete(output_path, cfg, operator=op)
-            if verdict:
-                return _from_file(cfg, output_path, reduce)
-            log.info("%s", verdict)
+    def integrate(locks: dict[Path, OutputLock]) -> Any:
         # Before the cells and the self-test, so a file that can only be
         # reprocessed is refused at once.
         JungfrauWaxsWriter.check_resumable(
@@ -167,15 +156,25 @@ def run_jungfrau_waxs(
             run_dir=run_dir,
             output_path=output_path,
             pool_factory=pool_factory,
-            reduce=reduce,
+            reduction=reduction,
             setup=setup,
             started_at=started_at,
             started=started,
-            lock=lock,
+            lock=locks[output_path],
         )
 
+    return guarded_pass(
+        [output_path],
+        check=not cfg.overwrite,
+        complete=lambda: is_complete(output_path, cfg, operator=op),
+        answer=lambda: _from_file(cfg, output_path, reduction),
+        integrate=integrate,
+    )
 
-def _from_file(cfg: JungfrauWaxsConfig, path: Path, reduce: str) -> Any:
+
+def _from_file(
+    cfg: JungfrauWaxsConfig, path: Path, reduction: Callable[[Any], Any] | None
+) -> Any:
     """Answer a complete file exactly as the pass would have, read-only.
 
     The pinned lit-cell set and the blocking statuses are checked on the same
@@ -186,7 +185,7 @@ def _from_file(cfg: JungfrauWaxsConfig, path: Path, reduce: str) -> Any:
         summary = status_counts(handle["frames/status"][:], nonzero_only=True)
         lit = tuple(int(cell) for cell in handle["cells/lit"][:])
         data_check = json.loads(handle["provenance"].attrs.get("data_check", "{}"))
-        reduced = per_cell(handle) if reduce == "per_cell" else None
+        reduced = reduction(handle) if reduction else None
     if cfg.expected_lit_cells is not None and lit != tuple(cfg.expected_lit_cells):
         raise UnexpectedLitCells(
             f"{path} holds cells {list(lit)}, the config expects "
@@ -222,7 +221,7 @@ def _integrate(
     run_dir: Path | None,
     output_path: Path,
     pool_factory: Callable[..., Any] | None,
-    reduce: str,
+    reduction: Callable[[Any], Any] | None,
     setup: dict[str, float],
     started_at: float,
     started: float,
@@ -335,7 +334,7 @@ def _integrate(
         summary = out.status_summary()
         data_check = out.data_check_summary()
         blocking = _blocking(cfg, summary)
-        reduced = out.per_cell() if reduce == "per_cell" else None
+        reduced = reduction(out.handle) if reduction else None
 
     if data_check:
         # Logged whether or not it raises, because a tolerated loss of pixels

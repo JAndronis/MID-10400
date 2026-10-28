@@ -22,6 +22,7 @@ import xarray as xr  # noqa: E402
 from test_run import run_on_mock  # noqa: E402  (tests/saxs on sys.path)
 
 from analysis.common import lock as lock_module  # noqa: E402
+from analysis.common import run as common_run  # noqa: E402
 from analysis.common.lock import OutputBusy, lock_path  # noqa: E402
 from analysis.common.status import FrameStatus  # noqa: E402
 from analysis.common.writer import IncompleteRun, OperatorMismatch  # noqa: E402
@@ -72,7 +73,7 @@ def forbid_writing(monkeypatch):
         raise AssertionError("a complete run must write nothing")
 
     monkeypatch.setattr(run_module, "build_plan", forbidden)
-    monkeypatch.setattr(run_module, "output_lock", forbidden)
+    monkeypatch.setattr(common_run, "output_lock", forbidden)
     monkeypatch.setattr(operator_module, "save_operator", forbidden)
     monkeypatch.setattr(masks_module, "save_masks", forbidden)
     monkeypatch.setattr(AgipdSaxsWriter, "open_or_create", forbidden)

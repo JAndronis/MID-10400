@@ -393,6 +393,11 @@ class FrameTableWriter:
             handle.create_group(name)
         handle.flush()
 
+    @property
+    def handle(self) -> h5py.File:
+        """The open file, for a reducer to read the rows written so far."""
+        return self._f
+
     def close(self) -> None:
         self._f.close()
 
@@ -521,13 +526,6 @@ class FrameTableWriter:
             for code in FrameStatus
             if (status == code).any()
         }
-
-    def any_not_ok(self) -> bool:
-        return bool((self._f["frames/status"][:] != FrameStatus.OK).any())
-
-    def pooled_per_train(self) -> Any:
-        """Per-train pooled ``I(q)``, as :func:`pooled_per_train` computes it."""
-        return pooled_per_train(self._f)
 
 
 def version_changes(stored: str | None) -> list[str]:
