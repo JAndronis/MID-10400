@@ -31,7 +31,7 @@ from analysis.common.cpu import (
     set_thread_env,
 )
 from analysis.common.lock import OutputLock
-from analysis.common.plan import evenly_spaced
+from analysis.common.plan import evenly_spaced, open_proc
 from analysis.common.run import base_provenance, fan_out, guarded_pass, reducer
 from analysis.common.writer import IncompleteRun, status_counts
 from analysis.waxs import worker as worker_module
@@ -228,10 +228,9 @@ def _integrate(
     lock: OutputLock,
 ) -> Any:
     """The pass itself, run under the lock :func:`run_jungfrau_waxs` holds."""
+    control = dc
     if dc is None:
-        from extra_data import open_run
-
-        dc = open_run(cfg.proposal, cfg.run, data="proc")
+        dc, control = open_proc(cfg)
 
     with phase(setup, "detector"):
         det = open_detector(cfg, dc)
@@ -249,7 +248,7 @@ def _integrate(
             cfg,
             classification.lit,
             dc=dc,
-            control_dc=dc,
+            control_dc=control,
             det=det,
         )
     with phase(setup, "selftest"):

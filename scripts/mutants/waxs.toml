@@ -248,3 +248,10 @@ file = "src/analysis/waxs/combine.py"
 old = "        error = np.sqrt((sigma[present] ** 2).sum(axis=0)) / count"
 new = "        error = np.sqrt((sigma[present] ** 2).sum(axis=0)) / np.sqrt(count)"
 tests = ["tests/waxs/test_waxs_combine.py"]
+
+[[mutant]]
+name = "waxs_run_checks_read_proc"
+file = "src/analysis/waxs/run.py"
+old = "            control_dc=control,\n"
+new = "            control_dc=dc,\n"
+tests = ["tests/waxs/test_waxs_run.py::test_a_pass_that_opens_the_run_reads_its_run_checks_from_raw"]
