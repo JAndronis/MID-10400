@@ -429,7 +429,7 @@ asserts each wrapper is an import plus a call.
 Old flat names → new: `agipd_saxs` → `agipd.saxs`, `agipd_preprocessing`, `agipd_iq_overview`,
 `agipd_frames_used`, `diagnostics_overview` → `agipd.*`; `jungfrau_waxs_jf1/jf2/combined/overview`
 → `jungfrau.jf1/jf2/combined/iq_overview`; `xpcs_hits_*` → `xpcs.*`; `xpcs_pipeline` and its
-`xpcs_*_plot` columns are gone (reproduced by `analysis.xpcs.figures`, §8.4); `photon_statistics*`,
+`xpcs_*_plot` columns are gone (reproduced by `analysis.xpcs.figures` and `analysis.xpcs.legacy`, §8.4); `photon_statistics*`,
 `xpcs_score` → `xpcs.*`; `droplet_video`, `droplet_first_image` → `camera.*`.
 `analysis.damnit_names` holds the names, and `stored(file, name)` finds the grouped group in a
 results file, else the flat one of a run processed before the groups. **That fallback is

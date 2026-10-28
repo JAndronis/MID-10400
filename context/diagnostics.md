@@ -9,7 +9,7 @@ the XPCS keep rule is `context/run-triage.md` §4.6, the photon-statistics quali
 **State (2026-10-14):**
 - Phase A (`analysis.diagnostics.frames`, `.curves`) is done: 22 mock tests, ruff clean,
   smoke-tested on r0423 and r0426.
-- Phase B (`analysis.diagnostics.xpcs`, a fixed reference β) is done: §4.
+- Phase B (a fixed reference β; `analysis.xpcs.snr` since 2026-10-28, `analysis.diagnostics.xpcs` before) is done: §4.
 - Phase C (the photon-statistics spec, `context/xpcs-quality.md`) is reviewed.
 - Phase H (droplet hits, `triage.classify`; the per-run score with k̄ per ROI) is done: §5.
 - Q1 (the photon-statistics pass, `analysis.saxs.photon_stats`, and its reader
@@ -110,10 +110,10 @@ looking for outliers.
 
 ## 4. Per-run XPCS SNR (phase B)
 
-`xpcs.xpcs_snr(run)` is `triage.xpcs.measure_run` + `summarise` for one run, with β the fixed
-`triage.xpcs.REFERENCE_BETA` table (or a report's β, `load_beta`, for comparison). It returns `summary` (the verdict), `slices` (SNR per
+`analysis.xpcs.snr.xpcs_snr(run)` is `measure_run` + `summarise` for one run, with β the fixed
+`REFERENCE_BETA` table (or a report's β, `load_beta`, for comparison). It returns `summary` (the verdict), `slices` (SNR per
 ROI per 30 s slice) and `rois` (k̄, N_pix, φ, ρ, the fit, the β used). An unknown β gives SNR
-NaN and `extractable` None. The same change was made in `triage.xpcs.summarise`, and
+NaN and `extractable` None, in `summarise` too, and
 `scripts/run_triage.py` now records a run without a TTCF as an error instead of dropping it.
 
 **Why the 2026-10-01 report had β = NaN.**
@@ -158,7 +158,7 @@ job 25287690):
 **β fixed, 2026-10-13 (user).** "A fitted contrast that is different to each run will be a
 pitfall": the β above (median over eligible runs) moved with the run set. It is replaced by one
 table from the runs with an almost complete g2: r450, r493, r494, r495 and r496
-(`triage.xpcs.REFERENCE_BETA`, measured by job 25288023,
+(`analysis.xpcs.snr.REFERENCE_BETA`, measured by job 25288023,
 `scripts/run_triage_xpcs_20261013T152014Z.json`).
 
 | ROI [Å⁻¹] | β | A over the five runs |
@@ -189,7 +189,7 @@ the 11 acceptance runs plus r493, r494 and r496; 119 s):
 
 Every diagnostic of a run is computed over its droplet hits only (user, 2026-10-13):
 `analysis.triage.classify.hits(run)["train_ids"]`; method and results in run-triage §4.4
-"As built". `diagnostics.xpcs.xpcs_score(run)` combines:
+"As built". `analysis.xpcs.snr.xpcs_score(run)` combines:
 - `hits`: the classification summary (counts, flags, the WAXS check);
 - `kbar`: `kbar_rois(run, hits)`, the mean k̄ per XPCS ROI over the hits. It comes from
   extra-speckle's `scratch/xpcs/r{run:04d}/kbar.nc` (k̄ per train, frame and ROI; 453 runs), or

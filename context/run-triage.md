@@ -571,7 +571,7 @@ extractable ⇔ n_extractable_slices ≥ 1
 - **Plain ROIs only:** 0.029, 0.040, 0.051 and 0.0805 Å⁻¹, i.e. the ROIs whose edges miss B1 and B2
   (§4.3). Bragg-q ROIs carry crystallite speckle and are a content flag (§4.7).
 
-**β(q) is one fixed table, `triage.xpcs.REFERENCE_BETA`** (user, 2026-10-13, superseding the
+**β(q) is one fixed table, `analysis.xpcs.snr.REFERENCE_BETA`** (user, 2026-10-13, superseding the
 median below). It is the median intercept A of the runs whose g2 decays almost completely in
 the window: r450, r493, r494, r495 and r496. That gives 4.8 % at 0.029 Å⁻¹, 3.9 %, 2.9 %, and
 1.9 % at 0.0805. The spread over the five runs is ≤ 5 % per plain ROI
