@@ -1,10 +1,10 @@
 """extra-speckle's ``xpcs_offline`` figures and data columns, made from the hit store.
 
 Each function reproduces one extra-speckle product from the two files the
-hit-train pass keeps: the results file (:class:`~analysis.xpcs.result.XpcsHits`,
+hit-train pass keeps: the results file (:class:`~analysis.xpcs.reader.XpcsHits`,
 exact per-train sums) and, for detector pictures, the photon store (raw counts
 over the annulus the rings span). Nothing here reads proc. The default estimator
-is :attr:`~analysis.xpcs.result.Averaging.POOLED` (ratios of summed sums);
+is :attr:`~analysis.xpcs.reader.Averaging.POOLED` (ratios of summed sums);
 ``Averaging.ES`` gives extra-speckle's mean of per-train ratios. Figures are
 built on :class:`matplotlib.figure.Figure` without ``pyplot``, so no backend is
 needed and no figure enters global state; they are returned open for the caller
@@ -32,7 +32,7 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 from analysis.saxs.config import SHAPE
 from analysis.xpcs.config import XpcsConfig
-from analysis.xpcs.result import ES_KBAR_MIN, Averaging, XpcsHits
+from analysis.xpcs.reader import ES_KBAR_MIN, Averaging, XpcsHits
 from analysis.xpcs.rings import sha256_of_array
 from analysis.xpcs.store import RingPhotonStore
 

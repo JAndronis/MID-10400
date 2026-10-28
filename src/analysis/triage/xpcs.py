@@ -13,7 +13,7 @@ TTCF_off. β, the contrast, is measured here from the data: the τ → 0 interce
 the runs whose decay is slow and well measured.
 
 Every input is read from the run's hit-train results file
-(`analysis.xpcs.result.XpcsHits`). The TTCF is reduced to per-train sums and counts
+(`analysis.xpcs.reader.XpcsHits`). The TTCF is reduced to per-train sums and counts
 of its finite diagonal entries, from which g2 over any set of trains follows
 exactly.
 
@@ -36,7 +36,7 @@ from scipy.optimize import curve_fit
 from analysis.xpcs.config import touches_bragg
 
 if TYPE_CHECKING:
-    from analysis.xpcs.result import XpcsHits
+    from analysis.xpcs.reader import XpcsHits
 
 __all__ = [
     "BETA_MIN_DECAY_LAGS",

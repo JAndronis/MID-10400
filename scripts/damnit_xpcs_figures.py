@@ -186,7 +186,7 @@ def pooled_ttc(paths, run_of_train, chosen, n_frames):
     n_frames), NaN where nothing is behind it."""
     import numpy as np
 
-    from analysis.xpcs.result import XpcsHits
+    from analysis.xpcs.reader import XpcsHits
 
     names = ("pair_num", "pair_den", "off_num", "off_den")
     total = None

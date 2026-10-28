@@ -28,7 +28,7 @@ from analysis.saxs.damnit import config_for as saxs_config_for
 from analysis.xpcs import figures
 from analysis.xpcs.config import XpcsConfig
 from analysis.xpcs.hits import HitSet
-from analysis.xpcs.result import Averaging, XpcsHits
+from analysis.xpcs.reader import Averaging, XpcsHits
 from analysis.xpcs.run import run_xpcs_hits
 
 __all__ = [

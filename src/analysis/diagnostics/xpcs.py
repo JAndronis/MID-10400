@@ -1,7 +1,7 @@
 """Per-run XPCS SNR, the keep criterion, for one run.
 
 A thin layer over `analysis.triage.xpcs`: the same reduction (`measure_run`, from the
-run's hit-train results file, `analysis.xpcs.result.XpcsHits`), the same
+run's hit-train results file, `analysis.xpcs.reader.XpcsHits`), the same
 analytical SNR per 30 s slice (`summarise`),
 
     SNR = β · k̄ · sqrt(N_pix · (F − 1) · φ · n) / √2,
@@ -43,7 +43,7 @@ from analysis.triage.xpcs import (
     summarise,
 )
 from analysis.xpcs.config import DEFAULT_XPCS_ROOT
-from analysis.xpcs.result import XpcsHits, read
+from analysis.xpcs.reader import XpcsHits, read
 
 __all__ = [
     "KBAR_MIN",

@@ -197,7 +197,7 @@ def inventory_phase(args) -> dict[str, Any]:
 
 
 def results_path(run: int, root: str | Path = DEFAULT_XPCS_ROOT) -> Path:
-    """A run's hit-train results file (`analysis.xpcs.result.read`'s path)."""
+    """A run's hit-train results file (`analysis.xpcs.reader.read`'s path)."""
     return Path(root) / "xpcs_hits" / f"r{run:04d}" / "xpcs_hits.h5"
 
 
@@ -205,7 +205,7 @@ def _measure(job):
     """One run in a worker: its optics state and its `RunMeasurement`, or the error."""
     import extra_data as ed
 
-    from analysis.xpcs.result import XpcsHits
+    from analysis.xpcs.reader import XpcsHits
 
     run, proposal, path = job
     t0 = time.perf_counter()

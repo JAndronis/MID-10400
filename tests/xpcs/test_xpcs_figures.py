@@ -30,7 +30,7 @@ from damnit.context import Skip  # noqa: E402
 
 from analysis.xpcs import damnit as xd  # noqa: E402
 from analysis.xpcs import figures as F  # noqa: E402
-from analysis.xpcs.result import Averaging, RepRateMismatch, XpcsHits  # noqa: E402
+from analysis.xpcs.reader import Averaging, RepRateMismatch, XpcsHits  # noqa: E402
 from analysis.xpcs.store import RingPhotonStore  # noqa: E402
 
 IDS = (100, 101, 104, 140, 141, 145)

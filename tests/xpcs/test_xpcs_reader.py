@@ -20,15 +20,15 @@ from xpcs_fakes import (
 
 from analysis.common.status import FrameStatus
 from analysis.xpcs.config import Kernel
+from analysis.xpcs.estimators import _lag_bins
 from analysis.xpcs.kernel import train_sums
-from analysis.xpcs.result import (
+from analysis.xpcs.reader import (
     BASE_CLOCK_HZ,
     CHUNK,
     Averaging,
     NonUniformPattern,
     RepRateMismatch,
     XpcsHits,
-    _lag_bins,
 )
 
 N_ENV, P, R = 300, 14, 3
@@ -562,7 +562,7 @@ def test_sums_made_against_another_partner_are_refused_and_the_row_left_open(
     from analysis.common.plan import Block
     from analysis.xpcs.hits import HitSet
     from analysis.xpcs.kernel import partners
-    from analysis.xpcs.result import Prelude, ResultWriter
+    from analysis.xpcs.results_file import Prelude, ResultWriter
 
     rings, _, _, photons = world
     hits = HitSet.of(IDS)

@@ -23,7 +23,7 @@ from analysis.triage.xpcs import (
     REFERENCE_BETA_RUNS,
     measure_run,
 )
-from analysis.xpcs.result import read
+from analysis.xpcs.reader import read
 
 RUN = 423
 FAILED = {FIRST_TRAIN + 7: int(FrameStatus.NO_FRAMES)}

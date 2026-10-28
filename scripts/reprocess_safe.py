@@ -245,7 +245,7 @@ def xpcs_completeness(path: Path, store: Path) -> XpcsVerdict:
     import numpy as np
 
     from analysis.common.status import UNFINISHED, FrameStatus
-    from analysis.xpcs.result import SCHEMA
+    from analysis.xpcs.results_file import SCHEMA
     from analysis.xpcs.store import ABSENT, RingPhotonStore, StoreMismatch
 
     if not path.exists():

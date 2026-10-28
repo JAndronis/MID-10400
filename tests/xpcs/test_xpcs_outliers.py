@@ -8,7 +8,7 @@ import pytest
 from xpcs_fakes import GOOD, InlinePool, make_train
 
 from analysis.xpcs.outliers import BLOCK_LIMIT, accumulate, outlier_mask, q_interval
-from analysis.xpcs.result import XpcsHits
+from analysis.xpcs.reader import XpcsHits
 from analysis.xpcs.store import FlagBase
 
 

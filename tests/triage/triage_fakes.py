@@ -113,7 +113,7 @@ def write_hit_results(
     failed: dict[int, int] | None = None,
     seed: int = 3,
 ):
-    """A hit-train results file (`analysis.xpcs.result`) of synthetic photon trains.
+    """A hit-train results file (`analysis.xpcs.results_file`) of synthetic trains.
 
     Ring r is the r-th XPCS ROI. By default it lights each pixel of each frame with
     probability ``densities[r]`` (photons of 1 to 3, mean 2, so k̄ ≈ 2 · density).

@@ -9,32 +9,32 @@ tests = ["tests/xpcs/test_xpcs_partners.py"]
 
 [[mutant]]
 name = "xpcs_last_lag_bin_open"
-file = "src/analysis/xpcs/result.py"
+file = "src/analysis/xpcs/estimators.py"
 old = "inside = (lags >= lo) & ((lags < hi) | (b == BIN_COUNT - 1))"
 new = "inside = (lags >= lo) & (lags < hi)"
-tests = ["tests/xpcs/test_xpcs_result.py"]
+tests = ["tests/xpcs/test_xpcs_reader.py"]
 
 [[mutant]]
 name = "xpcs_c2_jackknife_factor"
-file = "src/analysis/xpcs/result.py"
+file = "src/analysis/xpcs/estimators.py"
 old = "(count - 1) / count * np.nansum((loo - np.nanmean(loo, 0)) ** 2, 0)"
 new = "1 / count * np.nansum((loo - np.nanmean(loo, 0)) ** 2, 0)"
-tests = ["tests/xpcs/test_xpcs_result.py"]
+tests = ["tests/xpcs/test_xpcs_reader.py"]
 
 [[mutant]]
 name = "xpcs_es_baseline_not_symmetrised"
-file = "src/analysis/xpcs/result.py"
-old = """            off = 0.5 * (off + off.swapaxes(-1, -2))
-        off[~self.has_off[rows]] = np.nan"""
-new = """        off[~self.has_off[rows]] = np.nan"""
-tests = ["tests/xpcs/test_xpcs_result.py"]
+file = "src/analysis/xpcs/estimators.py"
+old = """        off = 0.5 * (off + off.swapaxes(-1, -2))
+    off[~has_off] = np.nan"""
+new = """    off[~has_off] = np.nan"""
+tests = ["tests/xpcs/test_xpcs_reader.py"]
 
 [[mutant]]
 name = "xpcs_es_zero_norm_nan"
-file = "src/analysis/xpcs/result.py"
-old = "            norm[norm == 0] = 1.0"
-new = "            norm[norm == 0] = np.nan"
-tests = ["tests/xpcs/test_xpcs_result.py"]
+file = "src/analysis/xpcs/reader.py"
+old = "            raw, off, kbar = normalised(c, self.has_off[part], zero_norm=1.0)"
+new = "            raw, off, kbar = normalised(c, self.has_off[part], zero_norm=np.nan)"
+tests = ["tests/xpcs/test_xpcs_reader.py"]
 
 [[mutant]]
 name = "xpcs_mean_intensity_per_train"
@@ -83,11 +83,11 @@ name = "xpcs_prelude_ignores_pulse_ids"
 file = "src/analysis/xpcs/run.py"
 old = "elif not np.array_equal(own, pattern):"
 new = "elif False:"
-tests = ["tests/xpcs/test_xpcs_run.py", "tests/xpcs/test_xpcs_result.py"]
+tests = ["tests/xpcs/test_xpcs_run.py", "tests/xpcs/test_xpcs_reader.py"]
 
 [[mutant]]
 name = "xpcs_writer_partner_guard_removed"
-file = "src/analysis/xpcs/result.py"
+file = "src/analysis/xpcs/results_file.py"
 old = "if int(f[\"hits/partner\"][row]) != sums.partner_id:"
 new = "if False:"
 tests = ["tests/xpcs"]
