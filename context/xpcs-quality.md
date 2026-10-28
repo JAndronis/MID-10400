@@ -174,7 +174,7 @@ What this says, as far as 20 trains can:
   completeness check compares the label arrays themselves, not their sha. **The operator's sha256 is
   host-dependent**: `omega` differs by 1e-16 between CPU types (r0423 vs r0450, this probe;
   S1 found 119 of 459 AGIPD files built on the other class). So compatibility with the integrator
-  goes through S1's `analysis.saxs.complete.operator_differences` (exact coef/bins/indptr/q,
+  goes through S1's `analysis.saxs.operator.operator_differences` (exact coef/bins/indptr/q,
   omega at rtol 1e-12; branch `claude/s1-damnit-integrity-1548a4`, 7ebeaa8), not through the
   sha.
 

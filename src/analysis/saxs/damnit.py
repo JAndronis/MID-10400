@@ -20,6 +20,7 @@ import numpy as np
 
 from analysis.common.writer import pooled_per_train
 from analysis.saxs.config import AgipdSaxsConfig
+from analysis.saxs.products import Product, products_for
 from analysis.saxs.writer import per_pulse
 
 __all__ = [
@@ -102,66 +103,47 @@ def preprocess(proposal: int, run_no: int, **overrides: Any) -> Any:
     status = product_status(cfg)
     return Cell(
         json.dumps(status),
-        summary_value=_status_line(status),
-        background=COLORS["good"] if _all_ok(status) else COLORS["error"],
+        summary_value=_status_line(cfg, status),
+        background=COLORS["good"] if _all_ok(cfg, status) else COLORS["error"],
     )
 
 
 def product_status(cfg: AgipdSaxsConfig) -> dict[str, Any]:
     """Status counts of each product the pass writes for ``cfg``, or ``None``."""
+    return {product.key: _counts(product) for product in products_for(cfg)}
+
+
+def _counts(product: Product) -> dict[str, int] | None:
     import h5py
 
     from analysis.common.writer import status_counts
 
-    def counts(path: Path, column: str) -> dict[str, int] | None:
-        if not path.exists():
-            return None
-        try:
-            with h5py.File(path, "r") as handle:
-                return status_counts(handle[column][:], nonzero_only=True)
-        except (OSError, KeyError):
-            return {"unreadable": 1}
-
-    status = {"frames": counts(cfg.output_file, "frames/status")}
-    if cfg.pixel_sum_trains is not None:
-        status["window_sums"] = counts(cfg.pixel_sums_file, "trains/status")
-    if cfg.photon_stats:
-        status["photon_stats"] = counts(cfg.photon_stats_file, "frames/status")
-    return status
+    if not product.path.exists():
+        return None
+    try:
+        with h5py.File(product.path, "r") as handle:
+            return status_counts(handle[product.column][:], nonzero_only=True)
+    except (OSError, KeyError):
+        return {"unreadable": 1}
 
 
-def _failures(key: str, counts: dict[str, int]) -> dict[str, int]:
-    """The codes that make a product incomplete, as the pass itself judges them.
-
-    Every non-OK frame does, in the frame table and the statistics. A window-sums
-    train does only with a code in ``pixel_sums.FAILED``: ``NO_FRAMES`` and
-    ``MISSING_MODULES`` trains own no rows and are final.
-    """
-    if key == "window_sums":
-        from analysis.saxs.pixel_sums import FAILED
-
-        failed = {code.name for code in FAILED}
-        return {k: v for k, v in counts.items() if k in failed or k == "unreadable"}
-    return {k: v for k, v in counts.items() if k != "OK"}
-
-
-def _all_ok(status: dict[str, Any]) -> bool:
+def _all_ok(cfg: AgipdSaxsConfig, status: dict[str, Any]) -> bool:
     return all(
-        counts is not None and not _failures(key, counts)
-        for key, counts in status.items()
+        status[p.key] is not None and not p.failures(status[p.key])
+        for p in products_for(cfg)
     )
 
 
-def _status_line(status: dict[str, Any]) -> str:
-    names = {"frames": "frames", "window_sums": "sums", "photon_stats": "stats"}
+def _status_line(cfg: AgipdSaxsConfig, status: dict[str, Any]) -> str:
     parts = []
-    for key, counts in status.items():
+    for product in products_for(cfg):
+        counts = status[product.key]
         if counts is None:
-            parts.append(f"{names[key]} missing")
-        elif bad := _failures(key, counts):
-            parts.append(f"{names[key]} {bad}")
+            parts.append(f"{product.name} missing")
+        elif bad := product.failures(counts):
+            parts.append(f"{product.name} {bad}")
         else:
-            parts.append(f"{names[key]} {counts.get('OK', 0)} OK")
+            parts.append(f"{product.name} {counts.get('OK', 0)} OK")
     return " · ".join(parts)
 
 

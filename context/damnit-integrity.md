@@ -132,13 +132,20 @@ in that job's cell. The holder's own result arrives normally.
   on HDF5 and is the only guard.
 - Found by S4, 2026-10-14; checked against the deploy venv: unset before the import, `FALSE` after.
 
-**Which files are locked:**
-- `run_agipd_saxs` locks the frame table, then the window sums (when `pixel_sum_trains` is set).
-  `operator.npz` and `masks.npz` sit in the frame table's directory and are covered by its lock.
-- `run_pixel_sums` locks the window sums only.
+**Which files are locked** (`analysis.common.run.guarded_pass`, which both passes run through):
+- `run_agipd_saxs` locks every product its config asks for (`analysis.saxs.products.products_for`):
+  the frame table, then the window sums (when `pixel_sum_trains` is set), then the photon
+  statistics (when `photon_stats` is set). `operator.npz` and `masks.npz` sit in the frame table's
+  directory and are covered by its lock.
+- `run_pixel_sums` is the same pass with the window sums alone, and locks only them.
 - `run_jungfrau_waxs` locks its own file.
 
 ## 3. Completeness (`analysis.{saxs,waxs}.complete.is_complete`)
+
+The AGIPD check is a loop over the products (`analysis.saxs.products`): each one says why its
+file is not complete, and which status codes make it so. The operator comparison is one function,
+`analysis.common.complete.operator_differences`, given each pass's exact and toleranced arrays
+(`analysis.saxs.operator.operator_differences`, `analysis.waxs.complete.operator_differences`).
 
 **The check is read-only.** It returns a `Completeness`, which is true when complete and
 otherwise carries its reasons. A frame table is complete when:
@@ -163,7 +170,7 @@ otherwise carries its reasons. A frame table is complete when:
 
 **How the would-be operator is obtained: it is built, on the checking node.**
 - **Inside a pass**, the check reuses the operator the pass builds anyway, so it costs nothing extra.
-- **Elsewhere** (`expected_operator`), the build is memoised per process on the config with the
+- **Elsewhere** (`expected_operator`, memoised by `analysis.common.complete.expected_operator`), the build is memoised per process on the config with the
   proposal and run zeroed, since no operator input depends on the run. A script checking 459 runs
   builds it once.
 - **Why not compare library versions instead:** comparing the arrays needs no assumption about

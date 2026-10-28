@@ -24,7 +24,7 @@ __all__ = ["expected_operator", "is_complete", "operator_differences"]
 #: Relative tolerance on the q axis and on the solid angle, which the file
 #: stores as float32. Both are computed floats that can differ by one ULP
 #: between node classes, as AGIPD's solid angle does
-#: (:data:`analysis.saxs.complete.OMEGA_RTOL`). Rounding to float32 can turn
+#: (:data:`analysis.saxs.operator.OMEGA_RTOL`). Rounding to float32 can turn
 #: that into one float32 ULP, 6e-8. The static mask is compared exactly.
 RTOL = 1e-6
 

@@ -30,7 +30,8 @@ from analysis.saxs import masks as masks_module  # noqa: E402
 from analysis.saxs import operator as operator_module  # noqa: E402
 from analysis.saxs import run as run_module  # noqa: E402
 from analysis.saxs import worker  # noqa: E402
-from analysis.saxs.complete import is_complete, operator_differences  # noqa: E402
+from analysis.saxs.complete import is_complete  # noqa: E402
+from analysis.saxs.operator import operator_differences  # noqa: E402
 from analysis.saxs.photon_stats import FILE_NAME as PHOTON_FILE  # noqa: E402
 from analysis.saxs.pixel_sums import FILE_NAME, PixelSumWriter  # noqa: E402
 from analysis.saxs.writer import AgipdSaxsWriter, per_pulse  # noqa: E402

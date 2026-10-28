@@ -19,19 +19,24 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+import h5py
 import numpy as np
 from extra_geom import AGIPD_1MGeometry
 from pyFAI.integrator.azimuthal import AzimuthalIntegrator
 
+from analysis.common import complete as common
 from analysis.common.arrays import atomic_savez, frozen_copy
 from analysis.common.pyfai import check_resolved_method
 from analysis.saxs.config import NPIX, SHAPE, AgipdSaxsConfig
 
 __all__ = [
+    "OMEGA_RTOL",
     "SparseOperator",
     "build_operator",
+    "expected_operator",
     "geometry_from_config",
     "load_operator",
+    "operator_differences",
     "operator_sha256",
     "save_operator",
 ]
@@ -299,3 +304,47 @@ def load_operator(path: str | Path) -> SparseOperator:
             f"recomputed {recomputed}"
         )
     return op
+
+
+#: Relative tolerance on the solid angle. The same operator built on AVX2 and on
+#: AVX-512 nodes differs in ``omega`` by one ULP on some pixels, and in nothing
+#: else. Any real change to the geometry moves it by many orders of magnitude
+#: more.
+OMEGA_RTOL = 1e-12
+
+#: The operator arrays a rebuild reproduces bit for bit on every node class.
+EXACT_ARRAYS: tuple[str, ...] = ("coef", "bins", "indptr", "q")
+
+#: Operators by run-neutral config hash, for this process.
+_EXPECTED: dict[str, SparseOperator] = {}
+
+
+def expected_operator(
+    cfg: AgipdSaxsConfig, geometry: AGIPD_1MGeometry | None = None
+) -> SparseOperator:
+    """The operator this pass would build for ``cfg`` now, on this node.
+
+    :param geometry: an ``AGIPD_1MGeometry`` to build from instead of
+        ``cfg.geometry_file``. Not memoised, since nothing identifies it.
+    """
+    if geometry is not None:
+        return build_operator(geometry, cfg)[0]
+    return common.expected_operator(
+        _EXPECTED,
+        cfg,
+        lambda: build_operator(geometry_from_config(cfg), cfg)[0],
+    )
+
+
+def operator_differences(handle: h5py.File, op: SparseOperator) -> list[str]:
+    """How the operator stored in ``handle`` differs from ``op``; empty if not.
+
+    :data:`EXACT_ARRAYS` must be equal, ``omega`` equal to :data:`OMEGA_RTOL`.
+    """
+    return common.operator_differences(
+        handle,
+        op.sha256,
+        exact={name: getattr(op, name) for name in EXACT_ARRAYS},
+        toleranced={"omega": op.omega},
+        rtol=OMEGA_RTOL,
+    )
