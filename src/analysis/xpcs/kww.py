@@ -2,7 +2,7 @@
 
 Each ring's baseline-subtracted ``c2`` is fitted with ``β exp(−2 (Γτ)^α) + b``
 (errors ``sigma``), β fixed at the ring's reference contrast
-(`analysis.triage.xpcs.REFERENCE_BETA`, the τ → 0 intercept on reference runs)
+(`analysis.xpcs.snr.REFERENCE_BETA`, the τ → 0 intercept on reference runs)
 and Γ, α and b free and bounded. With β free the fit degenerates wherever part of
 the decay lies below the first lag: β, Γ and α trade off and α runs to its floor.
 With β fixed, contrast lost before the first lag reads as a fast Γ.
@@ -11,7 +11,7 @@ amplitude of the decay inside the lag window, and 1 − β/β_ref the fraction o
 contrast gone before the first lag.
 
 τ = 1/Γ is the KWW relaxation time; the mean one is τ Γ(1/α)/α. The DAMNIT
-column uses `analysis.xpcs.figures.fit_g2` instead, one unweighted joint fit over
+column uses `analysis.xpcs.g2fit.fit_g2` instead, one unweighted joint fit over
 all rings, where one ring that does not converge fails them all.
 """
 
