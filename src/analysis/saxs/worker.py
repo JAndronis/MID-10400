@@ -34,6 +34,7 @@ from analysis.saxs.masks import BaseMasks, load_masks
 from analysis.saxs.operator import SparseOperator, load_operator
 from analysis.saxs.photon_stats import PhotonSpec, PhotonStatsWriter, histogram_frame
 from analysis.saxs.pixel_sums import BlockSums, WindowSpec
+from analysis.saxs.plan import open_detector
 from analysis.saxs.sparse import frame_data_status, integrate_frame
 from analysis.saxs.writer import AgipdSaxsWriter
 
@@ -93,7 +94,6 @@ def init(
     set_thread_env()
 
     from extra_data import RunDirectory, open_run
-    from extra_data.components import AGIPD1M
 
     op = load_operator(Path(paths.operator)) if paths.operator else None
     masks = load_masks(Path(paths.masks)) if paths.masks else None
@@ -110,7 +110,7 @@ def init(
         if paths.run_dir
         else open_run(cfg.proposal, cfg.run, data="proc")
     )
-    detector = AGIPD1M(dc, detector_name=cfg.detector_name, min_modules=cfg.min_modules)
+    detector = open_detector(cfg, dc)
     global _STATE
     _STATE = _WorkerState(
         cfg=cfg,

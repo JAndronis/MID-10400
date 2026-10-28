@@ -228,8 +228,7 @@ def _integrate(
     lock: OutputLock,
 ) -> Any:
     """The pass itself, run under the lock :func:`run_jungfrau_waxs` holds."""
-    opened_here = dc is None
-    if opened_here:
+    if dc is None:
         from extra_data import open_run
 
         dc = open_run(cfg.proposal, cfg.run, data="proc")
@@ -250,7 +249,7 @@ def _integrate(
             cfg,
             classification.lit,
             dc=dc,
-            control_dc=None if opened_here else dc,
+            control_dc=dc,
             det=det,
         )
     with phase(setup, "selftest"):

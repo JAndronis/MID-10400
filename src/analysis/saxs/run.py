@@ -35,7 +35,7 @@ from analysis.common.complete import Completeness
 from analysis.common.cpu import phase, set_thread_env
 from analysis.common.lock import OutputLock
 from analysis.common.masks import frame_bad
-from analysis.common.plan import Block, RunPlan, evenly_spaced
+from analysis.common.plan import Block, RunPlan, evenly_spaced, open_proc
 from analysis.common.run import fan_out, guarded_pass, reducer
 from analysis.common.status import FrameStatus
 from analysis.common.writer import pooled_per_train
@@ -48,7 +48,7 @@ from analysis.saxs.operator import operator_differences
 from analysis.saxs.photon_stats import FILE_NAME as PHOTON_FILE_NAME
 from analysis.saxs.photon_stats import PhotonStatsConfig, ring_labels_from
 from analysis.saxs.pixel_sums import FILE_NAME, WindowSpec
-from analysis.saxs.plan import build_plan
+from analysis.saxs.plan import build_plan, open_detector
 from analysis.saxs.products import (
     FrameTable,
     PassRun,
@@ -299,8 +299,13 @@ def _integrate(
         if (p is frames and frames_to_do) or (p is not frames and p.reasons(frame_ids))
     ]
 
+    control = dc
+    if dc is None:
+        dc, control = open_proc(cfg)
+    with phase(setup, "detector"):
+        det = open_detector(cfg, dc)
     with phase(setup, "plan"):
-        run.plan = plan = build_plan(cfg, dc=dc)
+        run.plan = plan = build_plan(cfg, dc=dc, control_dc=control, det=det)
     if run.op is not None:
         with phase(setup, "static_mask"):
             run.static = masks_module.build_static_bad(cfg)
@@ -309,10 +314,10 @@ def _integrate(
         work_dir.mkdir(parents=True, exist_ok=True)
         with phase(setup, "base_masks"):
             run.base_masks, run.sampled = _build_base_masks(
-                cfg, plan, run.op, run.static, dc
+                cfg, plan, run.op, run.static, det
             )
         with phase(setup, "selftest"):
-            _run_selftest(cfg, plan, run.op, ai, run.base_masks, dc)
+            _run_selftest(cfg, plan, run.op, ai, run.base_masks, det)
         with phase(setup, "save_operator_and_masks"):
             operator_path = operator_module.save_operator(
                 run.op, work_dir / "operator.npz"
@@ -382,25 +387,12 @@ class _Outputs:
 
 
 def _build_base_masks(
-    cfg: AgipdSaxsConfig, plan: RunPlan, op: Any, static: Any, dc: Any
+    cfg: AgipdSaxsConfig, plan: RunPlan, op: Any, static: Any, det: Any
 ) -> tuple[Any, np.ndarray]:
     """Sample trains evenly over the run and majority-vote their masks."""
     from extra_data import by_id
 
-    ok_trains = np.array(
-        [t.train_id for t in plan.trains if t.status is FrameStatus.OK],
-        dtype=np.uint64,
-    )
-    sampled = evenly_spaced(ok_trains, cfg.base_mask_trains)
-
-    if dc is None:
-        from extra_data import open_run
-
-        dc = open_run(cfg.proposal, cfg.run, data="proc")
-    from extra_data.components import AGIPD1M
-
-    det = AGIPD1M(dc, detector_name=cfg.detector_name, min_modules=cfg.min_modules)
-
+    sampled = evenly_spaced(plan.ok_train_ids(), cfg.base_mask_trains)
     accumulator = masks_module.BaseMaskAccumulator(
         op, static, mask_bits=cfg.mask_bits, expected_bits=cfg.expected_bits
     )
@@ -412,22 +404,15 @@ def _build_base_masks(
 
 
 def _run_selftest(
-    cfg: AgipdSaxsConfig, plan: RunPlan, op: Any, ai: Any, base_masks: Any, dc: Any
+    cfg: AgipdSaxsConfig, plan: RunPlan, op: Any, ai: Any, base_masks: Any, det: Any
 ) -> None:
     """Compare sparse against pyFAI on real frames before the pool starts."""
     from extra_data import by_id
 
-    if dc is None:
-        from extra_data import open_run
-
-        dc = open_run(cfg.proposal, cfg.run, data="proc")
-    from extra_data.components import AGIPD1M
-
-    det = AGIPD1M(dc, detector_name=cfg.detector_name, min_modules=cfg.min_modules)
-    ok_trains = [t.train_id for t in plan.trains if t.status is FrameStatus.OK]
-    if not ok_trains:
+    ok_trains = plan.ok_train_ids()
+    if not ok_trains.size:
         raise ValueError("no OK trains to self-test on")
-    chosen = evenly_spaced(np.array(ok_trains, dtype=np.uint64), 2)
+    chosen = evenly_spaced(ok_trains, 2)
 
     engine = ai.engines[next(iter(ai.engines))].engine
     frames = []

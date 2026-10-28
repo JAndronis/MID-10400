@@ -16,58 +16,54 @@ from typing import Any
 
 import numpy as np
 
-from analysis.common.plan import RunPlan, TrainRecord, build_blocks
+from analysis.common.plan import FROM_DC, RunPlan, TrainRecord, build_blocks, open_proc
 from analysis.common.status import FrameStatus
 from analysis.saxs.config import AgipdSaxsConfig
 
 __all__ = [
     "build_plan",
+    "open_detector",
     "run_checks",
 ]
 
 log = logging.getLogger(__name__)
 
 
-def _open_detector(cfg: AgipdSaxsConfig, dc: Any):
+def open_detector(cfg: AgipdSaxsConfig, dc: Any) -> Any:
+    """The ``AGIPD1M`` component the pass reads, from an open collection."""
     from extra_data.components import AGIPD1M
 
     return AGIPD1M(dc, detector_name=cfg.detector_name, min_modules=cfg.min_modules)
 
 
-def _open_control(cfg: AgipdSaxsConfig) -> Any:
-    """Open the raw location, which is where the control sources live.
-
-    Proc holds only the corrected detector files, so :func:`run_checks` needs
-    its own collection. The plan itself stays on proc: ``data="all"`` would put
-    raw-only trains into the ledger and make a complete run look incomplete.
-    """
-    from extra_data import open_run
-
-    return open_run(cfg.proposal, cfg.run, data="raw")
-
-
-def build_plan(cfg: AgipdSaxsConfig, dc: Any = None, control_dc: Any = None) -> RunPlan:
+def build_plan(
+    cfg: AgipdSaxsConfig,
+    dc: Any = None,
+    control_dc: Any = FROM_DC,
+    det: Any = None,
+) -> RunPlan:
     """Build the run plan.
 
     :param dc: an open ``DataCollection``. When ``None``, the proc run named by
         ``cfg`` is opened.
     :param control_dc: where :func:`run_checks` looks for the timeserver, the
-        XGM and the quadrant motors. Defaults to the raw location when this
-        function opened the run itself, and to ``dc`` otherwise, which is what
-        lets a mock run carry both in one collection.
+        XGM and the quadrant motors (:data:`analysis.common.plan.FROM_DC`).
+        Defaulting to ``dc`` is what lets a mock run carry both in one
+        collection.
+    :param det: the ``AGIPD1M`` of ``dc``; ``None`` opens one.
 
     Trains present in the run but missing from the detector selection get
     ``MISSING_MODULES``; trains with no frames get ``NO_FRAMES``. Neither owns
     any row of the frame table, so the table spans only the detector's trains
     while the ledger spans every train of the run.
     """
-    opened_here = dc is None
-    if opened_here:
-        from extra_data import open_run
-
-        dc = open_run(cfg.proposal, cfg.run, data="proc")
-
-    det = _open_detector(cfg, dc)
+    if dc is None:
+        dc, raw = open_proc(cfg)
+        control_dc = raw if control_dc is FROM_DC else control_dc
+    elif control_dc is FROM_DC:
+        control_dc = dc
+    if det is None:
+        det = open_detector(cfg, dc)
     counts = det.frame_counts
     # Computed here rather than via det.train_id_to_ix, which is deprecated.
     first = (counts.cumsum() - counts).astype(np.int64)
@@ -108,9 +104,6 @@ def build_plan(cfg: AgipdSaxsConfig, dc: Any = None, control_dc: Any = None) -> 
         )
         row += n_frames
 
-    if control_dc is None:
-        control_dc = _control_or_none(cfg) if opened_here else dc
-
     blocks = build_blocks(records, cfg.trains_per_block)
     n_frames = int(counts.sum())
     log.info(
@@ -127,15 +120,6 @@ def build_plan(cfg: AgipdSaxsConfig, dc: Any = None, control_dc: Any = None) -> 
         detector_name=det.detector_name,
         checks=run_checks(control_dc, det, counts, cfg),
     )
-
-
-def _control_or_none(cfg: AgipdSaxsConfig) -> Any:
-    """:func:`_open_control`, or ``None`` when raw is not readable."""
-    try:
-        return _open_control(cfg)
-    except Exception as error:  # noqa: BLE001 - recorded by run_checks
-        log.warning("no raw location for the run checks: %r", error)
-        return None
 
 
 def _modules_present(dc: Any, det: Any) -> dict[int, int]:
@@ -166,8 +150,9 @@ def run_checks(
     flagged. Every check is best-effort: a missing source records the check as
     unavailable instead of failing the run before any data is read.
 
-    :param dc: a collection carrying the *control* sources (see
-        :func:`_open_control`). ``None`` records every check as unavailable.
+    :param dc: a collection carrying the *control* sources
+        (:func:`analysis.common.plan.open_proc`). ``None`` records every check
+        as unavailable.
     :param cfg: when given, the photon-energy check compares the machine's
         nominal energy against ``cfg.photon_energy_kev``.
     """

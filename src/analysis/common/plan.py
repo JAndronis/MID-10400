@@ -12,6 +12,7 @@ same either way.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -19,7 +20,44 @@ import numpy as np
 
 from analysis.common.status import FrameStatus
 
-__all__ = ["Block", "RunPlan", "TrainRecord", "build_blocks", "evenly_spaced"]
+__all__ = [
+    "FROM_DC",
+    "Block",
+    "RunPlan",
+    "TrainRecord",
+    "build_blocks",
+    "evenly_spaced",
+    "open_proc",
+]
+
+log = logging.getLogger(__name__)
+
+#: ``control_dc`` default of the passes' ``build_plan``: the raw location when
+#: ``build_plan`` opens the run itself, else the collection it was given. An
+#: explicit ``None`` records every run check as unavailable.
+FROM_DC: Any = object()
+
+
+def open_proc(cfg: Any) -> tuple[Any, Any]:
+    """Open a run's proc location, and its raw one for the run checks.
+
+    Proc holds only the corrected detector files, so the control sources the
+    run checks read (timeserver, XGM, motors) need the raw location. The plan
+    itself stays on proc: ``data="all"`` would put raw-only trains into the
+    ledger and make a complete run look incomplete.
+
+    :returns: ``(proc, raw)``; ``raw`` is ``None`` when it cannot be opened,
+        which the run checks record.
+    """
+    from extra_data import open_run
+
+    proc = open_run(cfg.proposal, cfg.run, data="proc")
+    try:
+        raw = open_run(cfg.proposal, cfg.run, data="raw")
+    except Exception as error:  # noqa: BLE001 - recorded by the run checks
+        log.warning("no raw location for the run checks: %r", error)
+        raw = None
+    return proc, raw
 
 
 @dataclass(frozen=True, slots=True)

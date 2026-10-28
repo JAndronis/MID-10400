@@ -19,7 +19,7 @@ from typing import Any
 
 import numpy as np
 
-from analysis.common.plan import RunPlan, TrainRecord, build_blocks
+from analysis.common.plan import FROM_DC, RunPlan, TrainRecord, build_blocks, open_proc
 from analysis.common.status import FrameStatus
 from analysis.waxs.config import CELLS_PER_TRAIN, MODULE_SHAPE, JungfrauWaxsConfig
 
@@ -121,30 +121,11 @@ def read_train(
     return TrainFrames(data[0, 0], mask[0, 0], cells, positions)
 
 
-def _open_control(cfg: JungfrauWaxsConfig) -> Any:
-    """Open the raw location, which is where the control sources live.
-
-    Proc holds only the corrected detector files. The plan itself stays on proc,
-    so trains existing only in raw do not enter the ledger.
-    """
-    from extra_data import open_run
-
-    return open_run(cfg.proposal, cfg.run, data="raw")
-
-
-def _control_or_none(cfg: JungfrauWaxsConfig) -> Any:
-    try:
-        return _open_control(cfg)
-    except Exception as error:  # noqa: BLE001 - recorded by run_checks
-        log.warning("no raw location for the run checks: %r", error)
-        return None
-
-
 def build_plan(
     cfg: JungfrauWaxsConfig,
     lit_cells: tuple[int, ...],
     dc: Any = None,
-    control_dc: Any = None,
+    control_dc: Any = FROM_DC,
     det: Any = None,
 ) -> RunPlan:
     """Build the run plan.
@@ -157,18 +138,17 @@ def build_plan(
     :param dc: an open ``DataCollection``. When ``None``, the proc run named by
         ``cfg`` is opened.
     :param control_dc: where :func:`run_checks` looks for the timeserver and
-        the XGM. Defaults to the raw location when this function opened the run
-        itself, and to ``dc`` otherwise, which lets a mock run carry both.
+        the XGM (:data:`analysis.common.plan.FROM_DC`). Defaulting to ``dc``
+        lets a mock run carry both.
     :param det: an already-open ``JUNGFRAU``. ``None`` opens one.
 
     :raises InconsistentEntries: a train holds other than one detector entry.
     """
-    opened_here = dc is None
-    if opened_here:
-        from extra_data import open_run
-
-        dc = open_run(cfg.proposal, cfg.run, data="proc")
-
+    if dc is None:
+        dc, raw = open_proc(cfg)
+        control_dc = raw if control_dc is FROM_DC else control_dc
+    elif control_dc is FROM_DC:
+        control_dc = dc
     if det is None:
         det = open_detector(cfg, dc)
     counts = det.frame_counts  # entries per train, not frames
@@ -198,9 +178,6 @@ def build_plan(
             continue
         records.append(TrainRecord(train_id, rows_per_train, row, FrameStatus.OK))
         row += rows_per_train
-
-    if control_dc is None:
-        control_dc = _control_or_none(cfg) if opened_here else dc
 
     blocks = build_blocks(records, cfg.trains_per_block)
     log.info(
