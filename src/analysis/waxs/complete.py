@@ -7,13 +7,13 @@ takes seconds, and returns ``None`` again without writing anything.
 
 from __future__ import annotations
 
-from dataclasses import replace
 from functools import partial
 from pathlib import Path
 
 import h5py
 import numpy as np
 
+from analysis.common import complete as common
 from analysis.common.complete import Completeness, frame_table_reasons
 from analysis.waxs.config import JungfrauWaxsConfig
 from analysis.waxs.operator import WaxsOperator, build_operator
@@ -37,42 +37,25 @@ def expected_operator(
 ) -> WaxsOperator:
     """The operator this pass would build for ``cfg`` now, on this node.
 
-    The operator is built for real and memoised per process under the config
-    hash with proposal and run zeroed, as for AGIPD
-    (:func:`analysis.saxs.complete.expected_operator`).
-
     :param poni_file: overrides ``cfg.poni_file``. Not memoised.
     """
     if poni_file is not None:
         return build_operator(cfg, poni_file)[0]
-    key = replace(cfg, proposal=0, run=0).config_hash()
-    if key not in _EXPECTED:
-        _EXPECTED[key] = build_operator(cfg)[0]
-    return _EXPECTED[key]
+    return common.expected_operator(_EXPECTED, cfg, lambda: build_operator(cfg)[0])
 
 
 def operator_differences(handle: h5py.File, op: WaxsOperator) -> list[str]:
     """How the operator stored in ``handle`` differs from ``op``; empty if not.
 
-    An equal sha256 settles it without reading the arrays, as for AGIPD
-    (:func:`analysis.saxs.complete.operator_differences`).
+    The static mask must be equal, ``q`` and ``omega`` equal to :data:`RTOL`.
     """
-    group = handle.get("operator")
-    names = ("q", "omega", "static_bad_packed")
-    if group is None or any(name not in group for name in names):
-        return ["the file stores no complete operator"]
-    if group.attrs.get("sha256") == op.sha256:
-        return []
-    reasons = []
-    if not np.array_equal(group["static_bad_packed"][()], np.packbits(op.static_bad)):
-        reasons.append("operator static mask differs from the one built now")
-    for name in ("q", "omega"):
-        stored, built = group[name][()], getattr(op, name)
-        if stored.shape != built.shape or not np.allclose(
-            stored, built, rtol=RTOL, atol=0.0
-        ):
-            reasons.append(f"operator {name} differs by more than {RTOL:g} relative")
-    return reasons
+    return common.operator_differences(
+        handle,
+        op.sha256,
+        exact={"static_bad_packed": np.packbits(op.static_bad)},
+        toleranced={"q": op.q, "omega": op.omega},
+        rtol=RTOL,
+    )
 
 
 def is_complete(

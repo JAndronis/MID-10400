@@ -8,7 +8,6 @@ complete only when all of them are.
 
 from __future__ import annotations
 
-from dataclasses import replace
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -16,6 +15,7 @@ from typing import Any
 import h5py
 import numpy as np
 
+from analysis.common import complete as common
 from analysis.common.complete import (
     Completeness,
     frame_table_reasons,
@@ -52,49 +52,32 @@ _EXPECTED: dict[str, SparseOperator] = {}
 def expected_operator(cfg: AgipdSaxsConfig, geometry: Any = None) -> SparseOperator:
     """The operator this pass would build for ``cfg`` now, on this node.
 
-    Built for real rather than inferred from library versions, because it is
-    cheap and needs no assumption about what a pyFAI or EXtra-geom release
-    changes. No input of the operator depends on the run, so
-    it is memoised per process on the config with the proposal and run zeroed;
-    a script checking hundreds of runs builds it once.
-
     :param geometry: an ``AGIPD_1MGeometry`` to build from instead of
         ``cfg.geometry_file``. Not memoised, since nothing identifies it.
     """
     if geometry is not None:
         return operator_module.build_operator(geometry, cfg)[0]
-    key = replace(cfg, proposal=0, run=0).config_hash()
-    if key not in _EXPECTED:
-        geometry = operator_module.geometry_from_config(cfg)
-        _EXPECTED[key] = operator_module.build_operator(geometry, cfg)[0]
-    return _EXPECTED[key]
+    return common.expected_operator(
+        _EXPECTED,
+        cfg,
+        lambda: operator_module.build_operator(
+            operator_module.geometry_from_config(cfg), cfg
+        )[0],
+    )
 
 
 def operator_differences(handle: h5py.File, op: SparseOperator) -> list[str]:
     """How the operator stored in ``handle`` differs from ``op``; empty if not.
 
     :data:`EXACT_ARRAYS` must be equal, ``omega`` equal to :data:`OMEGA_RTOL`.
-    An equal sha256 settles it without reading the arrays, since it is written
-    with them and covers all of them. An unequal one does not, because it
-    differs between node classes (see :data:`OMEGA_RTOL`).
     """
-    group = handle.get("operator")
-    names = (*EXACT_ARRAYS, "omega")
-    if group is None or any(name not in group for name in names):
-        return ["the file stores no complete operator"]
-    if group.attrs.get("sha256") == op.sha256:
-        return []
-    reasons = [
-        f"operator {name} differs from the one built now"
-        for name in EXACT_ARRAYS
-        if not np.array_equal(group[name][()], getattr(op, name))
-    ]
-    omega = group["omega"][()]
-    if omega.shape != op.omega.shape or not np.allclose(
-        omega, op.omega, rtol=OMEGA_RTOL, atol=0.0
-    ):
-        reasons.append(f"operator omega differs by more than {OMEGA_RTOL:g} relative")
-    return reasons
+    return common.operator_differences(
+        handle,
+        op.sha256,
+        exact={name: getattr(op, name) for name in EXACT_ARRAYS},
+        toleranced={"omega": op.omega},
+        rtol=OMEGA_RTOL,
+    )
 
 
 def window_sums_reasons(

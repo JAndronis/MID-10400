@@ -29,11 +29,13 @@ live in ``analysis.saxs.complete`` and ``analysis.waxs.complete``.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 import h5py
+import numpy as np
 
 from analysis.common.status import UNFINISHED
 from analysis.common.writer import (
@@ -43,7 +45,13 @@ from analysis.common.writer import (
     version_changes,
 )
 
-__all__ = ["Completeness", "frame_table_reasons", "unfinished_reasons"]
+__all__ = [
+    "Completeness",
+    "expected_operator",
+    "frame_table_reasons",
+    "operator_differences",
+    "unfinished_reasons",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,4 +153,59 @@ def _reasons(
         )
     if operator_check is not None:
         reasons += operator_check(handle)
+    return reasons
+
+
+def expected_operator[Op](
+    cache: dict[str, Op], cfg: Any, build: Callable[[], Op]
+) -> Op:
+    """The operator ``build`` makes for ``cfg``, memoised in ``cache`` per process.
+
+    Built for real rather than inferred from library versions, because it is
+    cheap and needs no assumption about what a pyFAI release changes. No input
+    of an operator depends on the run, so the key is the config hash with the
+    proposal and the run zeroed, and a script checking hundreds of runs builds
+    it once.
+    """
+    key = replace(cfg, proposal=0, run=0).config_hash()
+    if key not in cache:
+        cache[key] = build()
+    return cache[key]
+
+
+def operator_differences(
+    handle: h5py.File,
+    sha256: str,
+    *,
+    exact: Mapping[str, np.ndarray],
+    toleranced: Mapping[str, np.ndarray],
+    rtol: float,
+) -> list[str]:
+    """How the operator stored in ``handle["operator"]`` differs; empty if not.
+
+    An equal sha256 settles it without reading the arrays, since it is written
+    with them and covers all of them. An unequal one does not, because the same
+    build differs between node classes in its computed floats.
+
+    :param sha256: the sha256 of the operator built now.
+    :param exact: stored dataset name to the array it must equal bit for bit.
+    :param toleranced: stored dataset name to the array it must equal to
+        ``rtol`` relative, for the computed floats.
+    """
+    group = handle.get("operator")
+    if group is None or any(name not in group for name in (*exact, *toleranced)):
+        return ["the file stores no complete operator"]
+    if group.attrs.get("sha256") == sha256:
+        return []
+    reasons = [
+        f"operator {name} differs from the one built now"
+        for name, built in exact.items()
+        if not np.array_equal(group[name][()], built)
+    ]
+    for name, built in toleranced.items():
+        stored = group[name][()]
+        if stored.shape != built.shape or not np.allclose(
+            stored, built, rtol=rtol, atol=0.0
+        ):
+            reasons.append(f"operator {name} differs by more than {rtol:g} relative")
     return reasons

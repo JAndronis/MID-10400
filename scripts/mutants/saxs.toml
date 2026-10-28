@@ -45,9 +45,9 @@ tests = ["tests/saxs/test_sparse.py", "tests/saxs/test_selftest.py"]
 
 [[mutant]]
 name = "saxs_omega_compared_with_and"
-file = "src/analysis/saxs/complete.py"
-old = "if omega.shape != op.omega.shape or not np.allclose("
-new = "if omega.shape != op.omega.shape and not np.allclose("
+file = "src/analysis/common/complete.py"
+old = "if stored.shape != built.shape or not np.allclose("
+new = "if stored.shape != built.shape and not np.allclose("
 tests = ["tests/saxs/test_integrity.py"]
 
 [[mutant]]
